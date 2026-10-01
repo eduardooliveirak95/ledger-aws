@@ -221,12 +221,14 @@ function renderMovements() {
   $('#mov-net').className = 'stat-value ' + signClass(tot.net);
   $('#mov-rate').textContent = tot.in > 0 ? pct(tot.saved / tot.in, 0) : '—';
   $('#mov-rate').className = 'stat-value ' + (tot.in > 0 ? signClass(tot.saved) : '');
-  $('#mov-rate-sub').textContent = tot.invested > 0 ? `inclui ${eurShort(tot.invested)} investidos` : 'do que entrou, quanto não foi gasto';
+  // o que saiu das contas mas não foi gasto: investimentos e amortizações de crédito
+  const putAside = [tot.invested > 0 && `${eurShort(tot.invested)} investidos`, tot.amortized > 0 && `${eurShort(tot.amortized)} amortizados`].filter(Boolean).join(' e ');
+  $('#mov-rate-sub').textContent = putAside ? `inclui ${putAside}` : 'do que entrou, quanto não foi gasto';
   const countIn = txs.filter(t => txEffect(t, S.movAccount) > 0).length;
   const countOut = txs.filter(t => txEffect(t, S.movAccount) < 0 && !isSavingOut(t)).length;
   $('#mov-in-sub').textContent = `${countIn} movimento(s)` + (nMonths > 1 ? ` · média ${eurShort(tot.in / nMonths)}/mês` : '');
   $('#mov-out-sub').textContent = `${countOut} movimento(s)` + (nMonths > 1 ? ` · média ${eurShort(tot.out / nMonths)}/mês` : '')
-    + (tot.invested > 0 ? ` · sem ${eurShort(tot.invested)} investidos` : '');
+    + (putAside ? ` · sem ${putAside}` : '');
   $('#mov-net-sub').textContent = tot.net >= 0 ? 'ficou nas contas' : 'saiu mais das contas do que entrou';
 
   // gráfico: entradas vs saídas por mês
@@ -241,21 +243,22 @@ function renderMovements() {
     // meses a mais para as barras se lerem: agrupa por ano
     const years = [...new Set(months.map(m => m.slice(0, 4)))];
     const sumBy = arr => years.map(y => round2(arr.reduce((s2, v, i) => (months[i].startsWith(y) ? s2 + v : s2), 0)));
-    flows = { in: sumBy(flows.in), out: sumBy(flows.out), invested: sumBy(flows.invested) };
+    flows = { in: sumBy(flows.in), out: sumBy(flows.out), invested: sumBy(flows.invested), amortized: sumBy(flows.amortized) };
     labels = years; titles = years;
     $('#mov-chart-flow-title').textContent = 'Entradas e saídas por ano';
   }
   drawChart('chart-mov-flow', {
     type: 'bar',
     data: { labels, datasets: [barDataset('Entradas', flows.in, SERIES[0]), barDataset('Gastos', flows.out, SERIES[1]),
-      ...(flows.invested.some(v => v > 0) ? [barDataset('Investido', flows.invested, SERIES[2])] : [])] },
+      ...(flows.invested.some(v => v > 0) ? [barDataset('Investido', flows.invested, SERIES[2])] : []),
+      ...(flows.amortized.some(v => v > 0) ? [barDataset('Amortizado', flows.amortized, SERIES[3])] : [])] },
     options: {
       interaction: INDEX_HOVER,
       scales: { x: catAxis(), y: moneyAxis({ beginAtZero: true }) },
       plugins: {
         legend: { position: 'top', align: 'end' },
         tooltip: { callbacks: { title: i => titles[i[0].dataIndex], label: tooltipMoney,
-          footer: i => { const k = i[0].dataIndex, e = flows.in[k] || 0, g = flows.out[k] || 0, v = flows.invested[k] || 0;
+          footer: i => { const k = i[0].dataIndex, e = flows.in[k] || 0, g = flows.out[k] || 0, v = (flows.invested[k] || 0) + (flows.amortized[k] || 0);
             return [`Saldo: ${eurSigned(e - g - v)}`, ...(e > 0 ? [`Taxa de poupança: ${pct((e - g) / e, 0)}`] : [])]; } } },
       },
     },

@@ -10,14 +10,19 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const CATEGORIES = {
   out: ['Habitação', 'Supermercado', 'Restauração', 'Transportes', 'Combustível', 'Carro',
         'Saúde', 'Educação', 'Lazer', 'Compras', 'Roupa', 'Viagens', 'Subscrições',
-        'Seguros', 'Impostos', 'Água / Luz / Gás', 'Telecomunicações', 'Animais', 'Presentes', 'Comissões bancárias', 'Levantamentos', 'Transferências', 'Investimentos', 'Outros'],
+        'Seguros', 'Impostos', 'Água / Luz / Gás', 'Telecomunicações', 'Animais', 'Presentes', 'Comissões bancárias', 'Levantamentos', 'Transferências', 'Investimentos', 'Amortizações', 'Outros'],
   in: ['Salário', 'Subsídios', 'Freelance', 'Juros / Dividendos', 'Rendas', 'Reembolsos', 'Presentes', 'Vendas', 'Transferências', 'Outros'],
 };
-// Categorias de saída que são dinheiro posto de lado, não gasto: saem da conta,
-// mas contam para a taxa de poupança em vez de contarem como despesa.
-// isSavingOut(t) -> true se o movimento t for uma dessas saídas.
+// Saídas que são dinheiro posto de lado, não gasto: saem da conta, mas contam para a taxa
+// de poupança em vez de contarem como despesa. São de dois tipos, mostrados em separado:
+//   isInvestmentOut(t) -> categoria Investimentos
+//   isAmortizationOut(t) -> amortizações de crédito: qualquer categoria começada por "Amortiza"
+//                           (Amortizações, Amortização casa…), porque abatem dívida
+// isSavingOut(t) -> true se o movimento t for de um dos dois tipos.
 const SAVING_CATEGORIES = ['investimento', 'investimentos'];
-const isSavingOut = t => t.direction === 'out' && SAVING_CATEGORIES.includes(norm(t.category || ''));
+const isInvestmentOut = t => t.direction === 'out' && SAVING_CATEGORIES.includes(norm(t.category || ''));
+const isAmortizationOut = t => t.direction === 'out' && norm(t.category || '').startsWith('amortiza');
+const isSavingOut = t => isInvestmentOut(t) || isAmortizationOut(t);
 // Listas de opções dos formulários e nomes em português
 const ACCOUNT_TYPES = ['Conta à ordem', 'Poupança', 'Dinheiro', 'Cartão de refeição', 'Cartão de crédito', 'Outra'];
 const INVESTMENT_TYPES = ['ETF', 'Ações', 'Fundo', 'PPR', 'Certificados de Aforro', 'Depósito a prazo',

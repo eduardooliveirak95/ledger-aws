@@ -21,6 +21,8 @@ No primeiro login a app pede-te para escolheres uma password tua (mínimo 10 car
 
 No topo aparece o património líquido: contas + investimentos + imóveis − créditos.
 
+As saídas nas categorias **Investimentos** e **Amortizações** (ou outra começada por "Amortiza", como "Amortização casa") não contam como gasto: entram na taxa de poupança e aparecem à parte no gráfico.
+
 ### Créditos
 
 - Os juros de cada mês são calculados a partir do saldo e da prestação que registas.

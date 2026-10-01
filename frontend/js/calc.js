@@ -100,32 +100,35 @@ function filterTx({ from, to, account = '', category = '' }) {
 }
 
 /** Totais de entradas e saídas. As transferências só contam quando se olha para uma conta.
- *  out = gasto real; invested = saídas para poupança (categoria Investimentos, por exemplo);
- *  net = variação do dinheiro (in − out − invested); saved = in − out (o que não foi gasto). */
+ *  out = gasto real; invested = saídas para investimentos; amortized = amortizações de crédito;
+ *  net = variação do dinheiro (in − out − invested − amortized); saved = in − out (o que não foi gasto). */
 function flowTotals(txs, account = '') {
-  let inn = 0, out = 0, inv = 0;
+  let inn = 0, out = 0, inv = 0, am = 0;
   for (const t of txs) {
     const e = txEffect(t, account);
     if (e > 0) inn += e;
-    else if (e < 0 && isSavingOut(t)) inv -= e;
+    else if (e < 0 && isAmortizationOut(t)) am -= e;
+    else if (e < 0 && isInvestmentOut(t)) inv -= e;
     else out -= e;
   }
-  return { in: round2(inn), out: round2(out), invested: round2(inv), net: round2(inn - out - inv), saved: round2(inn - out) };
+  return { in: round2(inn), out: round2(out), invested: round2(inv), amortized: round2(am),
+           net: round2(inn - out - inv - am), saved: round2(inn - out) };
 }
 
 // Como flowTotals, mas mês a mês (para o gráfico de barras de entradas/saídas)
 function monthlyFlows(months, filters) {
   const idx = Object.fromEntries(months.map((m, i) => [m, i]));
-  const inn = months.map(() => 0), out = months.map(() => 0), inv = months.map(() => 0);
+  const inn = months.map(() => 0), out = months.map(() => 0), inv = months.map(() => 0), am = months.map(() => 0);
   for (const t of filterTx({ ...filters, from: months[0], to: months[months.length - 1] })) {
     const i = idx[ymOf(t.date)];
     if (i === undefined) continue;
     const e = txEffect(t, filters.account);
     if (e > 0) inn[i] += e;
-    else if (e < 0 && isSavingOut(t)) inv[i] -= e;
+    else if (e < 0 && isAmortizationOut(t)) am[i] -= e;
+    else if (e < 0 && isInvestmentOut(t)) inv[i] -= e;
     else out[i] -= e;
   }
-  return { in: inn.map(round2), out: out.map(round2), invested: inv.map(round2) };
+  return { in: inn.map(round2), out: out.map(round2), invested: inv.map(round2), amortized: am.map(round2) };
 }
 
 /** Totais por categoria, do maior para o menor. As categorias de poupança ficam de fora das despesas. */

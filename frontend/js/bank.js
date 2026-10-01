@@ -147,6 +147,7 @@ function parseCgdStatement(pages) {
 // Cada regra é [expressão regular ou função(descrição, valor), categoria].
 const BANK_RULES = {
   out: [
+    [/amortiza/, 'Amortizações'],                          // amortizações de crédito: poupança, não gasto
     [/cobrancaprestacao|prestacaohab|pagprestacao/, 'Habitação'],
     [/comissao|manutconta|impostodeselo|impselo|despesasmanut/, 'Comissões bancárias'],
     [/^atm|levantamento/, 'Levantamentos'],
