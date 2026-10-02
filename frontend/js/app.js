@@ -10,6 +10,8 @@ const S = {
   movAccount: '',
   movCatIn: [],      // categorias de entrada escolhidas no filtro (vazio = todas)
   movCatOut: [],     // categorias de saída escolhidas no filtro (vazio = todas)
+  movSel: new Set(), // ids dos movimentos selecionados na tabela (para mudar a categoria de vários)
+  movBulkCat: '',    // categoria escolhida para os selecionados
   invFilter: '',
   loanHistory: '',   // crédito mostrado no histórico de prestações
 };
@@ -336,12 +338,18 @@ function renderMovements() {
   const rows = [...txs].sort((a, b) => b.date.localeCompare(a.date) || (b.updated_at || '').localeCompare(a.updated_at || ''));
   $('#mov-table-title').textContent = `Movimentos (${rows.length})`;
   const shown = rows.slice(0, 500);
+  // Só entradas e saídas se podem selecionar (as transferências entre contas não têm categoria).
+  // A seleção fica só com movimentos visíveis, para nunca mudar algo que os filtros escondem.
+  movSelectable = shown.filter(t => t.direction !== 'transfer').map(t => t.id);
+  S.movSel = new Set(movSelectable.filter(id => S.movSel.has(id)));
   $('#mov-table').innerHTML = rows.length ? `<table class="data">
-    <thead><tr><th>Data</th><th>Tipo</th><th>Conta</th><th>Categoria</th><th>Descrição</th><th class="num">Valor</th><th></th></tr></thead>
+    <thead><tr><th class="sel"><input type="checkbox" id="mov-sel-all" aria-label="Selecionar todos"></th><th>Data</th><th>Tipo</th><th>Conta</th><th>Categoria</th><th>Descrição</th><th class="num">Valor</th><th></th></tr></thead>
     <tbody>${shown.map(t => {
       const e = txEffect(t, S.movAccount);
       const acct = t.direction === 'transfer' ? `${esc(accountName(t.account_id))} → ${esc(accountName(t.to_account_id))}` : esc(accountName(t.account_id));
-      return `<tr>
+      const selected = S.movSel.has(t.id);
+      return `<tr class="${selected ? 'selected' : ''}">
+        <td class="sel">${t.direction === 'transfer' ? '' : `<input type="checkbox" data-sel="${esc(t.id)}" ${selected ? 'checked' : ''} aria-label="Selecionar">`}</td>
         <td class="date">${dateLabel(t.date)}</td>
         <td><span class="badge ${t.direction}">${DIRECTION_LABEL[t.direction]}</span>${t.approx ? '<span class="badge approx" title="Valor aproximado">≈</span>' : ''}</td>
         <td class="muted">${acct}</td>
@@ -352,7 +360,83 @@ function renderMovements() {
       </tr>`;
     }).join('')}</tbody></table>${rows.length > shown.length ? `<div class="empty">A mostrar os 500 mais recentes. Usa os filtros para ver os restantes.</div>` : ''}`
     : `<div class="empty">Sem movimentos neste período.<br><button class="btn primary" data-action="tx-new">+ Movimento</button></div>`;
+  renderBulk();
 }
+
+// ── mudar a categoria de vários movimentos de uma vez ──
+// ids dos movimentos que se podem selecionar na tabela visível (preenchido por renderMovements)
+let movSelectable = [];
+
+// Barra que aparece com movimentos selecionados: escolher a categoria (só uma), aplicar ou cancelar.
+// Entradas e saídas têm categorias diferentes, por isso só se podem mudar juntas se forem do mesmo tipo.
+function renderBulk() {
+  const bar = $('#mov-bulk');
+  const sel = D.transactions.filter(t => S.movSel.has(t.id));
+  // caixa "selecionar todos": marcada com todos, a meio com alguns
+  const all = $('#mov-sel-all');
+  if (all) { all.checked = sel.length > 0 && sel.length === movSelectable.length; all.indeterminate = sel.length > 0 && sel.length < movSelectable.length; }
+  bar.classList.toggle('hidden', !sel.length);
+  if (!sel.length) { S.movBulkCat = ''; return; }
+  const dirs = new Set(sel.map(t => t.direction));
+  const count = `<span>${sel.length} selecionado(s)</span>`;
+  const cancel = '<button class="btn" data-bulk-cancel>Cancelar</button>';
+  if (dirs.size > 1) {
+    bar.innerHTML = `${count}<span class="err">Escolhe só entradas ou só saídas: têm categorias diferentes</span>${cancel}`;
+    return;
+  }
+  const cats = knownCategories([...dirs][0]);
+  if (S.movBulkCat && !cats.includes(S.movBulkCat)) cats.push(S.movBulkCat);   // categoria nova escrita à mão
+  bar.innerHTML = `${count}
+    <details class="multi" id="mov-bulk-cat">
+      <summary>Categoria: ${S.movBulkCat ? esc(S.movBulkCat) : 'escolher'}</summary>
+      <div class="multi-panel">
+        ${cats.map(c => `<label class="check"><input type="checkbox" data-pick value="${esc(c)}" ${c === S.movBulkCat ? 'checked' : ''}> ${esc(c)}</label>`).join('')}
+        <input class="inline" data-newcat placeholder="Outra categoria… (Enter)">
+      </div>
+    </details>
+    <button class="btn primary" data-bulk-apply ${S.movBulkCat ? '' : 'disabled'}>Mudar categoria</button>${cancel}`;
+}
+
+// Marcar / desmarcar um movimento ou todos (sem redesenhar a página toda)
+$('#mov-table').addEventListener('change', e => {
+  if (e.target.id === 'mov-sel-all') {
+    S.movSel = new Set(e.target.checked ? movSelectable : []);
+    $$('#mov-table [data-sel]').forEach(c => { c.checked = e.target.checked; c.closest('tr').classList.toggle('selected', c.checked); });
+  } else if (e.target.dataset.sel) {
+    S.movSel[e.target.checked ? 'add' : 'delete'](e.target.dataset.sel);
+    e.target.closest('tr').classList.toggle('selected', e.target.checked);
+  } else return;
+  renderBulk();
+});
+// Escolher a categoria: só pode haver uma, por isso marcar uma desmarca as outras (e fecha a lista)
+$('#mov-bulk').addEventListener('change', e => {
+  if (!e.target.matches('[data-pick]')) return;
+  S.movBulkCat = e.target.checked ? e.target.value : '';
+  renderBulk();
+});
+$('#mov-bulk').addEventListener('keydown', e => {
+  if (e.key !== 'Enter' || !e.target.matches('[data-newcat]') || !e.target.value.trim()) return;
+  e.preventDefault();
+  S.movBulkCat = e.target.value.trim().slice(0, 60);
+  renderBulk();
+});
+$('#mov-bulk').addEventListener('click', async e => {
+  if (e.target.matches('[data-bulk-cancel]')) { S.movSel.clear(); renderMovements(); return; }
+  if (!e.target.matches('[data-bulk-apply]') || !S.movBulkCat) return;
+  const cat = S.movBulkCat;
+  const items = D.transactions.filter(t => S.movSel.has(t.id) && t.category !== cat).map(t => ({ ...t, category: cat }));
+  const n = S.movSel.size;
+  e.target.disabled = true; e.target.textContent = 'A guardar…';
+  try {
+    if (items.length) await saveItems(items);
+    S.movSel.clear(); S.movBulkCat = '';
+    renderMovements();
+    toast(`${n} movimento(s) em «${cat}»`);
+  } catch (x) {
+    toast(x.message, true);
+    renderBulk();
+  }
+});
 
 // ── formulário de conta ──
 // acc = conta a editar (ou null para criar); after = função a chamar depois de criar

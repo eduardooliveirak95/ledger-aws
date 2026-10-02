@@ -145,7 +145,11 @@
     </div>
 
     <div class="panel" style="margin-top:16px">
-      <div class="panel-header"><div class="panel-title" id="mov-table-title">Movimentos</div></div>
+      <div class="panel-header">
+        <div class="panel-title" id="mov-table-title">Movimentos</div>
+        <!-- Aparece quando há movimentos selecionados: mudar a categoria de todos de uma vez (ver renderBulk) -->
+        <div class="bulk hidden" id="mov-bulk"></div>
+      </div>
       <div class="table-wrap" id="mov-table"></div>
     </div>
   </section>

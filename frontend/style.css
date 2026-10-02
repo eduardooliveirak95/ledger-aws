@@ -130,6 +130,15 @@ details.multi[open] > summary { border-color: var(--accent); }
 }
 .multi-panel .link-btn { align-self: flex-start; }
 
+/* Seleção de movimentos e barra para mudar a categoria de vários */
+table.data .sel { width: 1%; padding-right: 0; }
+table.data .sel input { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+table.data tr.selected td { background: rgba(245, 200, 66, .07); }
+.bulk { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--text); }
+.bulk .err { color: var(--neg); }
+.bulk .multi-panel { left: auto; right: 0; }
+.bulk .multi-panel input.inline { width: 100%; }
+
 /* ── CARTÕES (resumos e caixas dos gráficos) ─ */
 .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
 .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }

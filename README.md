@@ -23,6 +23,8 @@ No topo aparece o património líquido: contas + investimentos + imóveis − cr
 
 Em **Movimentos**, os filtros **Entradas** e **Saídas** deixam escolher várias categorias de cada vez. As transferências de e para outras pessoas ficam em **Transferências in** e **Transferências out**.
 
+Para mudar a categoria de vários movimentos de uma vez, marca-os na tabela (ou todos, no cabeçalho), escolhe a categoria na barra que aparece e carrega em **Mudar categoria**. Só dá para mudar entradas ou saídas de cada vez, porque têm categorias diferentes.
+
 As saídas nas categorias **Investimentos** e **Amortizações** (ou outra começada por "Amortiza", como "Amortização casa") não contam como gasto: entram na taxa de poupança e aparecem à parte no gráfico.
 
 ### Créditos
