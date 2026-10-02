@@ -114,6 +114,22 @@ select.inline, input.inline {
 }
 select.inline:focus, input.inline:focus { border-color: var(--accent); }
 
+/* Filtro de categorias com escolha múltipla (um <details> que abre uma lista de caixas) */
+details.multi { position: relative; }
+details.multi > summary {
+  list-style: none; cursor: pointer; white-space: nowrap; font-size: 12px; color: var(--text);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 7px 28px 7px 10px;
+}
+details.multi > summary::-webkit-details-marker { display: none; }
+details.multi > summary::after { content: '▾'; position: absolute; right: 10px; color: var(--muted); }
+details.multi[open] > summary { border-color: var(--accent); }
+.multi-panel {
+  position: absolute; z-index: 60; top: calc(100% + 4px); left: 0; min-width: 220px; max-height: 320px; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border2); border-radius: 10px; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, .4);
+}
+.multi-panel .link-btn { align-self: flex-start; }
+
 /* ── CARTÕES (resumos e caixas dos gráficos) ─ */
 .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
 .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }

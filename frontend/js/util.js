@@ -10,8 +10,8 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const CATEGORIES = {
   out: ['Habitação', 'Supermercado', 'Restauração', 'Transportes', 'Combustível', 'Carro',
         'Saúde', 'Educação', 'Lazer', 'Compras', 'Roupa', 'Viagens', 'Subscrições',
-        'Seguros', 'Impostos', 'Água / Luz / Gás', 'Telecomunicações', 'Animais', 'Presentes', 'Comissões bancárias', 'Levantamentos', 'Transferências', 'Investimentos', 'Amortizações', 'Outros'],
-  in: ['Salário', 'Subsídios', 'Freelance', 'Juros / Dividendos', 'Rendas', 'Reembolsos', 'Presentes', 'Vendas', 'Transferências', 'Outros'],
+        'Seguros', 'Impostos', 'Água / Luz / Gás', 'Telecomunicações', 'Animais', 'Presentes', 'Comissões bancárias', 'Levantamentos', 'Transferências out', 'Investimentos', 'Amortizações', 'Outros'],
+  in: ['Salário', 'Subsídios', 'Freelance', 'Juros / Dividendos', 'Rendas', 'Reembolsos', 'Presentes', 'Vendas', 'Transferências in', 'Outros'],
 };
 // Saídas que são dinheiro posto de lado, não gasto: saem da conta, mas contam para a taxa
 // de poupança em vez de contarem como despesa. São de dois tipos, mostrados em separado:

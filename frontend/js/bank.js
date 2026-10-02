@@ -162,13 +162,13 @@ const BANK_RULES = {
     [/certiverse|pearson|examvue|udemy|coursera|academy/, 'Educação'],
     [/xsolla|steam|playstation|nintendo|cinema|ticketline|solinca|fitness|ginasio/, 'Lazer'],
     [/fidelidade|seguro|tranquilidade|allianz|ageas|zurich|generali/, 'Seguros'],
-    [/mbway|transfer|^trf|^tfi/, 'Transferências'],
+    [/mbway|transfer|^trf|^tfi/, 'Transferências out'],
   ],
   in: [
     [/vencimento|ordenado|salario/, 'Salário'],
     [/juros/, 'Juros / Dividendos'],
     [/reembolso|devolucao|estorno/, 'Reembolsos'],
-    [/mbway|transfer|^trf|^tfi/, 'Transferências'],
+    [/mbway|transfer|^trf|^tfi/, 'Transferências in'],
   ],
 };
 // Categorias da própria CGD que também servem de pista

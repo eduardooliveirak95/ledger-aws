@@ -8,7 +8,8 @@ const S = {
   movMode: 'month',
   movAnchor: thisMonth(),
   movAccount: '',
-  movCategory: '',
+  movCatIn: [],      // categorias de entrada escolhidas no filtro (vazio = todas)
+  movCatOut: [],     // categorias de saída escolhidas no filtro (vazio = todas)
   invFilter: '',
   loanHistory: '',   // crédito mostrado no histórico de prestações
 };
@@ -188,7 +189,33 @@ $$('#mov-period-nav .nav-btn').forEach(b => b.addEventListener('click', () => {
 }));
 // Filtros por conta e por categoria
 $('#mov-filter-account').addEventListener('change', e => { S.movAccount = e.target.value; renderMovements(); });
-$('#mov-filter-category').addEventListener('change', e => { S.movCategory = e.target.value; renderMovements(); });
+
+// Filtro de categorias com escolha múltipla (um para entradas, outro para saídas).
+// É um <details>: o resumo mostra o que está escolhido e, aberto, uma lista de caixas para marcar.
+// key = 'movCatIn' ou 'movCatOut' (onde fica a escolha em S). Devolve a escolha, sem categorias que já não existam.
+// otherActive = o outro filtro tem categorias escolhidas: então este, vazio, não mostra nenhuma ("nenhuma").
+function renderCatFilter(el, key, label, cats, otherActive) {
+  const chosen = S[key].filter(c => cats.includes(c));
+  const summary = chosen.length > 1 ? chosen.length + ' categorias' : chosen.length ? esc(chosen[0]) : otherActive ? 'nenhuma' : 'todas';
+  el.innerHTML = `<summary>${esc(label)}: ${summary}</summary>
+    <div class="multi-panel">
+      ${cats.length ? cats.map(c => `<label class="check"><input type="checkbox" value="${esc(c)}" ${chosen.includes(c) ? 'checked' : ''}> ${esc(c)}</label>`).join('')
+        : '<div class="muted">Sem categorias</div>'}
+      ${chosen.length ? '<button class="link-btn" data-clear>Limpar</button>' : ''}
+    </div>`;
+  return chosen;
+}
+for (const [id, key] of [['#mov-filter-in', 'movCatIn'], ['#mov-filter-out', 'movCatOut']]) {
+  const el = $(id);
+  el.addEventListener('change', e => {
+    const v = e.target.value;
+    S[key] = e.target.checked ? [...S[key], v] : S[key].filter(c => c !== v);
+    renderMovements();
+  });
+  el.addEventListener('click', e => { if (e.target.matches('[data-clear]')) { e.preventDefault(); S[key] = []; renderMovements(); } });
+}
+// Clicar fora de um filtro aberto fecha-o
+document.addEventListener('click', e => $$('details.multi[open]').forEach(d => { if (!d.contains(e.target)) d.open = false; }));
 
 // Preenche uma lista de opções (com "Todas..." no topo) e mantém a escolha atual se ainda existir
 function fillSelect(sel, options, current, allLabel) {
@@ -201,15 +228,18 @@ function fillSelect(sel, options, current, allLabel) {
 // Desenha o separador Movimentos: totais, gráficos, lista de contas e tabela de movimentos
 function renderMovements() {
   S.movAccount = fillSelect($('#mov-filter-account'), sortByName(D.accounts).map(a => ({ value: a.id, label: a.name })), S.movAccount, 'Todas as contas');
-  const cats = [...new Set(D.transactions.map(t => t.category))].sort((a, b) => a.localeCompare(b, 'pt'));
-  S.movCategory = fillSelect($('#mov-filter-category'), cats.map(c => ({ value: c, label: c })), S.movCategory, 'Todas as categorias');
+  const catsOf = dir => [...new Set(D.transactions.filter(t => t.direction === dir).map(t => t.category))].sort((a, b) => a.localeCompare(b, 'pt'));
+  const catsIn = catsOf('in'), catsOut = catsOf('out');
+  const activeIn = S.movCatIn.some(c => catsIn.includes(c)), activeOut = S.movCatOut.some(c => catsOut.includes(c));
+  S.movCatIn = renderCatFilter($('#mov-filter-in'), 'movCatIn', 'Entradas', catsIn, activeOut);
+  S.movCatOut = renderCatFilter($('#mov-filter-out'), 'movCatOut', 'Saídas', catsOut, activeIn);
 
   // Período escolhido e os movimentos que lhe pertencem
   const { from, to } = periodBounds(S.movMode, S.movAnchor);
   $('#mov-period-nav').classList.toggle('hidden', S.movMode === 'all');
   $('#mov-period-label').textContent = S.movMode === 'month' ? monthLabel(S.movAnchor) : S.movAnchor.slice(0, 4);
 
-  const filters = { from, to, account: S.movAccount, category: S.movCategory };
+  const filters = { from, to, account: S.movAccount, catIn: S.movCatIn, catOut: S.movCatOut };
   const txs = filterTx(filters);
   const tot = flowTotals(txs, S.movAccount);
   const nMonths = monthRange(from, to).length;
@@ -237,7 +267,7 @@ function renderMovements() {
   else if (S.movMode === 'year') months = monthRange(from, to);
   else months = monthRange(from, to);
   $('#mov-chart-flow-title').textContent = S.movMode === 'month' ? 'Entradas e saídas (12 meses até ao mês escolhido)' : 'Entradas e saídas por mês';
-  let flows = monthlyFlows(months, { account: S.movAccount, category: S.movCategory });
+  let flows = monthlyFlows(months, { account: S.movAccount, catIn: S.movCatIn, catOut: S.movCatOut });
   let labels = months.map(monthShort), titles = months.map(monthLabel);
   if (months.length > 36) {
     // meses a mais para as barras se lerem: agrupa por ano

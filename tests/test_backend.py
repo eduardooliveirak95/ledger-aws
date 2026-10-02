@@ -188,6 +188,22 @@ def test_property_value_and_optional_fields(table):
     assert [p["name"] for p in d["properties"]] == ["Terreno"]
 
 
+def test_transfer_categories_are_renamed(table):
+    """Entradas e saídas em "Transferências" passam a "Transferências in/out"; as transferências entre contas não mudam."""
+    s = save([{"kind": "account", "name": "A", "opening_balance": 0, "opening_date": "2026-01-01"},
+              {"kind": "account", "name": "B", "opening_balance": 0, "opening_date": "2026-01-01"}])["saved"]
+    a, b = s[0]["id"], s[1]["id"]
+    save([{"kind": "transaction", "date": "2026-09-01", "account_id": a, "direction": "in", "category": "Transferências", "amount": 10},
+          {"kind": "transaction", "date": "2026-09-02", "account_id": a, "direction": "out", "category": "transferencia", "amount": 5},
+          {"kind": "transaction", "date": "2026-09-03", "account_id": a, "direction": "transfer", "to_account_id": b, "amount": 7},
+          {"kind": "transaction", "date": "2026-09-04", "account_id": a, "direction": "out", "category": "Supermercado", "amount": 3}])
+    _, d = call("GET /data")
+    cats = {t["amount"]: t["category"] for t in d["transactions"]}
+    assert cats == {10: "Transferências in", 5: "Transferências out", 7: "Transferência", 3: "Supermercado"}
+    _, d2 = call("GET /data")   # a segunda leitura não muda nada
+    assert {t["amount"]: t["category"] for t in d2["transactions"]} == cats
+
+
 def test_request_size_limit(table):
     """Mais de 300 itens num pedido dá 400."""
     acc = save([{"kind": "account", "name": "A", "opening_balance": 0, "opening_date": "2026-01-01"}])["saved"][0]["id"]

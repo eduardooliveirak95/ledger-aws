@@ -32,6 +32,7 @@ import json
 import os
 import re
 import traceback
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -501,10 +502,33 @@ def migrate_legacy(user, items):
     return [i for i in items if i["sk"] not in legacy_keys] + puts
 
 
+def _plain(s):
+    """Texto em minúsculas e sem acentos ("Transferências" -> "transferencias")."""
+    return "".join(c for c in unicodedata.normalize("NFD", str(s or "")) if unicodedata.category(c) != "Mn").lower().strip()
+
+
+def migrate_transfer_categories(user, items):
+    """Entradas e saídas na categoria "Transferências" passam a "Transferências in" / "Transferências out".
+
+    As transferências entre contas próprias (direction "transfer") ficam como estão.
+    Corre em cada GET /data, mas só grava alguma coisa se ainda houver categorias antigas.
+    """
+    puts = []
+    for i in items:
+        if i["sk"].startswith("TX_") and i.get("direction") in ("in", "out") \
+                and _plain(i.get("category")) in ("transferencia", "transferencias"):
+            i["category"] = "Transferências in" if i["direction"] == "in" else "Transferências out"
+            i["updated_at"] = now_iso()
+            puts.append(i)
+    if puts:
+        write_and_delete(user, puts, [])
+    return items
+
+
 # ── ROTAS ────────────────────────────────────────────────────────────────────
 def get_data(user):
     """GET /data: devolve todos os itens do utilizador, agrupados por tipo ({"accounts": [...], ...})."""
-    items = migrate_legacy(user, query_all(user))
+    items = migrate_transfer_categories(user, migrate_legacy(user, query_all(user)))
     out = empty_collections()
     for i in items:
         kind = kind_of(i["sk"])

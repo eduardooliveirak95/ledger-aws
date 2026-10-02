@@ -87,14 +87,17 @@ function firstTxMonth() {
   return m ? ymOf(m) : null;
 }
 
-// Movimentos entre os meses from e to, opcionalmente só de uma conta e/ou categoria
-function filterTx({ from, to, account = '', category = '' }) {
+// Movimentos entre os meses from e to, opcionalmente só de uma conta e/ou de algumas categorias.
+// catIn / catOut = categorias de entrada / de saída escolhidas (listas). Sem nenhuma escolhida,
+// não se filtra por categoria; com alguma, só ficam as entradas e saídas dessas categorias.
+function filterTx({ from, to, account = '', catIn = [], catOut = [] }) {
+  const byCategory = catIn.length || catOut.length;
   return D.transactions.filter(t => {
     const ym = ymOf(t.date);
     if (from && ym < from) return false;
     if (to && ym > to) return false;
     if (account && t.account_id !== account && t.to_account_id !== account) return false;
-    if (category && t.category !== category) return false;
+    if (byCategory && !(t.direction === 'in' ? catIn : t.direction === 'out' ? catOut : []).includes(t.category)) return false;
     return true;
   });
 }

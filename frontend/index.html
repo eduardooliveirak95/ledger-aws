@@ -100,7 +100,9 @@
           <button class="nav-btn" data-step="1" aria-label="Seguinte">›</button>
         </div>
         <select class="inline" id="mov-filter-account"><option value="">Todas as contas</option></select>
-        <select class="inline" id="mov-filter-category"><option value="">Todas as categorias</option></select>
+        <!-- Filtros de categoria: entradas e saídas em separado, cada um com escolha múltipla (ver renderCatFilter) -->
+        <details class="multi" id="mov-filter-in"></details>
+        <details class="multi" id="mov-filter-out"></details>
       </div>
       <div class="toolbar-right">
         <button class="btn" data-action="mov-history">Histórico por mês</button>

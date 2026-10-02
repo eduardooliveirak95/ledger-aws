@@ -21,6 +21,8 @@ No primeiro login a app pede-te para escolheres uma password tua (mínimo 10 car
 
 No topo aparece o património líquido: contas + investimentos + imóveis − créditos.
 
+Em **Movimentos**, os filtros **Entradas** e **Saídas** deixam escolher várias categorias de cada vez. As transferências de e para outras pessoas ficam em **Transferências in** e **Transferências out**.
+
 As saídas nas categorias **Investimentos** e **Amortizações** (ou outra começada por "Amortiza", como "Amortização casa") não contam como gasto: entram na taxa de poupança e aparecem à parte no gráfico.
 
 ### Créditos
