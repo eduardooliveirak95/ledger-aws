@@ -1,0 +1,89 @@
+# Pipeline do GitHub Actions (CI/CD).
+# Cada push para "main" → corre os testes → faz deploy para a AWS.
+# Pull requests (de outros ramos) só correm os testes, sem deploy.
+name: Test & deploy
+
+# Quando corre
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:        # botão "Run workflow" no separador Actions (correr à mão)
+
+# Nunca há dois deploys ao mesmo tempo para o mesmo ramo; um novo espera pelo anterior
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false  # nunca interromper um deploy a meio
+
+# Por omissão, o workflow só pode ler o código do repositório
+permissions:
+  contents: read
+
+jobs:
+  # ── 1.º trabalho: testes (numa máquina Ubuntu nova, criada pelo GitHub) ──
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      # Descarrega o código do repositório para a máquina
+      - uses: actions/checkout@v4
+
+      # Instala o Python 3.13 (com cache dos pacotes pip para ser mais rápido)
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install test tools
+        run: pip install -r requirements-dev.txt
+
+      # Testes do backend com DynamoDB simulado (moto)
+      - name: Backend tests
+        run: pytest -q
+
+      # Valida os templates CloudFormation (erros de sintaxe, propriedades inválidas...)
+      - name: Check the AWS template
+        run: cfn-lint template.yaml infra/github-oidc.yaml
+
+      # Verifica a sintaxe de cada ficheiro JavaScript (não executa nada)
+      - name: Check the JavaScript syntax
+        run: for f in frontend/js/*.js; do node --check "$f"; done
+
+  # ── 2.º trabalho: deploy (só se os testes passarem, e só em push para main) ──
+  deploy:
+    name: Deploy to AWS
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write       # deixa o GitHub provar a sua identidade à AWS (OIDC, sem chaves guardadas)
+    steps:
+      - uses: actions/checkout@v4
+
+      # Instala o AWS SAM CLI
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      # Troca o token OIDC do GitHub por credenciais temporárias da role (stack ledger-github).
+      # O ARN e o email vêm de secrets: o GitHub esconde-os nos logs (aparecem como ***).
+      # Enquanto os secrets não existirem, usa as variáveis antigas (que aparecem nos logs).
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN || vars.AWS_ROLE_ARN }}
+          aws-region: eu-west-1
+          mask-aws-account-id: true   # esconde o número da conta AWS nos logs
+
+      # O mesmo script que se pode correr à mão: sam deploy + enviar o site + limpar a cache
+      - name: Deploy backend + website
+        run: bash deploy.sh "${{ secrets.ALERT_EMAIL || vars.ALERT_EMAIL }}"
+
+      # Escreve o URL do site no resumo da execução (página do run no separador Actions)
+      - name: Summary
+        run: |
+          URL=$(aws cloudformation describe-stacks --stack-name ledger --region eu-west-1 \
+            --query "Stacks[0].Outputs[?OutputKey=='WebsiteUrl'].OutputValue" --output text)
+          echo "### ✅ Deploy concluído" >> "$GITHUB_STEP_SUMMARY"
+          echo "Site: $URL" >> "$GITHUB_STEP_SUMMARY"
