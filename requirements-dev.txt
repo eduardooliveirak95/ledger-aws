@@ -1,0 +1,5 @@
+# Só é preciso para correr os testes (no PC ou no GitHub Actions). A Lambda em si não tem dependências.
+boto3            # SDK da AWS para Python (a Lambda já o tem incluído)
+moto[dynamodb]>=5    # simula o DynamoDB nos testes, sem conta AWS
+pytest           # corre os testes
+cfn-lint         # valida os templates CloudFormation

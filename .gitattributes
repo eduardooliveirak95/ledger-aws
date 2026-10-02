@@ -1,0 +1,5 @@
+#  Manter as quebras de linha do Linux (LF) nos ficheiros que correm em Linux (CloudShell, GitHub Actions).
+# Sem isto, o Git no Windows podia convertê-los para CRLF e o bash falhava.
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf

@@ -1,0 +1,22 @@
+# Fiicheiros e pastas que o Git ignora (nunca vão para o GitHub)
+
+# Gerado pelo deploy.sh / deploy.ps1 (aponta para a tua API e o teu login)
+frontend/config.js
+
+# Restos do SAM / Python
+.aws-sam/
+samconfig.toml
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# As exportações dos teus dados nunca vão para o GitHub
+*.csv
+
+# Editores / sistema operativo
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.zip

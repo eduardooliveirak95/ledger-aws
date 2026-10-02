@@ -1,0 +1,287 @@
+# ════════════════════════════════════════════════════════════════════════════
+# Ledger - toda a infraestrutura AWS da app (stack CloudFormation "ledger").
+#
+# É um template SAM: o "Transform" abaixo faz o CloudFormation expandir os tipos
+# AWS::Serverless::* em vários recursos normais (função, role IAM, rotas, permissões...).
+# Publicado pelo deploy.sh / deploy.ps1 com "sam deploy" (o GitHub Actions faz isto a cada push).
+#
+# Mudar alguma coisa na infraestrutura = mudar aqui e fazer push. Mudanças feitas à mão
+# na consola podem ser desfeitas no deploy seguinte.
+# ════════════════════════════════════════════════════════════════════════════
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Ledger - personal expenses & investments tracker.
+  Serverless and designed to stay inside the AWS "Always Free" limits:
+  Lambda + DynamoDB (provisioned 25/25) + Cognito + S3/CloudFront.
+
+# ── PARÂMETROS: valores escolhidos no momento do deploy (--parameter-overrides) ──
+Parameters:
+  # Email que recebe os alertas de custos (vem do secret ALERT_EMAIL do GitHub)
+  AlertEmail:
+    Type: String
+    Description: Email that receives cost alerts from AWS Budgets
+    AllowedPattern: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+  # Limite mensal do alerta de custos, em dólares
+  MonthlyBudgetUSD:
+    Type: Number
+    Default: 1
+    Description: Send an alert if the monthly AWS bill goes above this value (USD)
+  # Unidades de leitura/escrita da tabela. O Always Free dá 25 + 25 para TODAS as tabelas juntas.
+  TableCapacity:
+    Type: Number
+    Default: 25
+    MinValue: 1
+    MaxValue: 25
+    Description: >
+      Provisioned read/write units for the table. Always Free covers 25 RCU + 25 WCU
+      per region in total (all tables together). Lower it if you have other tables.
+
+# ── DEFINIÇÕES COMUNS a todas as funções Lambda deste template ──
+Globals:
+  Function:
+    Runtime: python3.13
+    Architectures: [arm64]          # processadores Graviton: ~20% mais baratos que x86
+    MemorySize: 256                 # MB; na Lambda, mais memória também dá mais CPU
+    # O API Gateway desiste ao fim de 30 s, mas uma importação de CSV longa continua a correr até acabar
+    Timeout: 120
+
+# ── RECURSOS: tudo o que o CloudFormation cria e gere ──
+Resources:
+  # ── BASE DE DADOS ────────────────────────────────────────────────────────
+  # Uma só tabela: partition key user_id (o "sub" do Cognito) + sort key sk ("TX_...", "ACC_"...)
+  EntriesTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain          # apagar a stack nunca apaga os teus dados
+    UpdateReplacePolicy: Retain     # e se uma mudança obrigar a substituir a tabela, a antiga também fica
+    Properties:
+      BillingMode: PROVISIONED      # capacidade fixa (grátis até 25/25); a alternativa é PAY_PER_REQUEST
+      ProvisionedThroughput:
+        ReadCapacityUnits: !Ref TableCapacity
+        WriteCapacityUnits: !Ref TableCapacity
+      AttributeDefinitions:         # só se declaram os atributos que fazem parte da chave
+        - AttributeName: user_id
+          AttributeType: S          # S = texto
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: user_id
+          KeyType: HASH             # HASH = partition key
+        - AttributeName: sk
+          KeyType: RANGE            # RANGE = sort key
+      SSESpecification:
+        SSEEnabled: false           # mesmo assim fica encriptada em repouso, com a chave gratuita da AWS
+
+  # ── LOGIN ────────────────────────────────────────────────────────────────
+  # User pool do Cognito: guarda os utilizadores e as passwords e emite os tokens JWT
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain          # tal como a tabela: nunca é apagada pelo CloudFormation
+    UpdateReplacePolicy: Retain
+    Properties:
+      UserPoolName: !Sub ${AWS::StackName}-users
+      UserPoolTier: LITE            # tier mais simples, grátis até 10 000 utilizadores ativos/mês
+      UsernameAttributes: [email]   # o login é o email
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true   # ninguém se regista sozinho (só com o create-user.ps1)
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 10
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      AccountRecoverySetting:       # sem "esqueci-me da password" por email: só o admin repõe
+        RecoveryMechanisms:
+          - Name: admin_only
+            Priority: 1
+
+  # App client: a "aplicação" (o site) que pode pedir tokens a esta user pool
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: ledger-web
+      GenerateSecret: false         # um site no browser não consegue guardar segredos
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH  # login com email + password (usado no auth.js)
+        - ALLOW_REFRESH_TOKEN_AUTH  # renovar tokens sem voltar a pedir a password
+      PreventUserExistenceErrors: ENABLED   # o erro não revela se um email existe ou não
+      IdTokenValidity: 60
+      AccessTokenValidity: 60
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        IdToken: minutes
+        AccessToken: minutes
+        RefreshToken: days
+
+  # ── API ──────────────────────────────────────────────────────────────────
+  # HTTP API do API Gateway (mais simples e barata que a REST API)
+  Api:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 20    # protege a fatura se alguém martelar o URL
+        ThrottlingRateLimit: 10     # máximo de 10 pedidos por segundo em média
+      # CORS: que sites podem chamar esta API a partir do browser
+      CorsConfiguration:
+        AllowOrigins:
+          - !Sub https://${Distribution.DomainName}   # o site no CloudFront
+          - http://localhost:5500                     # testes no PC com o Live Server do VS Code
+          - http://127.0.0.1:5500
+        AllowMethods: [GET, POST, DELETE, OPTIONS]
+        AllowHeaders: [authorization, content-type]
+        MaxAge: 3600                # o browser guarda a resposta do CORS durante 1 hora
+      # Todas as rotas exigem um JWT válido do Cognito: pedidos sem token recebem 401
+      # antes de a Lambda sequer correr
+      Auth:
+        DefaultAuthorizer: CognitoJwt
+        Authorizers:
+          CognitoJwt:
+            IdentitySource: $request.header.Authorization   # o token vem no cabeçalho Authorization
+            JwtConfiguration:
+              issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}   # quem emitiu o token
+              audience:
+                - !Ref UserPoolClient   # para que aplicação foi emitido
+
+  # A função Lambda com o backend (backend/app.py). O SAM cria também a role IAM e as rotas.
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/             # pasta enviada para a Lambda
+      Handler: app.handler          # ficheiro app.py, função handler
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref EntriesTable   # nome real da tabela, lido pelo código
+      Policies:
+        - DynamoDBCrudPolicy:       # permissões mínimas: ler/escrever SÓ nesta tabela
+            TableName: !Ref EntriesTable
+      # Cada "Event" liga uma rota do API Gateway a esta função
+      Events:
+        GetData:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: /data, Method: GET }
+        SaveItems:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: /items, Method: POST }
+        DeleteItem:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: "/items/{id}", Method: DELETE }
+
+  # Grupo de logs da Lambda no CloudWatch (criado aqui para definir a retenção)
+  ApiFunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ApiFunction}
+      RetentionInDays: 14          # apaga logs com mais de 14 dias: armazenamento mínimo
+
+  # ── SITE (bucket S3 privado, servido pelo CloudFront com HTTPS) ──────────
+  # Bucket com os ficheiros do frontend. Totalmente privado: só o CloudFront lê.
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:   # bloqueia qualquer forma de acesso público
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # OAC (Origin Access Control): o CloudFront assina os pedidos ao S3 para provar quem é
+  FrontendOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub ${AWS::StackName}-oac
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # Distribuição CloudFront (CDN): dá o URL https://xxxx.cloudfront.net e guarda cópias em cache
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: Ledger frontend
+        DefaultRootObject: index.html   # abrir o URL sem caminho mostra o index.html
+        PriceClass: PriceClass_100      # só pontos de presença da Europa e América do Norte (mais barato)
+        HttpVersion: http2
+        Origins:                        # de onde vêm os ficheiros: o bucket S3, através do OAC
+          - Id: s3-frontend
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ""  # vazio porque se usa OAC (o sistema novo), não OAI
+            OriginAccessControlId: !GetAtt FrontendOAC.Id
+        DefaultCacheBehavior:
+          TargetOriginId: s3-frontend
+          ViewerProtocolPolicy: redirect-to-https   # http:// é redirecionado para https://
+          AllowedMethods: [GET, HEAD]   # o site é só de leitura
+          CachedMethods: [GET, HEAD]
+          Compress: true                # envia os ficheiros comprimidos (gzip/brotli)
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6   # política gerida "CachingOptimized"
+
+  # Política do bucket: só o serviço CloudFront, e só ESTA distribuição, pode ler os ficheiros
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub ${FrontendBucket.Arn}/*
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}
+
+  # ── ALERTA DE CUSTOS ─────────────────────────────────────────────────────
+  # Envia email quando o custo real passa 50% do limite ou quando a previsão do mês passa 100%
+  CostBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Sub ${AWS::StackName}-monthly-cost
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetUSD
+          Unit: USD
+      NotificationsWithSubscribers:
+        - Notification:               # gasto real acima de 50% (0,50 USD com o limite de 1)
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 50
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+        - Notification:               # previsão para o fim do mês acima do limite
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+
+# ── OUTPUTS: valores que a stack publica depois do deploy ──
+# O deploy.sh lê-os para gerar o frontend/config.js, enviar o site e limpar a cache.
+Outputs:
+  WebsiteUrl:
+    Description: Open this in your browser
+    Value: !Sub https://${Distribution.DomainName}
+  ApiUrl:
+    Value: !Sub https://${Api}.execute-api.${AWS::Region}.amazonaws.com
+  UserPoolId:
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Value: !Ref UserPoolClient
+  FrontendBucketName:
+    Value: !Ref FrontendBucket
+  DistributionId:
+    Value: !Ref Distribution
+  TableName:
+    Value: !Ref EntriesTable
