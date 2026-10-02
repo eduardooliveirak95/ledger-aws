@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<!--
+  Ledger: a única página do site ("single-page app").
+  Todo o HTML dos 4 separadores está aqui; o JavaScript só mostra/esconde partes
+  e preenche os números, gráficos e tabelas com os dados que vêm da API.
+  O ficheiro é servido pelo CloudFront a partir do bucket S3.
+-->
+<html lang="pt-PT">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ledger — Finanças pessoais</title>
+<!-- Tipos de letra (Google Fonts): DM Mono para números, Syne para o texto -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<!-- Barra fina no topo que aparece enquanto há pedidos à API em curso (ver loading() no util.js) -->
+<div class="loading-bar" id="loading-bar"></div>
+
+<!-- LOGIN: tapa a app até haver sessão (ver app.js e auth.js) -->
+<div class="login-screen" id="login-screen">
+  <form class="login-card" id="login-form">
+    <div class="logo">Ledger<span> / Finanças</span></div>
+    <div class="login-sub">Entra para veres os teus dados</div>
+    <div class="field">
+      <label for="login-email">Email</label>
+      <input type="email" id="login-email" autocomplete="username" required>
+    </div>
+    <div class="field">
+      <label for="login-password">Password</label>
+      <input type="password" id="login-password" autocomplete="current-password" required>
+    </div>
+    <div class="form-error" id="login-error"></div>
+    <button class="btn primary" id="login-btn" type="submit" style="justify-content:center">Entrar</button>
+  </form>
+
+  <!-- PRIMEIRO LOGIN: a password dada por quem criou a conta é temporária; aqui escolhe-se a definitiva -->
+  <form class="login-card hidden" id="newpw-form">
+    <div class="logo">Ledger<span> / Finanças</span></div>
+    <div class="notice">
+      <b>É o teu primeiro login.</b> Por segurança, escolhe agora uma password só tua.
+      A partir daqui, quem te criou a conta deixa de saber a tua password.
+    </div>
+    <div class="field">
+      <label for="newpw-1">Nova password</label>
+      <input type="password" id="newpw-1" autocomplete="new-password" required>
+    </div>
+    <div class="field">
+      <label for="newpw-2">Repete a nova password</label>
+      <input type="password" id="newpw-2" autocomplete="new-password" required>
+    </div>
+    <div class="login-sub">Pelo menos 10 caracteres, com maiúsculas, minúsculas e um número.</div>
+    <div class="form-error" id="newpw-error"></div>
+    <button class="btn primary" id="newpw-btn" type="submit" style="justify-content:center">Guardar e entrar</button>
+  </form>
+</div>
+
+<!-- BARRA DO TOPO: nome, separadores, estado da ligação, backup e sair -->
+<header class="topbar">
+  <div class="logo">Ledger<span> / Finanças</span></div>
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="mov" role="tab">Movimentos</button>
+    <button class="tab" data-tab="inv" role="tab">Investimentos</button>
+    <button class="tab" data-tab="loan" role="tab">Créditos</button>
+    <button class="tab" data-tab="prop" role="tab">Património</button>
+  </nav>
+  <div class="user-box">
+    <div class="status-dot" id="status-dot"></div>
+    <span id="user-email"></span>
+    <button class="btn" id="export-all-btn" title="Descarregar todos os dados em CSV">⬇ Backup</button>
+    <button class="btn" id="password-btn" title="Mudar a tua password">🔑 Password</button>
+    <button class="btn danger" id="logout-btn">Sair</button>
+  </div>
+</header>
+
+<main class="main">
+  <!-- PATRIMÓNIO LÍQUIDO (visível em todos os separadores; ver netWorth() no calc.js) -->
+  <section class="networth" aria-label="Património">
+    <div><div class="nw-label">Saldo em contas</div><div class="nw-value" id="nw-accounts">—</div></div>
+    <div><div class="nw-label">Investimentos</div><div class="nw-value" id="nw-investments">—</div></div>
+    <div><div class="nw-label">Imóveis</div><div class="nw-value" id="nw-properties">—</div></div>
+    <div><div class="nw-label">Créditos em dívida</div><div class="nw-value" id="nw-debt">—</div></div>
+    <div class="nw-total"><div class="nw-label">Património líquido</div><div class="nw-value" id="nw-total">—</div></div>
+  </section>
+
+  <!-- ════════ SEPARADOR: MOVIMENTOS (preenchido por renderMovements no app.js) ════════ -->
+  <section id="tab-mov" class="tab-panel">
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <div class="seg" id="mov-period-mode">
+          <button data-mode="month" class="active">Mês</button>
+          <button data-mode="year">Ano</button>
+          <button data-mode="all">Sempre</button>
+        </div>
+        <div class="period-picker" id="mov-period-nav">
+          <button class="nav-btn" data-step="-1" aria-label="Anterior">‹</button>
+          <div class="period-label" id="mov-period-label">—</div>
+          <button class="nav-btn" data-step="1" aria-label="Seguinte">›</button>
+        </div>
+        <select class="inline" id="mov-filter-account"><option value="">Todas as contas</option></select>
+        <select class="inline" id="mov-filter-category"><option value="">Todas as categorias</option></select>
+      </div>
+      <div class="toolbar-right">
+        <button class="btn" data-action="mov-history">Histórico por mês</button>
+        <button class="btn" data-action="import" data-format="mov">⬆ Importar</button>
+        <button class="btn" data-action="export" data-format="mov">⬇ Exportar</button>
+        <button class="btn primary" data-action="tx-new">+ Movimento</button>
+      </div>
+    </div>
+
+    <div class="stats" style="margin-top:16px">
+      <div class="stat"><div class="stat-label">Entradas</div><div class="stat-value pos" id="mov-in">—</div><div class="stat-sub" id="mov-in-sub"></div></div>
+      <div class="stat"><div class="stat-label">Gastos</div><div class="stat-value neg" id="mov-out">—</div><div class="stat-sub" id="mov-out-sub"></div></div>
+      <div class="stat"><div class="stat-label">Saldo do período</div><div class="stat-value" id="mov-net">—</div><div class="stat-sub" id="mov-net-sub"></div></div>
+      <div class="stat"><div class="stat-label">Taxa de poupança</div><div class="stat-value" id="mov-rate">—</div><div class="stat-sub" id="mov-rate-sub">do que entrou, quanto não foi gasto</div></div>
+    </div>
+
+    <div class="grid-3-1" style="margin-top:16px">
+      <div class="panel">
+        <div class="panel-header"><div class="panel-title" id="mov-chart-flow-title">Entradas e saídas por mês</div></div>
+        <div class="panel-body"><div class="chart-box"><canvas id="chart-mov-flow"></canvas></div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><div class="panel-title">Gastos por categoria</div></div>
+        <div class="panel-body"><div class="chart-box"><canvas id="chart-mov-cat"></canvas></div></div>
+      </div>
+    </div>
+
+    <div class="grid-1-2" style="margin-top:16px">
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">Contas</div>
+          <button class="btn" data-action="acc-new">+ Conta</button>
+        </div>
+        <div id="acc-list"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><div class="panel-title">Evolução do saldo das contas</div></div>
+        <div class="panel-body"><div class="chart-box"><canvas id="chart-mov-balance"></canvas></div></div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <div class="panel-header"><div class="panel-title" id="mov-table-title">Movimentos</div></div>
+      <div class="table-wrap" id="mov-table"></div>
+    </div>
+  </section>
+
+  <!-- ════════ SEPARADOR: INVESTIMENTOS (renderInvestments) ════════ -->
+  <section id="tab-inv" class="tab-panel hidden">
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <select class="inline" id="inv-filter"><option value="">Carteira completa</option></select>
+      </div>
+      <div class="toolbar-right">
+        <button class="btn" data-action="import" data-format="inv">⬆ Importar</button>
+        <button class="btn" data-action="export" data-format="inv">⬇ Exportar</button>
+        <button class="btn" data-action="inv-new">+ Investimento</button>
+        <button class="btn" data-action="imv-new">+ Aporte / Resgate</button>
+        <button class="btn primary" data-action="inv-month">Atualizar mês</button>
+      </div>
+    </div>
+
+    <div class="stats" style="margin-top:16px">
+      <div class="stat"><div class="stat-label">Total investido</div><div class="stat-value" id="inv-invested">—</div><div class="stat-sub">aportes − resgates</div></div>
+      <div class="stat"><div class="stat-label">Valor atual</div><div class="stat-value" id="inv-value">—</div><div class="stat-sub" id="inv-value-sub"></div></div>
+      <div class="stat"><div class="stat-label">Ganho / perda</div><div class="stat-value" id="inv-gain">—</div><div class="stat-sub" id="inv-gain-sub"></div></div>
+      <div class="stat"><div class="stat-label">Aportes este ano</div><div class="stat-value" id="inv-year">—</div><div class="stat-sub" id="inv-year-sub"></div></div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <div class="panel-header"><div class="panel-title">Valor vs dinheiro investido</div></div>
+      <div class="panel-body"><div class="chart-box tall"><canvas id="chart-inv-value"></canvas></div></div>
+    </div>
+
+    <div class="grid-2" style="margin-top:16px">
+      <div class="panel">
+        <div class="panel-header"><div class="panel-title">Aportes líquidos por mês (últimos 12)</div></div>
+        <div class="panel-body"><div class="chart-box"><canvas id="chart-inv-contrib"></canvas></div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><div class="panel-title">Ganho / perda acumulado</div></div>
+        <div class="panel-body"><div class="chart-box"><canvas id="chart-inv-gain"></canvas></div></div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <div class="panel-header"><div class="panel-title">Os teus investimentos</div></div>
+      <div class="table-wrap" id="inv-table"></div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <div class="panel-header"><div class="panel-title">Aportes e resgates</div></div>
+      <div class="table-wrap" id="imv-table"></div>
+    </div>
+  </section>
+
+  <!-- ════════ SEPARADOR: CRÉDITOS (renderLoans) ════════ -->
+  <section id="tab-loan" class="tab-panel hidden">
+    <div class="toolbar">
+      <div class="toolbar-left"></div>
+      <div class="toolbar-right">
+        <button class="btn" data-action="import" data-format="loan">⬆ Importar</button>
+        <button class="btn" data-action="export" data-format="loan">⬇ Exportar</button>
+        <button class="btn" data-action="loan-new">+ Crédito</button>
+        <button class="btn primary" data-action="loan-month">Atualizar mês</button>
+      </div>
+    </div>
+
+    <div class="stats" style="margin-top:16px">
+      <div class="stat"><div class="stat-label">Total em dívida</div><div class="stat-value" id="loan-total">—</div><div class="stat-sub" id="loan-total-sub"></div></div>
+      <div class="stat"><div class="stat-label">Prestações mensais</div><div class="stat-value" id="loan-payments">—</div><div class="stat-sub">soma dos créditos ativos</div></div>
+      <div class="stat"><div class="stat-label">Já amortizado</div><div class="stat-value" id="loan-paid">—</div><div class="stat-sub" id="loan-paid-sub"></div></div>
+      <div class="stat"><div class="stat-label">Livre de dívidas</div><div class="stat-value" id="loan-free">—</div><div class="stat-sub" id="loan-free-sub">estimativa</div></div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <div class="panel-header"><div class="panel-title">Evolução da dívida</div></div>
+      <div class="panel-body"><div class="chart-box tall"><canvas id="chart-loan"></canvas></div></div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <div class="panel-header"><div class="panel-title">Os teus créditos</div></div>
+      <div id="loan-list"></div>
+    </div>
+
+    <!-- Histórico de prestações: juros, capital e amortizações extraordinárias mês a mês (ver loanHistory no calc.js) -->
+    <div class="panel" style="margin-top:16px" id="loan-history-panel">
+      <div class="panel-header">
+        <div class="panel-title">Histórico de prestações</div>
+        <select class="inline hidden" id="loan-history-select" aria-label="Crédito"></select>
+      </div>
+      <div class="panel-body">
+        <div class="stats" id="loan-history-stats"></div>
+        <div class="chart-box" style="margin-top:16px"><canvas id="chart-loan-pay"></canvas></div>
+      </div>
+      <div class="table-wrap" id="loan-history-table"></div>
+    </div>
+  </section>
+
+  <!-- ════════ SEPARADOR: PATRIMÓNIO (imóveis; renderProperties) ════════ -->
+  <section id="tab-prop" class="tab-panel hidden">
+    <div class="toolbar">
+      <div class="toolbar-left"></div>
+      <div class="toolbar-right">
+        <button class="btn" data-action="import" data-format="prop">⬆ Importar</button>
+        <button class="btn" data-action="export" data-format="prop">⬇ Exportar</button>
+        <button class="btn primary" data-action="prop-new">+ Imóvel</button>
+      </div>
+    </div>
+
+    <div class="stats" style="margin-top:16px">
+      <div class="stat"><div class="stat-label">Valor dos imóveis</div><div class="stat-value" id="prop-total">—</div><div class="stat-sub" id="prop-total-sub"></div></div>
+      <div class="stat"><div class="stat-label">Valorização</div><div class="stat-value" id="prop-gain">—</div><div class="stat-sub" id="prop-gain-sub"></div></div>
+      <div class="stat"><div class="stat-label">Crédito associado</div><div class="stat-value" id="prop-debt">—</div><div class="stat-sub">ainda em dívida</div></div>
+      <div class="stat"><div class="stat-label">Capital próprio</div><div class="stat-value" id="prop-equity">—</div><div class="stat-sub" id="prop-equity-sub">valor − crédito</div></div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <div class="panel-header"><div class="panel-title">Os teus imóveis</div></div>
+      <div class="table-wrap" id="prop-table"></div>
+    </div>
+  </section>
+</main>
+
+<!-- JANELA GENÉRICA (formulários, grelhas, importação): uma só, reutilizada (ver forms.js) -->
+<div class="modal-overlay" id="modal">
+  <div class="modal" id="modal-box" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-header">
+      <div class="modal-title" id="modal-title"></div>
+      <button class="icon-btn" id="modal-close" aria-label="Fechar">✕</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-footer" id="modal-footer"></div>
+  </div>
+</div>
+
+<!-- Mensagens temporárias ("Movimento guardado", erros...) -->
+<div class="toast" id="toast" role="status"></div>
+
+<!--
+  Scripts, por esta ordem (cada um usa o que os anteriores definem):
+  config.js  gerado pelo deploy: URL da API e dados do Cognito (não está no GitHub)
+  Chart.js   biblioteca de gráficos
+  util → auth → calc → charts → forms → csv → bank → app (o app.js arranca tudo)
+  O pdf.js (em vendor/pdfjs) só é carregado quando se importa um PDF.
+-->
+<script src="config.js"></script>
+<script src="vendor/chart.umd.min.js"></script>
+<script src="js/util.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/calc.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/forms.js"></script>
+<script src="js/csv.js"></script>
+<script src="js/bank.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
