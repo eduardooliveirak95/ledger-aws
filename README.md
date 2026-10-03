@@ -39,7 +39,7 @@ Em **+ Imóvel** basta o nome e o valor atual. O preço de compra e o crédito a
 
 ## Importar e fazer backup
 
-- **⬇ Backup** (no topo) descarrega todos os teus dados em CSV. Faz isto de vez em quando.
+- **⬇ Backup** (no topo) descarrega todos os teus dados em CSV e envia os mesmos ficheiros para o email da tua conta ("BACKUP Ledger dia DD/MM/AAAA"). Faz isto de vez em quando.
 - **⬆ Importar** (em cada separador) recupera um backup ou traz dados de outros sítios:
   - modelos CSV (descarregam-se na própria janela);
   - CSV do Excel;

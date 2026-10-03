@@ -16,7 +16,7 @@ import pytest
 # Credenciais e região falsas (o moto não as verifica) e o nome da tabela que a app espera.
 # Tem de ser feito ANTES de importar a app, que lê TABLE_NAME.
 os.environ.update(AWS_DEFAULT_REGION="eu-west-1", AWS_ACCESS_KEY_ID="test",
-                  AWS_SECRET_ACCESS_KEY="test", TABLE_NAME="ledger-test")
+                  AWS_SECRET_ACCESS_KEY="test", TABLE_NAME="ledger-test", SENDER_EMAIL="ledger@example.com")
 # Permite fazer "import app" a partir da pasta backend/
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
@@ -43,15 +43,18 @@ def table():
             ProvisionedThroughput={"ReadCapacityUnits": 25, "WriteCapacityUnits": 25},
         )
         app._table = None
+        app._ses = None
         yield boto3.resource("dynamodb").Table("ledger-test")
         app._table = None
+        app._ses = None
 
 
-def call(route, user="u1", body=None, path=None):
+def call(route, user="u1", body=None, path=None, email=None):
     """Simula um pedido do API Gateway à Lambda (com o utilizador já autenticado) e devolve (código, corpo)."""
+    claims = {"sub": user, **({"email": email} if email else {})}
     event = {"routeKey": route, "pathParameters": path,
              "body": json.dumps(body) if body is not None else None,
-             "requestContext": {"authorizer": {"jwt": {"claims": {"sub": user}}}}}
+             "requestContext": {"authorizer": {"jwt": {"claims": claims}}}}
     r = app.handler(event, None)
     return r["statusCode"], (json.loads(r["body"]) if r["body"] else None)
 
@@ -202,6 +205,41 @@ def test_transfer_categories_are_renamed(table):
     assert cats == {10: "Transferências in", 5: "Transferências out", 7: "Transferência", 3: "Supermercado"}
     _, d2 = call("GET /data")   # a segunda leitura não muda nada
     assert {t["amount"]: t["category"] for t in d2["transactions"]} == cats
+
+
+def test_backup_is_emailed_to_the_account_only(table):
+    """O backup vai para o email do token (não para um email vindo do browser), com os CSV em anexo."""
+    sesv2 = boto3.client("sesv2")
+    for addr in ("ledger@example.com", "eu@example.com"):
+        sesv2.create_email_identity(EmailIdentity=addr)
+    files = [{"name": "ledger-movimentos-2026-10-03.csv", "content": "Data;Valor\r\n2026-10-01;10,00"}]
+    status, body = call("POST /backup", email="eu@example.com",
+                        body={"date": "2026-10-03", "files": files, "to": "outro@example.com"})
+    assert status == 200 and body == {"sent_to": "eu@example.com", "files": 1}
+    from moto.core import DEFAULT_ACCOUNT_ID
+    from moto.ses.models import ses_backends
+    sent = ses_backends[DEFAULT_ACCOUNT_ID]["eu-west-1"].sent_messages
+    raw = sent[-1].raw_data if hasattr(sent[-1], "raw_data") else str(sent[-1])
+    assert "BACKUP Ledger dia 03/10/2026" in raw and "ledger-movimentos-2026-10-03.csv" in raw
+    # o contador do limite diário não aparece nos dados da app
+    _, d = call("GET /data")
+    assert all(not v for v in d.values())
+
+
+def test_backup_limits_and_validation(table):
+    """Sem email na conta, ficheiros inválidos ou mais de 10 envios por dia dão erro."""
+    boto3.client("sesv2").create_email_identity(EmailIdentity="ledger@example.com")
+    boto3.client("sesv2").create_email_identity(EmailIdentity="eu@example.com")
+    ok = {"date": "2026-10-03", "files": [{"name": "a.csv", "content": "x"}]}
+    assert call("POST /backup", body=ok)[0] == 400                                  # conta sem email
+    for bad in ({"date": "2026-10-03", "files": []},
+                {"date": "2026-10-03", "files": [{"name": "../x.exe", "content": "x"}]},
+                {"date": "ontem", "files": [{"name": "a.csv", "content": "x"}]}):
+        assert call("POST /backup", email="eu@example.com", body=bad)[0] == 400
+    for _ in range(app.MAX_BACKUPS_PER_DAY):
+        assert call("POST /backup", email="eu@example.com", body=ok)[0] == 200
+    assert call("POST /backup", email="eu@example.com", body=ok)[0] == 429         # limite do dia
+    assert call("POST /backup", email="eu@example.com", body={**ok, "date": "2026-10-04"})[0] == 200
 
 
 def test_request_size_limit(table):
