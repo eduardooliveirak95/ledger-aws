@@ -19,11 +19,24 @@ ALERT_EMAIL="${1:?Uso: ./deploy.sh o-teu-email@exemplo.com}"
 STACK_NAME="${STACK_NAME:-ledger}"
 REGION="${REGION:-eu-west-1}"
 
+# No GitHub Actions os logs são públicos: esconde o que não precisa de lá estar.
+# quiet COMANDO... -> corre o comando e tira da saída a tabela de outputs da stack (ids do Cognito,
+# tabela, API, CloudFront) e as linhas com nomes de buckets. No PC, mostra tudo como antes.
+quiet() {
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    "$@" 2>&1 | awk '/CloudFormation outputs from deployed stack/ { skip = 1 }
+                     /Successfully created\/updated stack/      { skip = 0 }
+                     !skip && !/[Ss]3 bucket/ { print; fflush() }'
+  else
+    "$@"
+  fi
+}
+
 echo -e "\n[1/4] A fazer deploy do backend (DynamoDB, Cognito, API, Lambda, CloudFront)..."
 # --resolve-s3: o SAM cria/usa um bucket próprio para enviar o código da Lambda
 # --capabilities CAPABILITY_IAM: autoriza a stack a criar roles IAM (a da Lambda)
 # --no-confirm-changeset: aplica sem perguntar · --no-fail-on-empty-changeset: não falha se nada mudou
-sam deploy \
+quiet sam deploy \
   --template-file template.yaml \
   --stack-name "$STACK_NAME" \
   --region "$REGION" \
@@ -49,7 +62,8 @@ echo -e "\n[3/4] A enviar o site..."
 # config.js diz ao site onde está a API e qual é o cliente do Cognito (não vai para o GitHub)
 printf "window.LEDGER_CONFIG = { apiUrl: '%s', region: '%s', clientId: '%s' };\n" "$API_URL" "$REGION" "$CLIENT_ID" > frontend/config.js
 # sync envia só o que mudou; --delete apaga do bucket o que já não existe em frontend/
-aws s3 sync frontend "s3://$BUCKET" --delete --region "$REGION"
+# (no GitHub, --only-show-errors não lista os ficheiros, que mostrariam o nome do bucket)
+aws s3 sync frontend "s3://$BUCKET" --delete --region "$REGION" ${GITHUB_ACTIONS:+--only-show-errors}
 
 echo -e "\n[4/4] A limpar a cache do CloudFront..."
 # Invalidação: obriga o CloudFront a ir buscar os ficheiros novos em vez de servir os da cache
