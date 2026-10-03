@@ -45,6 +45,12 @@ if (-not $exists) {
         --user-attributes Name=email,Value=$Email Name=email_verified,Value=true `
         --message-action SUPPRESS | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "admin-create-user failed" }
+    # Backup por email: enquanto o SES estiver em modo de testes, só envia para emails verificados.
+    # A AWS manda um email com um link de confirmação para este endereço (se já existir, não faz nada).
+    $ErrorActionPreference = "Continue"
+    aws sesv2 create-email-identity --email-identity $Email --region $Region 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) { Write-Host "AWS will send a verification email to $Email (needed for email backups)." -ForegroundColor Cyan }
+    $ErrorActionPreference = "Stop"
 } else {
     Write-Host "User already exists, updating password..." -ForegroundColor Cyan
 }

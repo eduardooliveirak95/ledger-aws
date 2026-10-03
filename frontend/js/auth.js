@@ -200,4 +200,7 @@ const api = {
 
   // DELETE /items/{id}: apaga um item (o backend apaga os "filhos" em cascata)
   remove: id => apiFetch('/items/' + encodeURIComponent(id), { method: 'DELETE' }),
+
+  // POST /backup: envia os CSV para o email da própria conta. files = [{ name, content }]
+  emailBackup: (date, files) => apiFetch('/backup', { method: 'POST', body: JSON.stringify({ date, files }) }),
 };

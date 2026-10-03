@@ -153,9 +153,15 @@ Resources:
       Environment:
         Variables:
           TABLE_NAME: !Ref EntriesTable   # nome real da tabela, lido pelo código
+          SENDER_EMAIL: !Ref AlertEmail   # remetente dos emails de backup (verificado no SES)
       Policies:
         - DynamoDBCrudPolicy:       # permissões mínimas: ler/escrever SÓ nesta tabela
             TableName: !Ref EntriesTable
+        # Enviar emails pelo SES (backup por email). Só identidades desta conta e região.
+        - Statement:
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: !Sub arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*
       # Cada "Event" liga uma rota do API Gateway a esta função
       Events:
         GetData:
@@ -167,6 +173,18 @@ Resources:
         DeleteItem:
           Type: HttpApi
           Properties: { ApiId: !Ref Api, Path: "/items/{id}", Method: DELETE }
+        SendBackup:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: /backup, Method: POST }
+
+  # Remetente dos emails de backup no Amazon SES. Ao ser criado, a AWS envia um email de
+  # verificação para este endereço: só depois de carregar no link é que o SES envia emails.
+  # Enquanto a conta SES estiver em modo de testes ("sandbox"), cada destinatário também tem
+  # de ser verificado (o create-user trata disso). Custo: ~0,10 $ por 1000 emails.
+  BackupSender:
+    Type: AWS::SES::EmailIdentity
+    Properties:
+      EmailIdentity: !Ref AlertEmail
 
   # Grupo de logs da Lambda no CloudWatch (criado aqui para definir a retenção)
   ApiFunctionLogs:

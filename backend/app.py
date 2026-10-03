@@ -25,6 +25,7 @@ Rotas:
     GET    /data          tudo o que pertence ao utilizador autenticado (os cálculos são feitos no browser)
     POST   /items         criar / atualizar muitos itens de uma vez  {"items": [...], "delete": [...]}
     DELETE /items/{id}    apagar um item (+ os "filhos" no caso de contas / investimentos / créditos)
+    POST   /backup        enviar os CSV do backup para o email da própria conta (Amazon SES)
 """
 
 import base64
@@ -36,6 +37,9 @@ import unicodedata
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+from email.mime.application import MIMEApplication
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 import boto3
 from boto3.dynamodb.conditions import Key
@@ -45,6 +49,10 @@ from botocore.config import Config
 MAX_ITEMS_PER_REQUEST = 300   # máximo de itens (gravar + apagar) num único POST /items
 MAX_NAME = 60                 # comprimento máximo de nomes (conta, investimento, categoria...)
 MAX_TEXT = 500                # comprimento máximo de descrições e notas
+MAX_BACKUP_FILES = 10         # ficheiros CSV num email de backup
+MAX_BACKUP_BYTES = 6_000_000  # tamanho total dos CSV num email (o SES aceita até 10 MB com os anexos)
+MAX_BACKUPS_PER_DAY = 10      # emails de backup por utilizador por dia (protege contra abusos e custos)
+BACKUP_NAME_RE = re.compile(r"^[\w.-]{1,80}\.csv$")   # nomes simples, terminados em .csv
 
 # Tipo de item (nome usado pelo frontend) -> prefixo da sort key no DynamoDB
 KIND_PREFIX = {
@@ -89,6 +97,7 @@ LEGACY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_[0-9a-f]{16}$")
 
 # Ligação à tabela, criada só uma vez por contentor Lambda e reutilizada entre pedidos
 _table = None
+_ses = None
 
 
 def table():
@@ -105,6 +114,14 @@ def table():
         ddb = boto3.resource("dynamodb", config=Config(retries={"max_attempts": 10, "mode": "adaptive"}))
         _table = ddb.Table(os.environ["TABLE_NAME"])
     return _table
+
+
+def ses():
+    """Cliente do Amazon SES (envio de emails), criado na primeira chamada e depois reutilizado."""
+    global _ses
+    if _ses is None:
+        _ses = boto3.client("sesv2")
+    return _ses
 
 
 # ── FUNÇÕES AUXILIARES ───────────────────────────────────────────────────────
@@ -616,6 +633,85 @@ def delete_item(user, item_id):
     return {"deleted": sorted(to_delete)}
 
 
+def count_backup(user, day):
+    """Conta mais um email de backup neste dia e recusa se já foram MAX_BACKUPS_PER_DAY.
+
+    O contador fica num item BACKUP_<dia> do próprio utilizador (o GET /data ignora este prefixo).
+    A condição faz a verificação e o incremento numa só operação, por isso dois cliques seguidos
+    não passam o limite.
+    """
+    try:
+        table().update_item(
+            Key={"user_id": user, "sk": f"BACKUP_{day}"},
+            UpdateExpression="ADD sent :one",
+            ConditionExpression="attribute_not_exists(sent) OR sent < :max",
+            ExpressionAttributeValues={":one": 1, ":max": MAX_BACKUPS_PER_DAY},
+        )
+    except table().meta.client.exceptions.ConditionalCheckFailedException:
+        raise ApiError(429, f"Já enviaste {MAX_BACKUPS_PER_DAY} backups por email hoje. Tenta amanhã.")
+
+
+def post_backup(user, email, event):
+    """POST /backup: envia os CSV do backup, como anexos, para o email da conta.
+
+    Corpo: {"date": "AAAA-MM-DD", "files": [{"name": "ledger-....csv", "content": "texto do CSV"}]}
+    O destinatário é SEMPRE o email do token (claim "email" do Cognito), nunca um valor do browser:
+    assim ninguém consegue usar esta rota para mandar emails a outras pessoas.
+    """
+    if not email:
+        raise ApiError(400, "A tua conta não tem email associado")
+    sender = os.environ.get("SENDER_EMAIL")
+    if not sender:
+        raise ApiError(500, "O envio de emails não está configurado")
+    raw_body = event.get("body") or "{}"
+    if event.get("isBase64Encoded"):
+        raw_body = base64.b64decode(raw_body).decode("utf-8")
+    try:
+        body = json.loads(raw_body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise ApiError(400, "O corpo do pedido tem de ser JSON")
+    if not isinstance(body, dict):
+        raise ApiError(400, "O corpo do pedido tem de ser um objeto JSON")
+    try:
+        day = v_date(body.get("date"), "date")
+    except ValueError as e:
+        raise ApiError(400, str(e))
+    files = body.get("files")
+    if not isinstance(files, list) or not 1 <= len(files) <= MAX_BACKUP_FILES:
+        raise ApiError(400, f"files: entre 1 e {MAX_BACKUP_FILES} ficheiros")
+    total = 0
+    for f in files:
+        if not isinstance(f, dict) or not BACKUP_NAME_RE.match(str(f.get("name", ""))) or not isinstance(f.get("content"), str):
+            raise ApiError(400, "files: cada ficheiro precisa de um nome .csv simples e do conteúdo em texto")
+        total += len(f["content"].encode("utf-8"))
+    if total > MAX_BACKUP_BYTES:
+        raise ApiError(400, "O backup é demasiado grande para enviar por email")
+
+    count_backup(user, day)
+
+    # Monta o email: texto simples + um anexo por CSV (com BOM, para o Excel abrir bem os acentos)
+    shown = datetime.strptime(day, "%Y-%m-%d").strftime("%d/%m/%Y")
+    msg = MIMEMultipart()
+    msg["Subject"] = f"BACKUP Ledger dia {shown}"
+    msg["From"] = f"Ledger <{sender}>"
+    msg["To"] = email
+    names = "\n".join(f"  - {f['name']}" for f in files)
+    msg.attach(MIMEText(
+        f"Backup dos teus dados do Ledger de {shown}.\n\nFicheiros em anexo:\n{names}\n\n"
+        "Para recuperar os dados, usa \"Importar\" no separador certo da app.\n", "plain", "utf-8"))
+    for f in files:
+        part = MIMEApplication(("\ufeff" + f["content"]).encode("utf-8"), _subtype="csv")
+        part.add_header("Content-Disposition", "attachment", filename=f["name"])
+        msg.attach(part)
+    try:
+        ses().send_email(FromEmailAddress=sender, Destination={"ToAddresses": [email]},
+                         Content={"Raw": {"Data": msg.as_bytes()}})
+    except ses().exceptions.MessageRejected:
+        # Normalmente: o SES ainda está em modo de testes e este email não foi verificado
+        raise ApiError(400, "O SES recusou o email. Confirma o email de verificação que a AWS te enviou.")
+    return {"sent_to": email, "files": len(files)}
+
+
 # ── PONTO DE ENTRADA ─────────────────────────────────────────────────────────
 def handler(event, context):
     """Função que a Lambda chama em cada pedido (configurada como "app.handler" no template.yaml).
@@ -627,7 +723,8 @@ def handler(event, context):
        (e o traceback vai para os logs do CloudWatch).
     """
     try:
-        user = event["requestContext"]["authorizer"]["jwt"]["claims"]["sub"]
+        claims = event["requestContext"]["authorizer"]["jwt"]["claims"]
+        user = claims["sub"]
     except (KeyError, TypeError):
         return response(401, {"detail": "Unauthorized"})
 
@@ -640,6 +737,8 @@ def handler(event, context):
             return response(200, post_items(user, event))
         if route == "DELETE /items/{id}":
             return response(200, delete_item(user, path.get("id")))
+        if route == "POST /backup":
+            return response(200, post_backup(user, claims.get("email"), event))
         return response(404, {"detail": f"Rota desconhecida: {route}"})
     except ApiError as e:
         return response(e.status, {"detail": e.detail})

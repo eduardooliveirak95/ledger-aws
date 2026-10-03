@@ -32,6 +32,10 @@ else
   aws cognito-idp admin-create-user --user-pool-id "$POOL_ID" --username "$EMAIL" --region "$REGION" \
     --user-attributes Name=email,Value="$EMAIL" Name=email_verified,Value=true \
     --message-action SUPPRESS > /dev/null
+  # Backup por email: enquanto o SES estiver em modo de testes, só envia para emails verificados.
+  # A AWS manda um email com um link de confirmação para este endereço (se já existir, não faz nada).
+  aws sesv2 create-email-identity --email-identity "$EMAIL" --region "$REGION" > /dev/null 2>&1 \
+    && echo "A AWS vai enviar um email de verificação para $EMAIL (necessário para o backup por email)." || true
 fi
 
 if [ "$TEMPORARY" = true ]; then
