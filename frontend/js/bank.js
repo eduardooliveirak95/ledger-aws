@@ -93,22 +93,25 @@ function parseCgdCsv(text) {
 // Regras para adivinhar a categoria pela descrição. Ganha a primeira que bater certo.
 // São testadas na descrição sem espaços (ver compactDesc), em minúsculas e sem acentos.
 // Cada regra é [expressão regular ou função(descrição, valor), categoria].
+// Só palavras genéricas e marcas nacionais (o repositório é público: nada de lojas ou serviços que
+// digam onde alguém costuma ir). O resto aprende-se: mudar a categoria de um movimento faz com que
+// os próximos com a mesma descrição a sigam (ver learnedCategories).
 const BANK_RULES = {
   out: [
     [/amortiza/, 'Amortizações'],                          // amortizações de crédito: poupança, não gasto
     [/cobrancaprestacao|prestacaohab|pagprestacao/, 'Habitação'],
     [/comissao|manutconta|impostodeselo|impselo|despesasmanut/, 'Comissões bancárias'],
     [/^atm|levantamento/, 'Levantamentos'],
-    [/^edp|goldenergy|endesa|iberdrola|galpenergia|smas|epal|aguasde|indaqua/, 'Água / Luz / Gás'],
-    [/cepsa|galp|repsol|^prio|^bp|shell|alvesbandeira/, 'Combustível'],
+    [/^edp|goldenergy|endesa|iberdrola|galpenergia|smas|aguasde/, 'Água / Luz / Gás'],
+    [/cepsa|galp|repsol|^prio|^bp|shell|combustiv/, 'Combustível'],
     [/nowo|^meo|vodafone|^nos|digimobil/, 'Telecomunicações'],
-    [/continente|pingodoce|lidl|minipreco|intermarche|aldi|mercadona|auchan|^spar|meusuper|froiz/, 'Supermercado'],
-    [/^a\d{1,2}$|viaverde|brisa|ascendi|metropo|carris|fertagus|tvm$|^rne$|^bolt|^uber(?!eats)|navegante|emel|telpark|empark/, 'Transportes'],
-    [/restaur|burger|tasquinha|tasca|cantinho|^bares|pizz|sushi|mcdonald|^kfc|^h3|glovo|ubereats|pastelaria|padaria|grelha|cafe|snack|churrasq|kebab/, 'Restauração'],
-    [/farmacia|multimedi|clinica|hospital|^cuf|luzsaude|dentar/, 'Saúde'],
-    [/spotify|netflix|disney|hbomax|youtube|apple|icloud|googleplay|amazonprime|onlyfans|patreon|openai|anthropic/, 'Subscrições'],
-    [/certiverse|pearson|examvue|udemy|coursera|academy/, 'Educação'],
-    [/xsolla|steam|playstation|nintendo|cinema|ticketline|solinca|fitness|ginasio/, 'Lazer'],
+    [/supermercado|hipermercado|continente|pingodoce|lidl|minipreco|intermarche|aldi|mercadona|auchan|^spar/, 'Supermercado'],
+    [/^a\d{1,2}$|viaverde|brisa|ascendi|portagem|metro|comboio|autocarro|^bolt|^uber(?!eats)|taxi|estaciona/, 'Transportes'],
+    [/restaur|burger|tasca|pizz|sushi|mcdonald|^kfc|glovo|ubereats|pastelaria|padaria|cafe|snack|churrasq|kebab|grill/, 'Restauração'],
+    [/farmacia|clinica|hospital|^cuf|luzsaude|dentar|medic/, 'Saúde'],
+    [/spotify|netflix|disney|hbomax|youtube|apple|icloud|googleplay|amazonprime|primevideo/, 'Subscrições'],
+    [/udemy|coursera|escola|colegio|universidade|faculdade|propina/, 'Educação'],
+    [/steam|playstation|nintendo|xbox|cinema|ticketline|fitness|ginasio/, 'Lazer'],
     [/fidelidade|seguro|tranquilidade|allianz|ageas|zurich|generali/, 'Seguros'],
     [/mbway|transfer|^trf|^tfi/, 'Transferências out'],
   ],

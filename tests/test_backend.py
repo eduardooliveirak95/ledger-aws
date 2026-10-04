@@ -229,6 +229,13 @@ def test_backup_csv_headers_match_the_app():
     assert headers == list(app.BACKUP_FORMATS.values())
 
 
+def test_backup_csv_neutralizes_formulas():
+    """Texto começado por = + - @ leva uma ' à frente (o Excel não o corre como fórmula); os valores não mudam."""
+    assert app.csv_cell("=HYPERLINK(\"x\")") == '"\'=HYPERLINK(""x"")"'
+    assert [app.csv_cell(v) for v in ("+1", "-x", "@SUM(A1)", "\tx", "Renda", Decimal("-5"))] == \
+        ["'+1", "'-x", "'@SUM(A1)", "'\tx", "Renda", "-5,00"]
+
+
 def test_backup_day_is_the_day_that_just_ended():
     """À meia-noite de Portugal (23:00 UTC no verão, 00:00 UTC no inverno) o backup é do dia anterior."""
     assert app.backup_day(datetime(2026, 10, 4, 23, 0, 5, tzinfo=timezone.utc)) == "2026-10-04"
@@ -266,7 +273,8 @@ def test_backup_csv_content(table):
 
 
 def test_daily_backup_emails_only_active_subscribers(table, monkeypatch, capsys):
-    """O envio diário vai para o email do Cognito de quem ativou o backup; contas desativadas ou sem dados são saltadas.
+    """O envio diário vai para o email do Cognito de quem ativou o backup; contas desativadas, sem dados
+    ou com o email por verificar no Cognito são saltadas.
 
     Um email recusado pelo SES (por verificar) não trava os outros e o log não mostra o endereço.
     """
@@ -274,17 +282,19 @@ def test_daily_backup_emails_only_active_subscribers(table, monkeypatch, capsys)
     pool = cognito.create_user_pool(PoolName="ledger-test", UsernameAttributes=["email"])["UserPool"]["Id"]
     monkeypatch.setenv("USER_POOL_ID", pool)
     subs = {}
-    for name in ("ativo", "vazio", "desativado", "desligado", "naoverificado"):
+    for name in ("ativo", "vazio", "desativado", "desligado", "naoverificado", "emailnovo"):
+        verified = "false" if name == "emailnovo" else "true"   # como fica depois de a pessoa mudar o email
         u = cognito.admin_create_user(UserPoolId=pool, Username=f"{name}@example.com",
-                                      UserAttributes=[{"Name": "email", "Value": f"{name}@example.com"}])["User"]
+                                      UserAttributes=[{"Name": "email", "Value": f"{name}@example.com"},
+                                                      {"Name": "email_verified", "Value": verified}])["User"]
         subs[name] = next(a["Value"] for a in u["Attributes"] if a["Name"] == "sub")
     cognito.admin_disable_user(UserPoolId=pool, Username="desativado@example.com")
     sesv2 = boto3.client("sesv2")
-    for addr in ("ledger@example.com", "ativo@example.com", "desativado@example.com", "desligado@example.com"):
+    for addr in ("ledger@example.com", "ativo@example.com", "desativado@example.com", "desligado@example.com", "emailnovo@example.com"):
         sesv2.create_email_identity(EmailIdentity=addr)
-    for name in ("ativo", "desativado", "desligado", "naoverificado"):
+    for name in ("ativo", "desativado", "desligado", "naoverificado", "emailnovo"):
         save([{"kind": "property", "name": "Casa", "value": 1}], user=subs[name])
-    for name in ("ativo", "vazio", "desativado", "naoverificado"):
+    for name in ("ativo", "vazio", "desativado", "naoverificado", "emailnovo"):
         assert call("POST /settings", user=subs[name], email="token@example.com", body={"daily_backup": True})[0] == 200
     monkeypatch.setattr(app, "backup_day", lambda: "2026-10-04")
     # o SES do moto não verifica destinatários: simula a recusa de um email por verificar
@@ -296,7 +306,7 @@ def test_daily_backup_emails_only_active_subscribers(table, monkeypatch, capsys)
         real_send(sender, email, day, files)
     monkeypatch.setattr(app, "send_backup", send)
 
-    assert app.daily_backup({}, None) == {"sent": 1, "skipped": 2, "failed": 1}
+    assert app.daily_backup({}, None) == {"sent": 1, "skipped": 3, "failed": 1}
     logs = capsys.readouterr().out
     assert "MessageRejected" in logs and "@" not in logs
     from moto.core import DEFAULT_ACCOUNT_ID
