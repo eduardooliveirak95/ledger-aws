@@ -126,9 +126,7 @@ Resources:
       # CORS: que sites podem chamar esta API a partir do browser
       CorsConfiguration:
         AllowOrigins:
-          - !Sub https://${Distribution.DomainName}   # o site no CloudFront
-          - http://localhost:5500                     # testes no PC com o Live Server do VS Code
-          - http://127.0.0.1:5500
+          - !Sub https://${Distribution.DomainName}   # só o site no CloudFront
         AllowMethods: [GET, POST, DELETE, OPTIONS]
         AllowHeaders: [authorization, content-type]
         MaxAge: 3600                # o browser guarda a resposta do CORS durante 1 hora
@@ -279,6 +277,57 @@ Resources:
           CachedMethods: [GET, HEAD]
           Compress: true                # envia os ficheiros comprimidos (gzip/brotli)
           CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6   # política gerida "CachingOptimized"
+          ResponseHeadersPolicyId: !Ref SecurityHeaders   # cabeçalhos de segurança (abaixo)
+
+  # Cabeçalhos de segurança que o CloudFront junta a todas as respostas do site (grátis):
+  #   CSP              o browser só corre scripts do próprio site e só fala com o Cognito e com a API
+  #                    (se alguém conseguisse meter HTML na página, o script não corria nem enviava dados)
+  #   HSTS             o browser passa a usar sempre HTTPS neste endereço, durante 1 ano
+  #   X-Frame-Options  a app não pode ser aberta dentro de outra página (proteção contra clickjacking)
+  #   nosniff          o browser não "adivinha" o tipo dos ficheiros
+  #   Referrer-Policy  o endereço da app não é enviado a outros sites (ex.: Google Fonts)
+  #   Permissions-Policy  sem câmara, microfone, localização...
+  # Na CSP, a API aparece como *.execute-api: o endereço exato criaria uma dependência circular
+  # (a API já depende do CloudFront por causa do CORS). 'unsafe-inline' nos estilos é preciso porque
+  # o HTML gerado pelo JavaScript usa style="..."; nos scripts não há exceções.
+  SecurityHeaders:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub ${AWS::StackName}-security-headers
+        Comment: Ledger security headers
+        SecurityHeadersConfig:
+          ContentSecurityPolicy:
+            Override: true
+            ContentSecurityPolicy: !Join
+              - "; "
+              - - "default-src 'self'"
+                - "script-src 'self'"
+                - "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com"
+                - "font-src https://fonts.gstatic.com"
+                - "img-src 'self' data: blob:"
+                - !Sub "connect-src 'self' https://cognito-idp.${AWS::Region}.amazonaws.com https://*.execute-api.${AWS::Region}.amazonaws.com"
+                - "object-src 'none'"
+                - "base-uri 'self'"
+                - "form-action 'self'"
+                - "frame-ancestors 'none'"
+          StrictTransportSecurity:
+            Override: true
+            AccessControlMaxAgeSec: 31536000
+            IncludeSubdomains: true
+          FrameOptions:
+            Override: true
+            FrameOption: DENY
+          ContentTypeOptions:
+            Override: true
+          ReferrerPolicy:
+            Override: true
+            ReferrerPolicy: no-referrer
+        CustomHeadersConfig:
+          Items:
+            - Header: Permissions-Policy
+              Value: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+              Override: true
 
   # Política do bucket: só o serviço CloudFront, e só ESTA distribuição, pode ler os ficheiros
   FrontendBucketPolicy:

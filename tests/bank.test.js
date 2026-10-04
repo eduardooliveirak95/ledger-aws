@@ -102,7 +102,7 @@ test('o plano cria a conta, adivinha as categorias e junta a transferência entr
     ['2026-09-28', 'out', 30, 'Levantamentos', 'CGD à ordem', ''],
     ['2026-09-30', 'in', 0.25, 'Juros / Dividendos', 'CGD Poupança Exemplo', ''],
     ['2026-10-01', 'in', 1000, 'Salário', 'CGD à ordem', ''],
-    ['2026-10-02', 'out', 20.5, 'Outros', 'CGD à ordem', ''],
+    ['2026-10-02', 'out', 20.5, 'Supermercado', 'CGD à ordem', ''],
     ['2026-10-03', 'transfer', 100, 'Transferência', 'CGD à ordem', 'CGD Poupança Exemplo'],
   ]);
 });
@@ -118,4 +118,10 @@ test('importar o mesmo extrato outra vez não duplica nada', () => {
   assert.equal(plan.items.length, 0);
   assert.equal(plan.skipped, 4);
   assert.equal(plan.accounts[0].diff, 0);   // o saldo da app antes do extrato bate com o do banco
+});
+
+test('textos começados por = + - @ não viram fórmulas no Excel, e voltam iguais ao importar', () => {
+  const csv = run('toCSV(["Descrição", "Valor"], rows)', { rows: [['=HYPERLINK("x")', 12.5], ['-desconto', -3], ['@SUM(A1)', 1], ['Renda', 2]] });
+  assert.equal(csv.split('\r\n').slice(1).join('|'), '"\'=HYPERLINK(""x"")";12,50|\'-desconto;-3,00|\'@SUM(A1);1,00|Renda;2,00');
+  assert.deepEqual(run('parseCSV(csv)', { csv }).slice(1), [['=HYPERLINK("x")', '12,50'], ['-desconto', '-3,00'], ['@SUM(A1)', '1,00'], ['Renda', '2,00']]);
 });

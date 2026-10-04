@@ -72,5 +72,6 @@ echo -e "\n[4/4] A limpar a cache do CloudFront..."
 aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths "/*" --output text > /dev/null
 
 echo -e "\nFeito!"
-echo "Site: $SITE_URL"
+# O endereço do site só aparece no PC: no GitHub os logs são públicos
+if [ -z "${GITHUB_ACTIONS:-}" ]; then echo "Site: $SITE_URL"; fi
 echo "Ainda sem utilizador? Corre:  ./create-user.sh o-teu-email@exemplo.com"

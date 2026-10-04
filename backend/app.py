@@ -694,10 +694,16 @@ DIRECTION_LABEL = {"in": "Entrada", "out": "Saída", "transfer": "Transferência
 
 
 def csv_cell(v):
-    """Uma célula do CSV: valores (Decimal) com 2 casas e vírgula decimal; ; aspas ou quebras de linha vão entre aspas."""
+    """Uma célula do CSV: valores (Decimal) com 2 casas e vírgula decimal; ; aspas ou quebras de linha vão entre aspas.
+
+    Um texto começado por = + - @ (ou tab) seria lido pelo Excel como fórmula: leva uma ' à frente,
+    que o Excel não mostra e que o "Importar" da app tira (como o toCSV/parseCSV do csv.js).
+    """
     if v is None:
         return ""
     s = f"{v:.2f}".replace(".", ",") if isinstance(v, Decimal) else str(v)
+    if not isinstance(v, Decimal) and re.match(r"[=+\-@\t\r]", s):
+        s = "'" + s
     return '"' + s.replace('"', '""') + '"' if re.search(r'[";\n\r]', s) else s
 
 
@@ -798,14 +804,18 @@ def send_backup(sender, email, day, files):
 
 
 def account_emails():
-    """{sub: email} dos utilizadores ativos do Cognito (uma só listagem, paginada de 60 em 60)."""
+    """{sub: email} dos utilizadores ativos do Cognito com o email verificado (uma só listagem, de 60 em 60).
+
+    Só emails verificados: o create-user cria as contas já com email_verified=true, e se alguém mudar
+    o email da própria conta no Cognito, o novo fica por verificar e o backup deixa de ir para lá.
+    """
     out = {}
-    kwargs = {"UserPoolId": os.environ["USER_POOL_ID"], "AttributesToGet": ["sub", "email"]}
+    kwargs = {"UserPoolId": os.environ["USER_POOL_ID"], "AttributesToGet": ["sub", "email", "email_verified"]}
     while True:
         r = cognito().list_users(**kwargs)
         for u in r["Users"]:
             attrs = {a["Name"]: a["Value"] for a in u.get("Attributes", [])}
-            if u.get("Enabled", True) and attrs.get("sub") and attrs.get("email"):
+            if u.get("Enabled", True) and attrs.get("sub") and attrs.get("email") and attrs.get("email_verified") == "true":
                 out[attrs["sub"]] = attrs["email"]
         if not r.get("PaginationToken"):
             return out
