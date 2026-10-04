@@ -192,7 +192,7 @@ async function apiFetch(path, opts = {}) {
   }
 }
 
-// ── chamadas à API (as 3 rotas do backend) ──
+// ── chamadas à API (as rotas do backend) ──
 const api = {
   // GET /data: todos os dados do utilizador
   loadAll: () => apiFetch('/data'),
@@ -223,6 +223,7 @@ const api = {
   // DELETE /items/{id}: apaga um item (o backend apaga os "filhos" em cascata)
   remove: id => apiFetch('/items/' + encodeURIComponent(id), { method: 'DELETE' }),
 
-  // POST /backup: envia os CSV para o email da própria conta. files = [{ name, content }]
-  emailBackup: (date, files) => apiFetch('/backup', { method: 'POST', body: JSON.stringify({ date, files }) }),
+  // GET /settings e POST /settings: definições do utilizador ({ daily_backup: true/false })
+  getSettings: () => apiFetch('/settings'),
+  saveSettings: settings => apiFetch('/settings', { method: 'POST', body: JSON.stringify(settings) }),
 };

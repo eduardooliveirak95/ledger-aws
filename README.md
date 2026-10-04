@@ -2,7 +2,7 @@
 
 App de finanças pessoais: contas, investimentos, créditos e imóveis num só sítio, com o património líquido sempre à vista.
 
-Corre na AWS (site estático, login com Cognito, API em Lambda e dados em DynamoDB). Cada utilizador só vê os seus próprios dados.
+Corre na AWS (site estático, login com Cognito, API em Lambda, dados em DynamoDB e backup diário por email com o SES). Cada utilizador só vê os seus próprios dados.
 
 ## Entrar
 
@@ -41,7 +41,8 @@ Em **+ Imóvel** basta o nome e o valor atual. O preço de compra e o crédito a
 
 ## Importar e fazer backup
 
-- **⬇ Backup** (no topo) descarrega todos os teus dados em CSV e envia os mesmos ficheiros para o email da tua conta ("BACKUP Ledger dia DD/MM/AAAA"). Faz isto de vez em quando.
+- **⬇ Backup** (no topo) descarrega todos os teus dados em CSV.
+- **✉ Backup diário** (no topo; em ecrãs médios aparece como **✉ Diário**): marca a caixa para receberes no email da tua conta, todos os dias à meia-noite (hora de Portugal), os mesmos CSV ("BACKUP Ledger dia DD/MM/AAAA", com os dados até ao fim desse dia). Vem desligado; desmarca quando quiseres deixar de receber.
 - **⬆ Importar** (em cada separador) recupera um backup ou traz dados de outros sítios:
   - modelos CSV (descarregam-se na própria janela);
   - CSV do Excel;

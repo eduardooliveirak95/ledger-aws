@@ -1,5 +1,7 @@
 """
-API do Ledger - função AWS Lambda chamada pelo API Gateway (HTTP API, formato de evento v2).
+Backend do Ledger - código das duas funções AWS Lambda:
+    handler        API chamada pelo API Gateway (HTTP API, formato de evento v2)
+    daily_backup   backup diário por email, chamado pelo EventBridge Scheduler à meia-noite (hora de Portugal)
 
 Sem dependências externas: só usa a biblioteca padrão do Python + boto3
 (que já vem incluído no runtime Python da Lambda, por isso não é preciso empacotar nada).
@@ -18,6 +20,9 @@ Todos os dados vivem numa ÚNICA tabela DynamoDB ("single-table design"):
                                  com a prestação paga e a amortização extraordinária desse mês
     PROP_<hex>                   imóvel (casa, terreno...) com o valor atual
 
+Além das partições dos utilizadores há uma partição do sistema:
+    user_id = "DAILY_BACKUP", sk = <sub>   um item por utilizador que ativou o backup diário por email
+
 Como a data faz parte da sort key, uma Query com begins_with("TX_") devolve os
 movimentos já ordenados por data, sem ser preciso ordenar no código.
 
@@ -25,7 +30,8 @@ Rotas:
     GET    /data          tudo o que pertence ao utilizador autenticado (os cálculos são feitos no browser)
     POST   /items         criar / atualizar muitos itens de uma vez  {"items": [...], "delete": [...]}
     DELETE /items/{id}    apagar um item (+ os "filhos" no caso de contas / investimentos / créditos)
-    POST   /backup        enviar os CSV do backup para o email da própria conta (Amazon SES)
+    GET    /settings      definições do utilizador ({"daily_backup": true/false})
+    POST   /settings      mudar as definições  {"daily_backup": true/false}
 """
 
 import base64
@@ -35,7 +41,7 @@ import re
 import traceback
 import unicodedata
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
@@ -49,10 +55,10 @@ from botocore.config import Config
 MAX_ITEMS_PER_REQUEST = 300   # máximo de itens (gravar + apagar) num único POST /items
 MAX_NAME = 60                 # comprimento máximo de nomes (conta, investimento, categoria...)
 MAX_TEXT = 500                # comprimento máximo de descrições e notas
-MAX_BACKUP_FILES = 10         # ficheiros CSV num email de backup
 MAX_BACKUP_BYTES = 6_000_000  # tamanho total dos CSV num email (o SES aceita até 10 MB com os anexos)
-MAX_BACKUPS_PER_DAY = 10      # emails de backup por utilizador por dia (protege contra abusos e custos)
-BACKUP_NAME_RE = re.compile(r"^[\w.-]{1,80}\.csv$")   # nomes simples, terminados em .csv
+
+# Partição do sistema com quem ativou o backup diário (sk = sub do utilizador; ver o início do ficheiro)
+DAILY_BACKUP_PK = "DAILY_BACKUP"
 
 # Tipo de item (nome usado pelo frontend) -> prefixo da sort key no DynamoDB
 KIND_PREFIX = {
@@ -98,6 +104,7 @@ LEGACY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_[0-9a-f]{16}$")
 # Ligação à tabela, criada só uma vez por contentor Lambda e reutilizada entre pedidos
 _table = None
 _ses = None
+_cognito = None
 
 
 def table():
@@ -124,6 +131,14 @@ def ses():
     return _ses
 
 
+def cognito():
+    """Cliente do Cognito (lista de utilizadores, para o backup diário), criado na primeira chamada."""
+    global _cognito
+    if _cognito is None:
+        _cognito = boto3.client("cognito-idp")
+    return _cognito
+
+
 # ── FUNÇÕES AUXILIARES ───────────────────────────────────────────────────────
 class ApiError(Exception):
     """Erro "esperado" que deve chegar ao browser com um código HTTP (ex.: 400 pedido inválido)."""
@@ -148,6 +163,20 @@ def response(status, body=None):
         "headers": {"Content-Type": "application/json"},
         "body": "" if body is None else json.dumps(body, default=_json_default),
     }
+
+
+def read_body(event):
+    """Lê o corpo JSON de um pedido (o API Gateway pode enviá-lo codificado em base64). Tem de ser um objeto."""
+    raw_body = event.get("body") or "{}"
+    if event.get("isBase64Encoded"):
+        raw_body = base64.b64decode(raw_body).decode("utf-8")
+    try:
+        body = json.loads(raw_body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise ApiError(400, "O corpo do pedido tem de ser JSON")
+    if not isinstance(body, dict):
+        raise ApiError(400, "O corpo do pedido tem de ser um objeto JSON")
+    return body
 
 
 def now_iso():
@@ -560,16 +589,7 @@ def post_items(user, event):
     Tudo ou nada na validação: se algum item for inválido, não se grava nenhum e o
     browser recebe um 400 com (até 10) mensagens de erro.
     """
-    # O API Gateway pode enviar o corpo codificado em base64
-    raw_body = event.get("body") or "{}"
-    if event.get("isBase64Encoded"):
-        raw_body = base64.b64decode(raw_body).decode("utf-8")
-    try:
-        body = json.loads(raw_body)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        raise ApiError(400, "O corpo do pedido tem de ser JSON")
-    if not isinstance(body, dict):
-        raise ApiError(400, "O corpo do pedido tem de ser um objeto JSON")
+    body = read_body(event)
     raw_items = body.get("items") or []
     raw_deletes = body.get("delete") or []
     if not isinstance(raw_items, list) or not isinstance(raw_deletes, list):
@@ -633,83 +653,197 @@ def delete_item(user, item_id):
     return {"deleted": sorted(to_delete)}
 
 
-def count_backup(user, day):
-    """Conta mais um email de backup neste dia e recusa se já foram MAX_BACKUPS_PER_DAY.
+def get_settings(user):
+    """GET /settings: definições do utilizador. Por agora só uma: se o backup diário por email está ativo."""
+    r = table().get_item(Key={"user_id": DAILY_BACKUP_PK, "sk": user})
+    return {"daily_backup": "Item" in r}
 
-    O contador fica num item BACKUP_<dia> do próprio utilizador (o GET /data ignora este prefixo).
-    A condição faz a verificação e o incremento numa só operação, por isso dois cliques seguidos
-    não passam o limite.
+
+def post_settings(user, email, event):
+    """POST /settings: ativa ou desativa o backup diário por email  {"daily_backup": true/false}.
+
+    Ativar grava um item na partição DAILY_BACKUP (com o sub do utilizador); desativar apaga-o.
+    O email não é guardado: o backup diário vai sempre para o email atual da conta no Cognito.
     """
-    try:
-        table().update_item(
-            Key={"user_id": user, "sk": f"BACKUP_{day}"},
-            UpdateExpression="ADD sent :one",
-            ConditionExpression="attribute_not_exists(sent) OR sent < :max",
-            ExpressionAttributeValues={":one": 1, ":max": MAX_BACKUPS_PER_DAY},
-        )
-    except table().meta.client.exceptions.ConditionalCheckFailedException:
-        raise ApiError(429, f"Já enviaste {MAX_BACKUPS_PER_DAY} backups por email hoje. Tenta amanhã.")
+    body = read_body(event)
+    daily = body.get("daily_backup")
+    if not isinstance(daily, bool):
+        raise ApiError(400, "daily_backup: tem de ser true ou false")
+    if daily:
+        if not email:
+            raise ApiError(400, "A tua conta não tem email associado")
+        table().put_item(Item={"user_id": DAILY_BACKUP_PK, "sk": user, "since": now_iso()})
+    else:
+        table().delete_item(Key={"user_id": DAILY_BACKUP_PK, "sk": user})
+    return {"daily_backup": daily}
 
 
-def post_backup(user, email, event):
-    """POST /backup: envia os CSV do backup, como anexos, para o email da conta.
+# ── BACKUP DIÁRIO POR EMAIL ──────────────────────────────────────────────────
+# Os mesmos 4 CSV do botão "Backup" da app (exportRows/toCSV no frontend/js/csv.js), gerados aqui
+# a partir do DynamoDB. Os cabeçalhos têm de ser iguais aos do FORMATS do csv.js (há um teste que
+# o confirma), para o backup se poder recuperar com "Importar".
+BACKUP_FORMATS = {
+    "movimentos": ["Data", "Conta", "Tipo", "Categoria", "Descrição", "Valor", "Conta destino", "Aproximado"],
+    "investimentos": ["Data", "Investimento", "Tipo de investimento", "Operação", "Valor", "Descrição"],
+    "creditos": ["Mês", "Crédito", "Tipo de crédito", "Saldo em dívida", "Prestação", "Montante inicial",
+                 "Data de início", "Taxa (%)", "Banco", "Amortização extra", "Fim do contrato"],
+    "patrimonio": ["Imóvel", "Tipo de imóvel", "Valor atual", "Preço de compra", "Data de compra",
+                   "Crédito associado", "Notas"],
+}
+DIRECTION_LABEL = {"in": "Entrada", "out": "Saída", "transfer": "Transferência"}
 
-    Corpo: {"date": "AAAA-MM-DD", "files": [{"name": "ledger-....csv", "content": "texto do CSV"}]}
-    O destinatário é SEMPRE o email do token (claim "email" do Cognito), nunca um valor do browser:
-    assim ninguém consegue usar esta rota para mandar emails a outras pessoas.
+
+def csv_cell(v):
+    """Uma célula do CSV: valores (Decimal) com 2 casas e vírgula decimal; ; aspas ou quebras de linha vão entre aspas."""
+    if v is None:
+        return ""
+    s = f"{v:.2f}".replace(".", ",") if isinstance(v, Decimal) else str(v)
+    return '"' + s.replace('"', '""') + '"' if re.search(r'[";\n\r]', s) else s
+
+
+def to_csv(header, rows):
+    """Texto de um CSV com ";" (como o toCSV do frontend, para abrir bem no Excel em português)."""
+    return "\r\n".join(";".join(csv_cell(c) for c in r) for r in [header, *rows])
+
+
+def rate_text(rate):
+    """Taxa de juro sem zeros a mais e com vírgula (3.125 -> "3,125"; 3.500 -> "3,5"); vazio se não houver."""
+    return "" if rate is None else format(Decimal(rate).normalize(), "f").replace(".", ",")
+
+
+def backup_rows(items):
+    """Itens de um utilizador (como vêm do DynamoDB) -> {formato: linhas}, como o exportRows do csv.js."""
+    by = {}
+    for i in items:
+        by.setdefault(kind_of(i["sk"]), []).append(i)
+    names = {k: {x["sk"]: x.get("name", "") for x in by.get(k, [])} for k in ("account", "investment", "loan")}
+
+    def by_name(xs):   # ordem alfabética sem ligar a acentos nem maiúsculas (como o sortByName do calc.js)
+        return sorted(xs, key=lambda x: (_plain(x.get("name")), x.get("name", "")))
+
+    def acc(i):
+        return names["account"].get(i, "(conta apagada)")
+
+    def inv(i):
+        return names["investment"].get(i, "(apagado)")
+
+    mov = [[t["date"], acc(t.get("account_id")), DIRECTION_LABEL.get(t.get("direction"), ""), t.get("category", ""),
+            t.get("description", ""), t.get("amount"), acc(t.get("to_account_id")) if t.get("direction") == "transfer" else "",
+            "sim" if t.get("approx") else "não"]
+           for t in sorted(by.get("transaction", []), key=lambda t: t["date"])]
+
+    inv_type = {x["sk"]: x.get("inv_type", "") for x in by.get("investment", [])}
+    invs = [[m["date"], inv(m.get("investment_id")), inv_type.get(m.get("investment_id"), ""),
+             "Aporte" if m.get("move") == "contribution" else "Resgate", m.get("amount"), m.get("description", "")]
+            for m in by.get("inv_move", [])]
+    invs += [[v["month"], inv(v.get("investment_id")), inv_type.get(v.get("investment_id"), ""), "Valor", v.get("value"), ""]
+             for v in by.get("valuation", [])]
+    # investimentos sem nenhum registo também são exportados, para não se perder nada
+    used = {r[1] for r in invs}
+    invs += [["", i.get("name", ""), i.get("inv_type", ""), "", None, i.get("notes", "")]
+             for i in by.get("investment", []) if i.get("name", "") not in used]
+    invs.sort(key=lambda r: str(r[0]))
+
+    loans = []
+    for l in by_name(by.get("loan", [])):
+        meta = [l.get("principal"), l.get("start_date", ""), rate_text(l.get("rate")), l.get("lender", "")]
+        bs = sorted((b for b in by.get("loan_balance", []) if b.get("loan_id") == l["sk"]), key=lambda b: b["month"])
+        if not bs:
+            loans.append(["", l.get("name", ""), l.get("loan_type", ""), None, l.get("payment"), *meta, None, l.get("end_date", "")])
+        for b in bs:
+            loans.append([b["month"], l.get("name", ""), l.get("loan_type", ""), b.get("balance"),
+                          b.get("payment", l.get("payment")), *meta, b.get("extra") or None, l.get("end_date", "")])
+
+    props = [[p.get("name", ""), p.get("prop_type", ""), p.get("value"), p.get("purchase_price"), p.get("purchase_date", ""),
+              names["loan"].get(p["loan_id"], "(apagado)") if p.get("loan_id") else "", p.get("notes", "")]
+             for p in by_name(by.get("property", []))]
+    return {"movimentos": mov, "investimentos": invs, "creditos": loans, "patrimonio": props}
+
+
+def backup_files(user, day):
+    """Os CSV do backup de um utilizador: [(nome do ficheiro, texto)], só dos formatos com dados."""
+    rows = backup_rows(query_all(user))
+    return [(f"ledger-{fmt}-{day}.csv", to_csv(BACKUP_FORMATS[fmt], rows[fmt])) for fmt in BACKUP_FORMATS if rows[fmt]]
+
+
+def backup_day(now=None):
+    """Dia a que o backup diz respeito: o que acabou de terminar quando o envio corre à meia-noite.
+
+    Meia-noite em Portugal é 23:00 UTC no verão e 00:00 UTC no inverno; recuar 12 horas dá sempre
+    o dia anterior, sem precisar de tabelas de fusos horários.
     """
-    if not email:
-        raise ApiError(400, "A tua conta não tem email associado")
-    sender = os.environ.get("SENDER_EMAIL")
-    if not sender:
-        raise ApiError(500, "O envio de emails não está configurado")
-    raw_body = event.get("body") or "{}"
-    if event.get("isBase64Encoded"):
-        raw_body = base64.b64decode(raw_body).decode("utf-8")
-    try:
-        body = json.loads(raw_body)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        raise ApiError(400, "O corpo do pedido tem de ser JSON")
-    if not isinstance(body, dict):
-        raise ApiError(400, "O corpo do pedido tem de ser um objeto JSON")
-    try:
-        day = v_date(body.get("date"), "date")
-    except ValueError as e:
-        raise ApiError(400, str(e))
-    files = body.get("files")
-    if not isinstance(files, list) or not 1 <= len(files) <= MAX_BACKUP_FILES:
-        raise ApiError(400, f"files: entre 1 e {MAX_BACKUP_FILES} ficheiros")
-    total = 0
-    for f in files:
-        if not isinstance(f, dict) or not BACKUP_NAME_RE.match(str(f.get("name", ""))) or not isinstance(f.get("content"), str):
-            raise ApiError(400, "files: cada ficheiro precisa de um nome .csv simples e do conteúdo em texto")
-        total += len(f["content"].encode("utf-8"))
-    if total > MAX_BACKUP_BYTES:
-        raise ApiError(400, "O backup é demasiado grande para enviar por email")
+    return ((now or datetime.now(timezone.utc)) - timedelta(hours=12)).strftime("%Y-%m-%d")
 
-    count_backup(user, day)
 
-    # Monta o email: texto simples + um anexo por CSV (com BOM, para o Excel abrir bem os acentos)
+def send_backup(sender, email, day, files):
+    """Envia um email com os CSV em anexo (com BOM, para o Excel abrir bem os acentos)."""
+    if sum(len(c.encode("utf-8")) for _, c in files) > MAX_BACKUP_BYTES:
+        raise ValueError("backup demasiado grande para enviar por email")
     shown = datetime.strptime(day, "%Y-%m-%d").strftime("%d/%m/%Y")
     msg = MIMEMultipart()
     msg["Subject"] = f"BACKUP Ledger dia {shown}"
     msg["From"] = f"Ledger <{sender}>"
     msg["To"] = email
-    names = "\n".join(f"  - {f['name']}" for f in files)
+    names = "\n".join(f"  - {name}" for name, _ in files)
     msg.attach(MIMEText(
-        f"Backup dos teus dados do Ledger de {shown}.\n\nFicheiros em anexo:\n{names}\n\n"
-        "Para recuperar os dados, usa \"Importar\" no separador certo da app.\n", "plain", "utf-8"))
-    for f in files:
-        part = MIMEApplication(("\ufeff" + f["content"]).encode("utf-8"), _subtype="csv")
-        part.add_header("Content-Disposition", "attachment", filename=f["name"])
+        f"Backup automático dos teus dados do Ledger, até ao fim do dia {shown}.\n\nFicheiros em anexo:\n{names}\n\n"
+        "Para recuperar os dados, usa \"Importar\" no separador certo da app.\n"
+        "Para deixares de receber este email, desliga o \"Backup diário\" no topo da app.\n", "plain", "utf-8"))
+    for name, content in files:
+        part = MIMEApplication(("\ufeff" + content).encode("utf-8"), _subtype="csv")
+        part.add_header("Content-Disposition", "attachment", filename=name)
         msg.attach(part)
-    try:
-        ses().send_email(FromEmailAddress=sender, Destination={"ToAddresses": [email]},
-                         Content={"Raw": {"Data": msg.as_bytes()}})
-    except ses().exceptions.MessageRejected:
-        # Normalmente: o SES ainda está em modo de testes e este email não foi verificado
-        raise ApiError(400, "O SES recusou o email. Confirma o email de verificação que a AWS te enviou.")
-    return {"sent_to": email, "files": len(files)}
+    ses().send_email(FromEmailAddress=sender, Destination={"ToAddresses": [email]},
+                     Content={"Raw": {"Data": msg.as_bytes()}})
+
+
+def account_emails():
+    """{sub: email} dos utilizadores ativos do Cognito (uma só listagem, paginada de 60 em 60)."""
+    out = {}
+    kwargs = {"UserPoolId": os.environ["USER_POOL_ID"], "AttributesToGet": ["sub", "email"]}
+    while True:
+        r = cognito().list_users(**kwargs)
+        for u in r["Users"]:
+            attrs = {a["Name"]: a["Value"] for a in u.get("Attributes", [])}
+            if u.get("Enabled", True) and attrs.get("sub") and attrs.get("email"):
+                out[attrs["sub"]] = attrs["email"]
+        if not r.get("PaginationToken"):
+            return out
+        kwargs["PaginationToken"] = r["PaginationToken"]
+
+
+def daily_backup(event=None, context=None):
+    """Função Lambda do backup diário (configurada como "app.daily_backup" no template.yaml).
+
+    O EventBridge Scheduler chama-a todos os dias à meia-noite, hora de Portugal. Para cada
+    utilizador que ativou o backup diário, gera os CSV e envia-os para o email da conta no Cognito.
+    Contas apagadas ou desativadas no Cognito e contas sem dados são saltadas.
+    Um erro num utilizador não impede os outros. Os logs só têm contagens (nem emails nem dados).
+    """
+    subs, kwargs = [], {"KeyConditionExpression": Key("user_id").eq(DAILY_BACKUP_PK)}
+    while True:
+        r = table().query(**kwargs)
+        subs.extend(i["sk"] for i in r["Items"])
+        if not r.get("LastEvaluatedKey"):
+            break
+        kwargs["ExclusiveStartKey"] = r["LastEvaluatedKey"]
+    result = {"sent": 0, "skipped": 0, "failed": 0}
+    if subs:
+        sender, emails, day = os.environ["SENDER_EMAIL"], account_emails(), backup_day()
+        for sub in subs:
+            try:
+                files = backup_files(sub, day) if sub in emails else []
+                if not files:
+                    result["skipped"] += 1
+                    continue
+                send_backup(sender, emails[sub], day, files)
+                result["sent"] += 1
+            except Exception as e:
+                # só o tipo de erro (ex.: MessageRejected = email por verificar no SES): a mensagem pode ter o email
+                print(json.dumps({"daily_backup_error": getattr(e, "response", {}).get("Error", {}).get("Code") or type(e).__name__}))
+                result["failed"] += 1
+    print(json.dumps({"daily_backup": result}))
+    return result
 
 
 # ── PONTO DE ENTRADA ─────────────────────────────────────────────────────────
@@ -737,8 +871,10 @@ def handler(event, context):
             return response(200, post_items(user, event))
         if route == "DELETE /items/{id}":
             return response(200, delete_item(user, path.get("id")))
-        if route == "POST /backup":
-            return response(200, post_backup(user, claims.get("email"), event))
+        if route == "GET /settings":
+            return response(200, get_settings(user))
+        if route == "POST /settings":
+            return response(200, post_settings(user, claims.get("email"), event))
         return response(404, {"detail": f"Rota desconhecida: {route}"})
     except ApiError as e:
         return response(e.status, {"detail": e.detail})

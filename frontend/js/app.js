@@ -39,6 +39,8 @@ function logout() {
   store.clear();
   D = emptyData();
   setStatus(null);
+  $('#daily-backup').checked = false;
+  $('#daily-backup').disabled = true;
   modal.close();
   showLogin();
 }
@@ -122,8 +124,33 @@ $('#logout-btn').addEventListener('click', logout);
 $('#export-all-btn').addEventListener('click', exportAll);
 $('#password-btn').addEventListener('click', passwordForm);
 
-// Carrega tudo da API (GET /data) para D e desenha o ecrã
+// Interruptor "Backup diário": liga/desliga o email automático com os CSV (todos os dias à meia-noite,
+// hora de Portugal; o envio é feito pelo backend). Se a gravação falhar, volta ao estado anterior.
+$('#daily-backup').addEventListener('change', async e => {
+  const box = e.target, on = box.checked;
+  box.disabled = true;
+  try {
+    await api.saveSettings({ daily_backup: on });
+    toast(on ? 'Backup diário ligado: vais receber os CSV por email todos os dias à meia-noite' : 'Backup diário desligado');
+  } catch (err) {
+    box.checked = !on;
+    toast(err.message, true);
+  }
+  box.disabled = false;
+});
+// Mostra no interruptor se o backup diário está ligado (fica bloqueado se não for possível saber)
+async function loadSettings() {
+  try {
+    $('#daily-backup').checked = (await api.getSettings()).daily_backup;
+    $('#daily-backup').disabled = false;
+  } catch {
+    $('#daily-backup').disabled = true;
+  }
+}
+
+// Carrega tudo da API (GET /data) para D e desenha o ecrã (e, em paralelo, as definições)
 async function loadData() {
+  loadSettings();
   try {
     D = { ...emptyData(), ...(await api.loadAll()) };
     setStatus(true);

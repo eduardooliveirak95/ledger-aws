@@ -57,6 +57,17 @@ button, input, select, textarea { font: inherit; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
 .status-dot.ok { background: var(--pos); }
 .status-dot.err { background: var(--neg); }
+/* Interruptor com aspeto de botão (ex.: "Backup diário"): fica com a cor de destaque quando está ligado */
+.toggle { cursor: pointer; user-select: none; }
+.toggle input { accent-color: var(--accent); width: 14px; height: 14px; margin: 0; cursor: pointer; }
+.toggle:has(input:checked) { border-color: var(--accent); color: var(--accent); }
+.toggle:has(input:disabled) { opacity: .6; cursor: default; }
+/* Em ecrãs médios a barra do topo não cabe numa linha: o interruptor usa o rótulo curto */
+.short-label { display: none; }
+@media (min-width: 901px) and (max-width: 1500px) {
+  .toggle .long-label { display: none; }
+  .toggle .short-label { display: inline; }
+}
 
 /* ── DISPOSIÇÃO (grelhas de colunas) ───────── */
 .main { max-width: 1200px; margin: 0 auto; padding: 24px 16px 64px; display: flex; flex-direction: column; gap: 16px; }

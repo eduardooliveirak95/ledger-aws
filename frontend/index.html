@@ -57,7 +57,7 @@
   </form>
 </div>
 
-<!-- BARRA DO TOPO: nome, separadores, estado da ligação, backup e sair -->
+<!-- BARRA DO TOPO: nome, separadores, estado da ligação, backup, backup diário por email e sair -->
 <header class="topbar">
   <div class="logo">Ledger<span> / Finanças</span></div>
   <nav class="tabs" role="tablist">
@@ -70,6 +70,9 @@
     <div class="status-dot" id="status-dot"></div>
     <span id="user-email"></span>
     <button class="btn" id="export-all-btn" title="Descarregar todos os dados em CSV">⬇ Backup</button>
+    <label class="btn toggle" title="Receber todos os dias, à meia-noite (hora de Portugal), um email com o backup em CSV">
+      <input type="checkbox" id="daily-backup" disabled> ✉ <span class="long-label">Backup diário</span><span class="short-label">Diário</span>
+    </label>
     <button class="btn" id="password-btn" title="Mudar a tua password">🔑 Password</button>
     <button class="btn danger" id="logout-btn">Sair</button>
   </div>

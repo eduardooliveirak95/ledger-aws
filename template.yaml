@@ -13,7 +13,7 @@ Transform: AWS::Serverless-2016-10-31
 Description: >
   Ledger - personal expenses & investments tracker.
   Serverless and designed to stay inside the AWS "Always Free" limits:
-  Lambda + DynamoDB (provisioned 25/25) + Cognito + S3/CloudFront.
+  Lambda + DynamoDB (provisioned 25/25) + Cognito + S3/CloudFront + EventBridge Scheduler + SES.
 
 # ── PARÂMETROS: valores escolhidos no momento do deploy (--parameter-overrides) ──
 Parameters:
@@ -153,15 +153,9 @@ Resources:
       Environment:
         Variables:
           TABLE_NAME: !Ref EntriesTable   # nome real da tabela, lido pelo código
-          SENDER_EMAIL: !Ref AlertEmail   # remetente dos emails de backup (verificado no SES)
       Policies:
         - DynamoDBCrudPolicy:       # permissões mínimas: ler/escrever SÓ nesta tabela
             TableName: !Ref EntriesTable
-        # Enviar emails pelo SES (backup por email). Só identidades desta conta e região.
-        - Statement:
-            - Effect: Allow
-              Action: [ses:SendEmail, ses:SendRawEmail]
-              Resource: !Sub arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*
       # Cada "Event" liga uma rota do API Gateway a esta função
       Events:
         GetData:
@@ -173,9 +167,52 @@ Resources:
         DeleteItem:
           Type: HttpApi
           Properties: { ApiId: !Ref Api, Path: "/items/{id}", Method: DELETE }
-        SendBackup:
+        GetSettings:
           Type: HttpApi
-          Properties: { ApiId: !Ref Api, Path: /backup, Method: POST }
+          Properties: { ApiId: !Ref Api, Path: /settings, Method: GET }
+        SaveSettings:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: /settings, Method: POST }
+
+  # Backup diário por email (mesmo código, função app.daily_backup). Todos os dias à meia-noite,
+  # hora de Portugal, envia os CSV a quem ativou o "Backup diário" na app.
+  # Função separada para a API não ter permissão de enviar emails nem de listar utilizadores.
+  DailyBackupFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/
+      Handler: app.daily_backup
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref EntriesTable
+          SENDER_EMAIL: !Ref AlertEmail   # remetente dos emails de backup (verificado no SES)
+          USER_POOL_ID: !Ref UserPool     # para saber o email atual de cada conta
+      # Se a função falhar, não volta a correr: repetir podia mandar o mesmo email duas vezes
+      EventInvokeConfig:
+        MaximumRetryAttempts: 0
+      Policies:
+        - DynamoDBReadPolicy:       # só leitura da tabela
+            TableName: !Ref EntriesTable
+        - Statement:
+            # Enviar emails pelo SES. Só identidades desta conta e região.
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: !Sub arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*
+            # Listar os utilizadores (sub + email) desta user pool
+            - Effect: Allow
+              Action: cognito-idp:ListUsers
+              Resource: !GetAtt UserPool.Arn
+      Events:
+        # EventBridge Scheduler: aceita fuso horário, por isso a hora muda sozinha com o horário de verão.
+        # Grátis até 14 milhões de execuções por mês (aqui são ~30).
+        Midnight:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(0 0 * * ? *)
+            ScheduleExpressionTimezone: Europe/Lisbon
+            OmitName: true          # o CloudFormation gera um nome único
+            RetryPolicy:
+              MaximumRetryAttempts: 0
 
   # Remetente dos emails de backup no Amazon SES. Ao ser criado, a AWS envia um email de
   # verificação para este endereço: só depois de carregar no link é que o SES envia emails.
@@ -186,12 +223,17 @@ Resources:
     Properties:
       EmailIdentity: !Ref AlertEmail
 
-  # Grupo de logs da Lambda no CloudWatch (criado aqui para definir a retenção)
+  # Grupos de logs das Lambdas no CloudWatch (criados aqui para definir a retenção)
   ApiFunctionLogs:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /aws/lambda/${ApiFunction}
       RetentionInDays: 14          # apaga logs com mais de 14 dias: armazenamento mínimo
+  DailyBackupFunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${DailyBackupFunction}
+      RetentionInDays: 14
 
   # ── SITE (bucket S3 privado, servido pelo CloudFront com HTTPS) ──────────
   # Bucket com os ficheiros do frontend. Totalmente privado: só o CloudFront lê.
