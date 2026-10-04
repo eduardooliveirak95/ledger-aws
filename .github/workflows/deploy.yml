@@ -50,6 +50,10 @@ jobs:
       - name: Check the JavaScript syntax
         run: for f in frontend/js/*.js; do node --check "$f"; done
 
+      # Testes da importação dos extratos do banco (JavaScript do site, corrido no Node sem browser)
+      - name: JavaScript tests
+        run: node --test tests/bank.test.js
+
   # ── 2.º trabalho: deploy (só se os testes passarem, e só em push para main) ──
   deploy:
     name: Deploy to AWS

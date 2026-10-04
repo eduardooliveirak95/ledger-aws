@@ -1,143 +1,91 @@
-// ── bank.js: importação de extratos bancários em PDF (CGD Caixadirecta) ──
-// O comprovativo "Consultar saldos e movimentos" da Caixadirecta (à ordem ou poupança) é lido com
-// o pdf.js (só carregado quando se escolhe um PDF). As colunas são encontradas pela posição das
-// palavras do cabeçalho, e cada valor é conferido com o saldo impresso ao lado.
+// ── bank.js: importação de extratos bancários em CSV (CGD Caixadirecta) ──
+// Em «Consultar saldos e movimentos» (à ordem ou poupança), o ícone do Excel da versão web da
+// Caixadirecta descarrega um CSV com ";" (em windows-1252) que começa com umas linhas sobre a conta:
+//   Consultar saldos e movimentos à ordem - 04-10-2026
+//   Conta ;<número> - EUR - Conta à ordem
+//   Data de início ;27-09-2026
+//   Data de fim ;04-10-2026
+//   Data mov. ;Data valor ;Descrição ;Débito ;Crédito ;Saldo contabilístico ;Saldo disponível ;Categoria ;
+//   04-10-2026;04-10-2026;<descrição> ;19,48;;1.329,52;1.324,92;Diversos ;
+//   ...
+//    ; ; ; ;Saldo contabilístico ;1.329,52 EUR ; ; ;
+// Os movimentos vêm do mais recente para o mais antigo e cada valor é conferido com o saldo ao lado.
+// Cada movimento passa a um movimento da app: data do movimento, descrição, entrada (Crédito) ou
+// saída (Débito) e uma categoria adivinhada (ver categorize); a conta escolhe-se na pré-visualização.
 
-// Pasta do pdf.js dentro do site (vendor/); pdfjsLoading evita carregá-lo duas vezes
-const PDFJS_DIR = 'vendor/pdfjs/';
-let pdfjsLoading = null;
-
-// Carrega o pdf.js a pedido (adiciona um <script> à página) e devolve a biblioteca.
-// O "worker" é um segundo ficheiro que lê o PDF em segundo plano sem bloquear a página.
-function loadPdfJs() {
-  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
-  pdfjsLoading = pdfjsLoading || new Promise((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = PDFJS_DIR + 'pdf.min.js';
-    s.onload = () => { window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_DIR + 'pdf.worker.min.js'; resolve(window.pdfjsLib); };
-    s.onerror = () => { pdfjsLoading = null; reject(new Error('Não consegui carregar o leitor de PDF')); };
-    document.head.appendChild(s);
-  });
-  return pdfjsLoading;
-}
-
-/** PDF → páginas de pedaços de texto {str, x, y} com a posição de cada um (y cresce para baixo). */
-async function pdfPages(buf, lib) {
-  lib = lib || await loadPdfJs();
-  const doc = await lib.getDocument({ data: new Uint8Array(buf) }).promise;
-  const pages = [];
-  for (let n = 1; n <= doc.numPages; n++) {
-    const page = await doc.getPage(n);
-    const h = page.getViewport({ scale: 1 }).height;
-    const tc = await page.getTextContent();
-    pages.push(tc.items.filter(i => i.str && i.str.trim())
-      .map(i => ({ str: i.str.trim(), x: i.transform[4], y: h - i.transform[5] })));
-  }
-  return pages;
-}
-
-// Datas "dd-mm-aaaa" e valores "1.234,56" como aparecem no extrato
+// Datas "dd-mm-aaaa" como aparecem no extrato
 const DATE_RE = /^(\d{2})-(\d{2})-(\d{4})$/;
-const MONEY_RE = /^-?\d{1,3}(\.\d{3})*,\d{2}$/;
 // isoOf: "30-09-2026" -> "2026-09-30" · cents: euros -> cêntimos inteiros (compara sem erros de arredondamento)
-const isoOf = s => { const m = String(s).match(DATE_RE); return m ? `${m[3]}-${m[2]}-${m[1]}` : null; };
+const isoOf = s => { const m = String(s).trim().match(DATE_RE); return m ? `${m[3]}-${m[2]}-${m[1]}` : null; };
 const cents = n => Math.round(n * 100);
-/** Descrição sem espaços nem pontuação: a CGD parte palavras em sítios aleatórios ("TRANSFERE NCIA"). */
+/** Descrição sem espaços nem pontuação, para comparar descrições ("TRF  MBWAY" e "Trf MbWay" são iguais). */
 const compactDesc = s => norm(s || '').replace(/[^a-z0-9]/g, '');
 
-/** Junta os pedaços de texto em linhas (mesmo y, com 2 pontos de tolerância), cada uma ordenada da esquerda para a direita. */
-function linesOf(items) {
-  const sorted = [...items].sort((a, b) => a.y - b.y || a.x - b.x);
-  const lines = [];
-  for (const it of sorted) {
-    const last = lines[lines.length - 1];
-    if (last && Math.abs(last.y - it.y) < 2) last.items.push(it);
-    else lines.push({ y: it.y, items: [it] });
-  }
-  lines.forEach(l => { l.items.sort((a, b) => a.x - b.x); l.text = l.items.map(i => i.str).join(' '); });
-  return lines;
+/** Posição da linha de cabeçalho dos movimentos (Data mov. / Descrição / Débito…) nas linhas de um CSV, ou -1. */
+function cgdHeaderIndex(rows) {
+  return rows.slice(0, 20).findIndex(r => {
+    const h = r.map(norm);
+    return h.some(c => c.startsWith('data mov')) && h.some(c => c.startsWith('descri'))
+      && (h.some(c => c.startsWith('debito')) || h.some(c => c.startsWith('montante')));
+  });
 }
 
 /**
- * Páginas de um comprovativo Caixadirecta → { bank, number, product, savings, from, to, rows, opening, closing, warnings }.
+ * Texto de um CSV da Caixadirecta → { bank, number, product, savings, from, to, rows, opening, closing, warnings }.
  * rows vêm do mais antigo para o mais recente: { date, description, cgdCategory, amount (com sinal), balance (depois dele) }.
-  * Devolve null se o PDF não for um comprovativo da Caixadirecta.
+ * Devolve null se o ficheiro não for um extrato da Caixadirecta (é então tratado como um CSV da app).
  */
-function parseCgdStatement(pages) {
-  const all = pages.flatMap(linesOf);
-  const full = all.map(l => l.text).join('\n');
-  if (!/Caixadirecta/i.test(full) || !/movimentos/i.test(full)) return null;
+function parseCgdCsv(text) {
+  const rows = parseCSV(text, ';');
+  const hi = cgdHeaderIndex(rows);
+  if (hi < 0) return null;
+  // Linhas de cima: "Conta ;<número> - EUR - <produto>", "Data de início ;dd-mm-aaaa"...
+  const top = rows.slice(0, hi);
+  const after = re => ((top.find(r => re.test(norm(r[0]))) || [])[1] || '').trim();
+  const m = after(/^conta$/).match(/(\d{6,})\s*-\s*[A-Z]{3}\s*-\s*(.+)$/);
+  if (!m) throw new Error('Encontrei um CSV de movimentos da Caixadirecta, mas sem o número da conta');
+  const number = m[1], product = m[2].trim();
+  const savings = /poupan/.test(norm(top[0]?.[0])) || /poupan|objetivo|prazo/.test(norm(product));
 
-  // Linha com "<número da conta> - EUR - <produto>"
-  const accLine = all.find(l => /\b\d{9,}\s*-\s*EUR\s*-/.test(l.text));
-  if (!accLine) throw new Error('Encontrei um comprovativo da Caixadirecta, mas sem o número da conta');
-  const [, number, product] = accLine.text.match(/(\d{9,})\s*-\s*EUR\s*-\s*(.+)$/);
-  const savings = /movimentos de poupan/i.test(full) || /poupan|objetivo|prazo/i.test(product);
-  // Data que aparece na linha com um dado rótulo (ex.: "Data de início")
-  const dateAfter = label => isoOf((all.find(l => new RegExp(label, 'i').test(l.text))?.text.match(/\d{2}-\d{2}-\d{4}/) || [])[0]);
+  // Colunas pelo nome (a conta poupança pode não ter todas). "Montante" seria um valor já com sinal.
+  const h = rows[hi].map(norm);
+  const col = (...names) => h.findIndex(c => names.some(n => c.startsWith(n)));
+  const iDate = col('data mov'), iDesc = col('descri'), iDeb = col('debito'), iCred = col('credito'),
+        iAmt = col('montante'), iBal = col('saldo contab') >= 0 ? col('saldo contab') : col('saldo'), iCat = col('categoria');
+  // o saldo depois de cada movimento é preciso para conferir os valores e saber o saldo inicial
+  if (iBal < 0) throw new Error('O extrato da Caixadirecta não tem a coluna do saldo');
+  const money = s => { const v = parseNum(s); return isNaN(v) ? null : v; };
 
-  const raw = []; // do mais recente para o mais antigo, como vem impresso
-  for (const items of pages) {
-    const lines = linesOf(items);
-    // Procura a linha de cabeçalho (tem "Débito" e "Crédito") e guarda a posição x de cada coluna
-    const hi = lines.findIndex(l => l.items.some(i => /^D[ée]bito/i.test(i.str)) && l.items.some(i => /^Cr[ée]dito/i.test(i.str)));
-    if (hi < 0) continue;
-    const head = lines[hi].items;
-    const colX = re => head.find(i => re.test(i.str))?.x;
-    const xDate = colX(/^Data/), xDesc = colX(/^Descri/), xDeb = colX(/^D[ée]bito/), xCred = colX(/^Cr[ée]dito/), xBal = colX(/^Saldo/);
-    if ([xDate, xDesc, xDeb, xCred, xBal].some(v => v === undefined)) continue;
-
-    // Cada linha que começa por uma data na coluna Data é um movimento novo;
-    // o texto de cada pedaço vai para a coluna em cuja faixa de x ele cai.
-    let cur = null;
-    for (const line of lines.slice(hi + 1)) {
-      const first = line.items[0];
-      if (Math.abs(first.x - xDate) < 5 && DATE_RE.test(first.str)) {
-        cur = { date: isoOf(first.str), desc: [], debit: null, credit: null, balance: null, cgdCategory: '', y: line.y };
-        raw.push(cur);
-        for (const it of line.items.slice(1)) {
-          if (it.x < xDesc - 3) continue; // coluna "data valor" (ignorada)
-          if (it.x < xDeb - 3) { cur.desc.push(it.str); continue; }
-          const tokens = it.str.split(/\s+/);
-          if (it.x < xCred - 3) { if (MONEY_RE.test(tokens[0])) cur.debit = parseNum(tokens[0]); continue; }
-          if (it.x < xBal - 3) { if (MONEY_RE.test(tokens[0])) cur.credit = parseNum(tokens[0]); continue; }
-          if (cur.balance === null && MONEY_RE.test(tokens[0])) { cur.balance = parseNum(tokens[0]); continue; }
-          if (!tokens.every(t => MONEY_RE.test(t))) cur.cgdCategory += (cur.cgdCategory ? ' ' : '') + it.str; // categoria da própria CGD (só na conta à ordem)
-        }
-      } else if (cur && line.y - cur.y < 45) {
-        // linhas de continuação da descrição / categoria do mesmo movimento
-        for (const it of line.items) {
-          if (it.x >= xDesc - 3 && it.x < xDeb - 3) cur.desc.push(it.str);
-          else if (it.x > xBal + 60 && !MONEY_RE.test(it.str)) cur.cgdCategory += it.str;
-        }
-      } else cur = null;
-    }
+  const raw = []; // do mais recente para o mais antigo, como vem no ficheiro
+  for (const r of rows.slice(hi + 1)) {
+    const date = isoOf(r[iDate] || '');
+    if (!date) continue; // linha final com o saldo, linhas vazias
+    const debit = iDeb >= 0 ? money(r[iDeb]) : null, credit = iCred >= 0 ? money(r[iCred]) : null;
+    const amount = iAmt >= 0 ? money(r[iAmt])
+      : debit !== null || credit !== null ? round2(Math.abs(credit || 0) - Math.abs(debit || 0)) : null;
+    raw.push({ date, description: (r[iDesc] || '').replace(/\s+/g, ' ').trim(), cgdCategory: iCat >= 0 ? (r[iCat] || '').trim() : '',
+      amount, balance: iBal >= 0 ? money(r[iBal]) : null });
   }
-  if (!raw.length) throw new Error(`Não encontrei movimentos no comprovativo da conta ${number}`);
 
-  // valores com sinal, conferidos com o saldo corrido (o saldo anterior é o da linha de baixo).
-  // Se o valor lido não bater com a diferença de saldos, fica um aviso para o utilizador.
+  // Confere cada valor com a diferença para o saldo do movimento anterior (a linha de baixo).
+  // Sem valor, usa essa diferença; se não baterem, fica um aviso para o utilizador.
   const warnings = [];
   raw.forEach((r, i) => {
-    let amount = r.credit != null ? r.credit : r.debit != null ? -r.debit : null;
     const older = raw[i + 1];
-    if (older && r.balance != null && older.balance != null) {
+    if (older && r.balance !== null && older.balance !== null) {
       const diff = round2(r.balance - older.balance);
-      if (amount === null || cents(Math.abs(diff)) === cents(Math.abs(amount))) amount = diff;
-      else warnings.push(`${dateLabel(r.date)} ${r.desc.join(' ')}: o valor (${eur(Math.abs(amount))}) não bate com a diferença de saldos (${eur(diff)})`);
+      if (r.amount === null) r.amount = diff;
+      else if (cents(diff) !== cents(r.amount)) warnings.push(`${dateLabel(r.date)} ${r.description}: o valor (${eurSigned(r.amount)}) não bate com a diferença de saldos (${eurSigned(diff)})`);
     }
-    if (amount === null) warnings.push(`${dateLabel(r.date)} ${r.desc.join(' ')}: sem valor`);
-    r.amount = amount;
+    if (r.amount === null) warnings.push(`${dateLabel(r.date)} ${r.description}: sem valor`);
   });
-  const rows = raw.filter(r => r.amount).reverse().map(r => ({
-    date: r.date, description: r.desc.join(' ').replace(/\s+/g, ' ').trim(), cgdCategory: r.cgdCategory.trim(),
-    amount: r.amount, balance: r.balance,
-  }));
-  const last = raw[raw.length - 1];
+  const moves = raw.filter(r => r.amount).reverse();
+  if (!moves.length) throw new Error(`Não encontrei movimentos no ficheiro da conta ${number}`);
+  const oldest = moves[0];
   return {
-    bank: 'CGD', number, product: product.trim(), savings,
-    from: dateAfter('Data de in') || rows[0]?.date, to: dateAfter('Data de fim') || rows[rows.length - 1]?.date,
-    rows, opening: round2((last.balance ?? 0) - (last.amount ?? 0)), closing: raw[0].balance, warnings,
+    bank: 'CGD', number, product, savings,
+    from: isoOf(after(/^data de in/)) || oldest.date, to: isoOf(after(/^data de fim/)) || moves[moves.length - 1].date,
+    rows: moves, opening: round2((oldest.balance ?? 0) - oldest.amount), closing: moves[moves.length - 1].balance, warnings,
   };
 }
 
