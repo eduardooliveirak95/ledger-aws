@@ -47,7 +47,7 @@ let formSeq = 0;
 
 /**
  * Constrói um formulário a partir de uma lista de campos e mostra-o no modal:
- *   { name, label, type: text|password|money|number|date|month|select|suggest|seg|check|textarea,
+ *   { name, label, type: text|password|money|number|date|month|select|suggest|pick|seg|check|textarea,
  *     options, required, hint, showIf(valores), half (dois por linha), placeholder }
  *
  * - showIf: função que decide se o campo aparece (ex.: "conta de destino" só em transferências)
@@ -67,7 +67,22 @@ function formModal({ title, fields, values = {}, submitLabel = 'Guardar', onSubm
   // state guarda o valor atual de cada campo; wrappers guarda o <div> de cada campo (para esconder/mostrar)
   const state = { ...values };
   const wrappers = {};
+  const pickOptions = {};   // opções de cada campo "pick" (mudam com setSuggestions)
   let row = null;
+
+  // Campo "pick": a mesma lista de caixas do filtro de categorias e da mudança em lote, com escolha única.
+  // O resumo mostra a escolha; marcar uma caixa escolhe-a e fecha a lista; "Outra…" escreve uma nova.
+  const renderPick = (f, el) => {
+    const cur = state[f.name] || '';
+    const opts = [...pickOptions[f.name]];
+    if (cur && !opts.includes(cur)) opts.push(cur);   // categoria nova escrita à mão
+    el.classList.toggle('pick-empty', !cur);
+    el.innerHTML = `<summary>${esc(cur || f.placeholder || 'Escolher')}</summary>
+      <div class="multi-panel">
+        ${opts.map(o => `<label class="check"><input type="checkbox" value="${esc(o)}" ${o === cur ? 'checked' : ''}> ${esc(o)}</label>`).join('')}
+        <input class="inline" data-newcat maxlength="60" placeholder="Outra… (Enter)">
+      </div>`;
+  };
 
   for (const f of fields) {
     const w = document.createElement('div');
@@ -111,6 +126,33 @@ function formModal({ title, fields, values = {}, submitLabel = 'Guardar', onSubm
           });
           input.appendChild(b);
         }
+      } else if (f.type === 'pick') {
+        input = document.createElement('details');
+        input.className = 'multi pick';
+        pickOptions[f.name] = f.options || [];
+        renderPick(f, input);
+        const el = input;
+        el.addEventListener('change', e => {
+          if (e.target.type !== 'checkbox') return;
+          state[f.name] = e.target.checked ? e.target.value : '';
+          el.open = false; renderPick(f, el); refresh();
+        });
+        el.addEventListener('keydown', e => {
+          if (e.key !== 'Enter' || !e.target.matches('[data-newcat]')) return;
+          e.preventDefault();   // Enter aqui escolhe a categoria nova, não grava o formulário
+          if (!e.target.value.trim()) return;
+          state[f.name] = e.target.value.trim().slice(0, 60);
+          el.open = false; renderPick(f, el); refresh();
+        });
+        // escrever uma categoria nova também conta ao gravar, mesmo sem carregar em Enter
+        el.addEventListener('input', e => {
+          const v = e.target.matches('[data-newcat]') && e.target.value.trim();
+          if (!v) return;
+          state[f.name] = v.slice(0, 60);
+          el.querySelector('summary').textContent = state[f.name];
+          el.classList.remove('pick-empty');
+          el.querySelectorAll('input[type=checkbox]').forEach(c => { c.checked = false; });
+        });
       } else if (f.type === 'textarea') {
         input = document.createElement('textarea');
         input.value = val;
@@ -132,7 +174,7 @@ function formModal({ title, fields, values = {}, submitLabel = 'Guardar', onSubm
       }
       input.id = id;
       if (f.placeholder) input.placeholder = f.placeholder;
-      if (f.type !== 'seg') {
+      if (f.type !== 'seg' && f.type !== 'pick') {
         input.addEventListener('input', e => { state[f.name] = e.target.value; if (f.onChange) f.onChange(e.target.value, state, api2); refresh(); });
         input.addEventListener('change', e => { state[f.name] = e.target.value; refresh(); });
       }
@@ -157,6 +199,15 @@ function formModal({ title, fields, values = {}, submitLabel = 'Guardar', onSubm
   // Funções devolvidas a quem criou o formulário, para o alterar depois de criado
   const api2 = {
     setSuggestions(name, list) {
+      const pick = form.querySelector(`details.pick#${formId}-${name}`);
+      if (pick) {
+        // a escolha que vinha da lista anterior e não existe na nova (ex.: saídas → entradas) é limpa;
+        // uma categoria escrita à mão fica
+        if (state[name] && pickOptions[name].includes(state[name]) && !list.includes(state[name])) state[name] = '';
+        pickOptions[name] = list;
+        renderPick(fields.find(f => f.name === name), pick);
+        return;
+      }
       const dl = form.querySelector(`#${formId}-${name}-list`);
       if (dl) dl.innerHTML = list.map(x => `<option value="${esc(x)}">`).join('');
     },
