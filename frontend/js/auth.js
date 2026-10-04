@@ -18,6 +18,17 @@ const store = {
 // Versões antigas guardavam a sessão no localStorage (ficava aberta para sempre): apaga-a
 try { SESSION_KEYS.forEach(k => localStorage.removeItem('ledger.' + k)); } catch {}
 
+// O Chrome/Edge com "continuar de onde parou" restaura o sessionStorage quando se reabre o browser,
+// e a sessão voltava a abrir sozinha. Por isso, ao sair da página (fechar, recarregar, mudar de site)
+// fica registada a hora em "ledger.left"; ao abrir, se a sessão existe mas a página esteve fechada
+// mais de 30 s (ou não há registo), é apagada e pede-se login. Recarregar (F5) demora 1-2 s: não sai.
+const REOPEN_LIMIT_MS = 30000;
+try {
+  const left = Number(localStorage.getItem('ledger.left')) || 0;
+  if (sessionStorage.getItem('ledger.refreshToken') && Date.now() - left > REOPEN_LIMIT_MS) store.clear();
+} catch {}
+addEventListener('pagehide', () => { try { localStorage.setItem('ledger.left', String(Date.now())); } catch {} });
+
 // Erro de autenticação (password errada, sessão terminada...), distinto dos erros da API
 class AuthError extends Error {}
 

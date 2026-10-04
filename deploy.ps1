@@ -61,7 +61,8 @@ $siteUrl  = Out "WebsiteUrl"
 Write-Host "`n[3/4] Uploading website..." -ForegroundColor Cyan
 $config = "window.LEDGER_CONFIG = { apiUrl: '$apiUrl', region: '$Region', clientId: '$clientId' };"
 [System.IO.File]::WriteAllText((Join-Path $PSScriptRoot "frontend\config.js"), $config)
-aws s3 sync frontend "s3://$bucket" --delete --region $Region
+# --cache-control no-cache: o browser confirma sempre se há uma versão nova do site
+aws s3 sync frontend "s3://$bucket" --delete --region $Region --cache-control "no-cache"
 Check "s3 sync"
 
 # 4) Invalidação: obriga o CloudFront a ir buscar os ficheiros novos em vez de servir os da cache
