@@ -4,13 +4,14 @@
 
 // Lê o texto de um CSV e devolve uma lista de linhas (cada linha = lista de células).
 // - tira o BOM do início (marca que o Excel põe nos ficheiros UTF-8)
-// - descobre o separador (; , ou tab) pelo que aparece mais vezes na primeira linha
+// - descobre o separador (; , ou tab) pelo que aparece mais vezes na primeira linha, se não for indicado
+//   (os extratos do banco começam com uma linha de título sem separadores: usam sempre ";")
 // - respeita aspas: "a;b" é uma só célula e "" dentro de aspas é uma aspa literal
 // - ignora linhas vazias
-function parseCSV(text) {
+function parseCSV(text, delim) {
   text = text.replace(/^﻿/, '');
   const firstLine = text.split(/\r?\n/, 1)[0];
-  const delim = [';', ',', '\t'].reduce((best, d) => (firstLine.split(d).length > firstLine.split(best).length ? d : best), ';');
+  delim = delim || [';', ',', '\t'].reduce((best, d) => (firstLine.split(d).length > firstLine.split(best).length ? d : best), ';');
   const rows = [];
   let row = [], field = '', q = false;
   for (let i = 0; i < text.length; i++) {
@@ -492,16 +493,17 @@ async function runImport(plan, skipDuplicates, onProgress) {
 }
 
 // Abre a janela "Importar": escolher/arrastar ficheiros, pré-visualizar o plano e confirmar.
-// CSV -> planImport/runImport · PDF da Caixadirecta -> parseCgdStatement/planBankImport/runBankImport
+// CSV da app (backup, modelos, DEGIRO...) -> planImport/runImport
+// CSV da Caixadirecta (extrato de movimentos) -> parseCgdCsv/planBankImport/runBankImport (bank.js)
 function openImport(defaultFormat) {
   let plan = null;
   const body = document.createElement('div');
   body.style.cssText = 'display:flex;flex-direction:column;gap:14px';
   body.innerHTML = `
     <div class="modal-hint">
-      Importa dados antigos, um backup ou os PDFs da Caixadirecta («Consultar saldos e movimentos», à ordem ou poupança;
-      podes largar vários de uma vez). Reconheço automaticamente o tipo de ficheiro
-      (Movimentos, Investimentos, Créditos, Património, DEGIRO ou o formato da versão antiga). Aceita separador <b>;</b> ou <b>,</b>,
+      Importa um backup, dados antigos ou os movimentos da Caixadirecta: em «Consultar saldos e movimentos» (à ordem ou poupança),
+      descarrega o CSV no ícone do Excel; podes largar vários de uma vez. Reconheço automaticamente o tipo de ficheiro
+      (Caixadirecta, Movimentos, Investimentos, Créditos, Património, DEGIRO ou o formato da versão antiga). Aceita separador <b>;</b> ou <b>,</b>,
       datas <b>AAAA-MM-DD</b> ou <b>DD/MM/AAAA</b> e valores como <b>1.234,56</b>.
     </div>
     <div class="templates">
@@ -512,62 +514,63 @@ function openImport(defaultFormat) {
       <button class="link-btn" data-t="prop">Património</button>
     </div>
     <div class="drop-zone" id="imp-drop">
-      <input type="file" accept=".csv,text/csv,.pdf,application/pdf" id="imp-file" multiple>
-      Arrasta um ficheiro <strong>.csv</strong> ou PDFs do banco, ou clica para escolher
+      <input type="file" accept=".csv,text/csv" id="imp-file" multiple>
+      Arrasta um ou mais ficheiros <strong>.csv</strong>, ou clica para escolher
       <div class="drop-filename" id="imp-name"></div>
     </div>
     <label class="check"><input type="checkbox" id="imp-skip" checked> Ignorar linhas repetidas (já existentes)</label>
     <div class="preview-box hidden" id="imp-preview"></div>`;
   body.querySelectorAll('[data-t]').forEach(b => b.addEventListener('click', () => downloadTemplate(b.dataset.t)));
 
-  // Lê um ou vários PDFs do banco e mostra a pré-visualização; mudar uma opção volta a calcular o plano
-  const readBankPdfs = async files => {
-    const box = $('#imp-preview', body);
-    box.classList.remove('hidden');
-    box.innerHTML = 'A ler os PDFs…';
-    $('#imp-go').disabled = true;
-    try {
-      const statements = [];
-      for (const f of files) {
-        const st = parseCgdStatement(await pdfPages(await f.arrayBuffer()));
-        if (!st) throw new Error(`«${f.name}» não parece um comprovativo de movimentos da Caixadirecta`);
-        statements.push(st);
-      }
-      const choice = {}, fix = {};
-      const render = () => {
-        plan = planBankImport(statements, choice, fix);
-        box.innerHTML = `<b>Formato:</b> CGD Caixadirecta (PDF)<br>` + bankPreviewHTML(plan);
-        box.querySelectorAll('[data-bank-acc]').forEach(sel => sel.addEventListener('change', () => { choice[sel.dataset.bankAcc] = sel.value; render(); }));
-        box.querySelectorAll('[data-bank-fix]').forEach(cb => cb.addEventListener('change', () => { fix[cb.dataset.bankFix] = cb.checked; render(); }));
-        $('#imp-go').disabled = !plan.items.length && !plan.updates.length && !plan.accounts.some(a => a.choice === 'new');
-      };
-      render();
-    } catch (e) {
-      plan = null;
-      box.innerHTML = `<span class="err">${esc(e.message)}</span>`;
-    }
+  // Texto de um ficheiro: tenta UTF-8; se falhar, usa windows-1252 (o do Excel antigo e o da Caixadirecta)
+  const decode = async file => {
+    const buf = await file.arrayBuffer();
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); }
+    catch { return new TextDecoder('windows-1252').decode(buf); }
   };
 
-  // Ficheiros escolhidos: se houver PDFs, trata-os como extratos; senão lê o primeiro como CSV
+  // Ficheiros escolhidos: extratos da Caixadirecta (um ou vários, mesmo de contas diferentes)
+  // ou um CSV da app (só o primeiro). Os dois tipos não se misturam na mesma importação.
   const readFiles = async list => {
     const files = [...(list || [])];
     if (!files.length) return;
     $('#imp-name', body).textContent = '✓ ' + files.map(f => f.name).join(', ');
-    const pdfs = files.filter(f => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
-    $('#imp-skip', body).closest('label').classList.toggle('hidden', pdfs.length > 0);
-    if (pdfs.length) return readBankPdfs(pdfs);
-    return readFile(files[0]);
-  };
-
-  // Lê um CSV (tenta UTF-8; se falhar, usa windows-1252, o formato antigo do Excel) e mostra o resumo
-  const readFile = async file => {
-    if (!file) return;
-    const buf = await file.arrayBuffer();
-    let text;
-    try { text = new TextDecoder('utf-8', { fatal: true }).decode(buf); }
-    catch { text = new TextDecoder('windows-1252').decode(buf); }
     const box = $('#imp-preview', body);
     box.classList.remove('hidden');
+    $('#imp-go').disabled = true;
+    plan = null;
+    try {
+      const texts = await Promise.all(files.map(decode));
+      const statements = texts.map(parseCgdCsv);
+      const isBank = statements.some(Boolean);
+      // nos extratos os repetidos são sempre ignorados (comparando data, conta e valor)
+      $('#imp-skip', body).closest('label').classList.toggle('hidden', isBank);
+      if (!isBank) return showAppCsv(texts[0]);
+      const other = files.find((f, i) => !statements[i]);
+      if (other) throw new Error(`«${other.name}» não é um extrato da Caixadirecta: importa-o à parte`);
+      showBank(statements);
+    } catch (e) {
+      box.innerHTML = `<span class="err">${esc(e.message)}</span>`;
+    }
+  };
+
+  // Pré-visualização dos extratos do banco; mudar a conta ou o acerto do saldo volta a calcular o plano
+  const showBank = statements => {
+    const box = $('#imp-preview', body);
+    const choice = {}, fix = {};
+    const render = () => {
+      plan = planBankImport(statements, choice, fix);
+      box.innerHTML = `<b>Formato:</b> CGD Caixadirecta (extrato de movimentos)<br>` + bankPreviewHTML(plan);
+      box.querySelectorAll('[data-bank-acc]').forEach(sel => sel.addEventListener('change', () => { choice[sel.dataset.bankAcc] = sel.value; render(); }));
+      box.querySelectorAll('[data-bank-fix]').forEach(cb => cb.addEventListener('change', () => { fix[cb.dataset.bankFix] = cb.checked; render(); }));
+      $('#imp-go').disabled = !plan.items.length && !plan.updates.length && !plan.accounts.some(a => a.choice === 'new');
+    };
+    render();
+  };
+
+  // Pré-visualização de um CSV da app (backup, modelos, DEGIRO, versão antiga): resumo do que vai ser criado
+  const showAppCsv = text => {
+    const box = $('#imp-preview', body);
     try {
       plan = planImport(text);
       const counts = {};

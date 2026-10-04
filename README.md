@@ -47,5 +47,5 @@ Em **+ Imóvel** basta o nome e o valor atual. O preço de compra e o crédito a
   - modelos CSV (descarregam-se na própria janela);
   - CSV do Excel;
   - exportações do DEGIRO;
-  - extratos em PDF da Caixadirecta.
+  - movimentos da Caixadirecta em CSV: em "Consultar saldos e movimentos" (à ordem ou poupança), descarrega o ficheiro no ícone do Excel. Podes importar vários de uma vez; escolhes a conta da app e a categoria de cada movimento é adivinhada pela descrição (se mudares uma, os próximos iguais seguem-na).
 - Importar o mesmo ficheiro duas vezes não duplica nada.
