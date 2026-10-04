@@ -246,6 +246,9 @@ a.li-name:hover { color: var(--accent); }
 .field textarea { resize: vertical; min-height: 60px; }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+/* Importar extratos de outros bancos: as colunas de cada ficheiro, numa grelha de 3 (1 no telemóvel) */
+.bank-map { margin: 8px 0 12px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; }
+.map-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; }
 .check input { accent-color: var(--accent); width: 15px; height: 15px; }
 
 .seg-field { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; }
@@ -320,7 +323,7 @@ table.grid-edit .num { font-family: var(--mono); text-align: right; color: var(-
   .tabs { width: 100%; display: grid; grid-template-columns: 1fr 1fr; }
   .tab { padding: 8px 10px; justify-content: center; }
   .stat-value { font-size: 18px; }
-  .field-row { grid-template-columns: 1fr; }
+  .field-row, .map-grid { grid-template-columns: 1fr; }
   .user-box { gap: 6px; }
   .user-box .btn { padding-left: 10px; padding-right: 10px; }
 }

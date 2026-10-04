@@ -19,6 +19,7 @@ Todos os dados vivem numa ÚNICA tabela DynamoDB ("single-table design"):
     LBAL_<loanhex>_<AAAA-MM>     saldo em dívida de um crédito no fim do mês (um por mês),
                                  com a prestação paga e a amortização extraordinária desse mês
     PROP_<hex>                   imóvel (casa, terreno...) com o valor atual
+    BFMT_<hex>                   colunas escolhidas para os CSV de um banco (importar extratos)
 
 Além das partições dos utilizadores há uma partição do sistema:
     user_id = "DAILY_BACKUP", sk = <sub>   um item por utilizador que ativou o backup diário por email
@@ -70,6 +71,7 @@ KIND_PREFIX = {
     "loan": "LOAN",
     "loan_balance": "LBAL",
     "property": "PROP",
+    "bank_format": "BFMT",
 }
 # O mesmo mapa ao contrário: prefixo -> tipo (para descobrir o tipo a partir da sk)
 PREFIX_KIND = {v: k for k, v in KIND_PREFIX.items()}
@@ -83,6 +85,7 @@ COLLECTION = {
     "loan": "loans",
     "loan_balance": "loan_balances",
     "property": "properties",
+    "bank_format": "bank_formats",
 }
 
 # Expressões regulares que validam o formato de cada id (= sort key).
@@ -97,6 +100,7 @@ ID_RE = {
     "loan": re.compile(rf"^LOAN_({HEX})$"),
     "loan_balance": re.compile(rf"^LBAL_({HEX})_\d{{4}}-\d{{2}}$"),
     "property": re.compile(rf"^PROP_({HEX})$"),
+    "bank_format": re.compile(rf"^BFMT_({HEX})$"),
 }
 # Formato das chaves da primeira versão da app ("AAAA-MM-DD_<16 hex>"), para as migrar
 LEGACY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_[0-9a-f]{16}$")
@@ -307,7 +311,7 @@ def build(user, raw):
         raise ValueError("id inválido")
     # Ao editar, reaproveita o hex do id existente; ao criar, gera um novo.
     # (valuation e loan_balance não têm hex próprio: a chave é o investimento/crédito + o mês)
-    h = hex_of(old_id, kind) if old_id and kind in ("account", "transaction", "investment", "inv_move", "loan", "property") else None
+    h = hex_of(old_id, kind) if old_id and kind in ("account", "transaction", "investment", "inv_move", "loan", "property", "bank_format") else None
     h = h or new_hex()
 
     item = {"user_id": user, "updated_at": now_iso()}
@@ -435,6 +439,30 @@ def build(user, raw):
         # Crédito que financiou o imóvel: serve para mostrar quanto da casa já é teu (valor − dívida)
         if str(raw.get("loan_id") or "").strip():
             item["loan_id"] = v_ref(raw.get("loan_id"), "loan", "loan_id")
+
+    elif kind == "bank_format":
+        # Colunas de um formato de CSV de outro banco (a assinatura é o cabeçalho do ficheiro, normalizado).
+        # columns: posição de cada coluna (0, 1, 2...) ou -1 se não houver; é preciso a data e um valor.
+        raw_cols = raw.get("columns")
+        if not isinstance(raw_cols, dict):
+            raise ValueError("columns: inválido")
+        cols = {}
+        for k in ("date", "desc", "amount", "debit", "credit", "balance"):
+            v = raw_cols.get(k, -1)
+            if isinstance(v, bool) or not isinstance(v, int) or not -1 <= v <= 99:
+                raise ValueError(f"columns.{k}: inválido")
+            cols[k] = v
+        if cols["date"] < 0 or max(cols["amount"], cols["debit"], cols["credit"]) < 0:
+            raise ValueError("columns: falta a data ou o valor")
+        item.update(
+            sk=f"BFMT_{h}",
+            name=v_text(raw.get("name"), "name", MAX_NAME, required=True),
+            signature=v_text(raw.get("signature"), "signature", MAX_TEXT, required=True),
+            columns=cols,
+        )
+        # Conta da app onde estes extratos foram importados da última vez (para a escolher sozinha)
+        if str(raw.get("account_id") or "").strip():
+            item["account_id"] = v_ref(raw.get("account_id"), "account", "account_id")
 
     # Se o id mudou (ex.: nova data), o antigo tem de ser apagado
     stale = old_id if old_id and old_id != item["sk"] else None
@@ -679,10 +707,11 @@ def post_settings(user, email, event):
 
 
 # ── BACKUP DIÁRIO POR EMAIL ──────────────────────────────────────────────────
-# Os mesmos 4 CSV do botão "Backup" da app (exportRows/toCSV no frontend/js/csv.js), gerados aqui
+# Os mesmos 5 CSV do botão "Backup" da app (exportRows/toCSV no frontend/js/csv.js), gerados aqui
 # a partir do DynamoDB. Os cabeçalhos têm de ser iguais aos do FORMATS do csv.js (há um teste que
 # o confirma), para o backup se poder recuperar com "Importar".
 BACKUP_FORMATS = {
+    "contas": ["Conta", "Tipo de conta", "Saldo inicial", "Data do saldo inicial"],
     "movimentos": ["Data", "Conta", "Tipo", "Categoria", "Descrição", "Valor", "Conta destino", "Aproximado"],
     "investimentos": ["Data", "Investimento", "Tipo de investimento", "Operação", "Valor", "Descrição"],
     "creditos": ["Mês", "Crédito", "Tipo de crédito", "Saldo em dívida", "Prestação", "Montante inicial",
@@ -733,6 +762,10 @@ def backup_rows(items):
     def inv(i):
         return names["investment"].get(i, "(apagado)")
 
+    # contas: tipo e saldo inicial (os movimentos só têm o nome da conta)
+    accounts = [[a.get("name", ""), a.get("acc_type", ""), a.get("opening_balance"), a.get("opening_date", "")]
+                for a in by_name(by.get("account", []))]
+
     mov = [[t["date"], acc(t.get("account_id")), DIRECTION_LABEL.get(t.get("direction"), ""), t.get("category", ""),
             t.get("description", ""), t.get("amount"), acc(t.get("to_account_id")) if t.get("direction") == "transfer" else "",
             "sim" if t.get("approx") else "não"]
@@ -763,7 +796,7 @@ def backup_rows(items):
     props = [[p.get("name", ""), p.get("prop_type", ""), p.get("value"), p.get("purchase_price"), p.get("purchase_date", ""),
               names["loan"].get(p["loan_id"], "(apagado)") if p.get("loan_id") else "", p.get("notes", "")]
              for p in by_name(by.get("property", []))]
-    return {"movimentos": mov, "investimentos": invs, "creditos": loans, "patrimonio": props}
+    return {"contas": accounts, "movimentos": mov, "investimentos": invs, "creditos": loans, "patrimonio": props}
 
 
 def backup_files(user, day):
@@ -829,7 +862,11 @@ def daily_backup(event=None, context=None):
     utilizador que ativou o backup diário, gera os CSV e envia-os para o email da conta no Cognito.
     Contas apagadas ou desativadas no Cognito e contas sem dados são saltadas.
     Um erro num utilizador não impede os outros. Os logs só têm contagens (nem emails nem dados).
+
+    Teste à mão (workflow "Test daily backup" no GitHub): o evento {"only_email": "..."} envia só para
+    esse email, e só se for de alguém que ativou o backup. O agendamento não manda nada no evento.
     """
+    only = str(event.get("only_email") or "").strip().lower() if isinstance(event, dict) else ""
     subs, kwargs = [], {"KeyConditionExpression": Key("user_id").eq(DAILY_BACKUP_PK)}
     while True:
         r = table().query(**kwargs)
@@ -840,6 +877,8 @@ def daily_backup(event=None, context=None):
     result = {"sent": 0, "skipped": 0, "failed": 0}
     if subs:
         sender, emails, day = os.environ["SENDER_EMAIL"], account_emails(), backup_day()
+        if only:
+            subs = [sub for sub in subs if emails.get(sub, "").lower() == only]
         for sub in subs:
             try:
                 files = backup_files(sub, day) if sub in emails else []

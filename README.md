@@ -41,11 +41,15 @@ Em **+ Imóvel** basta o nome e o valor atual. O preço de compra e o crédito a
 
 ## Importar e fazer backup
 
-- **⬇ Backup** (no topo) descarrega todos os teus dados em CSV.
+- **⬇ Backup** (no topo) descarrega todos os teus dados em CSV: contas (com o tipo e o saldo inicial), movimentos, investimentos, créditos e património.
 - **✉ Backup diário** (no topo; em ecrãs médios aparece como **✉ Diário**): marca a caixa para receberes no email da tua conta, todos os dias à meia-noite (hora de Portugal), os mesmos CSV ("BACKUP Ledger dia DD/MM/AAAA", com os dados até ao fim desse dia). Vem desligado; desmarca quando quiseres deixar de receber.
 - **⬆ Importar** (em cada separador) recupera um backup ou traz dados de outros sítios:
   - modelos CSV (descarregam-se na própria janela);
   - CSV do Excel;
   - exportações do DEGIRO;
-  - movimentos da Caixadirecta em CSV: em "Consultar saldos e movimentos" (à ordem ou poupança), descarrega o ficheiro no ícone do Excel. Podes importar vários de uma vez; escolhes a conta da app e a categoria de cada movimento é adivinhada pela descrição (se mudares uma, os próximos iguais seguem-na).
+  - movimentos da Caixadirecta em CSV: em "Consultar saldos e movimentos" (à ordem ou poupança), descarrega o ficheiro no ícone do Excel;
+  - movimentos de outros bancos em CSV: a app reconhece as colunas (data, descrição, valor ou débito/crédito, saldo) e mostra-tas para confirmares ou corrigires; da próxima vez lembra-se das colunas e da conta.
+
+  Nos extratos podes importar vários ficheiros de uma vez, escolhes a conta da app e a categoria de cada movimento é adivinhada pela descrição (se mudares uma, os próximos iguais seguem-na).
+- Para recuperar um backup, importa os ficheiros um a um (a ordem não importa: o das contas acerta o tipo e o saldo inicial das contas criadas pelos movimentos).
 - Importar o mesmo ficheiro duas vezes não duplica nada.
