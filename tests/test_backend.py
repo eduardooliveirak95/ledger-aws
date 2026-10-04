@@ -7,7 +7,9 @@ precisam de conta AWS nem de internet. O GitHub Actions corre-os antes de cada d
 """
 import json
 import os
+import re
 import sys
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -21,6 +23,7 @@ os.environ.update(AWS_DEFAULT_REGION="eu-west-1", AWS_ACCESS_KEY_ID="test",
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 import boto3  # noqa: E402
+from botocore.exceptions import ClientError  # noqa: E402
 from moto import mock_aws  # noqa: E402
 
 import app  # noqa: E402
@@ -42,11 +45,9 @@ def table():
                        {"AttributeName": "sk", "KeyType": "RANGE"}],
             ProvisionedThroughput={"ReadCapacityUnits": 25, "WriteCapacityUnits": 25},
         )
-        app._table = None
-        app._ses = None
+        app._table = app._ses = app._cognito = None
         yield boto3.resource("dynamodb").Table("ledger-test")
-        app._table = None
-        app._ses = None
+        app._table = app._ses = app._cognito = None
 
 
 def call(route, user="u1", body=None, path=None, email=None):
@@ -207,39 +208,104 @@ def test_transfer_categories_are_renamed(table):
     assert {t["amount"]: t["category"] for t in d2["transactions"]} == cats
 
 
-def test_backup_is_emailed_to_the_account_only(table):
-    """O backup vai para o email do token (não para um email vindo do browser), com os CSV em anexo."""
+def test_daily_backup_setting(table):
+    """O backup diário começa desligado, liga-se e desliga-se por utilizador e não aparece nos dados."""
+    assert call("GET /settings") == (200, {"daily_backup": False})
+    assert call("POST /settings", body={"daily_backup": True})[0] == 400              # conta sem email
+    assert call("POST /settings", email="eu@example.com", body={"daily_backup": "sim"})[0] == 400
+    assert call("POST /settings", email="eu@example.com", body={"daily_backup": True}) == (200, {"daily_backup": True})
+    assert call("GET /settings") == (200, {"daily_backup": True})
+    assert call("GET /settings", user="u2") == (200, {"daily_backup": False})
+    _, d = call("GET /data")
+    assert all(not v for v in d.values())
+    assert call("POST /settings", email="eu@example.com", body={"daily_backup": False}) == (200, {"daily_backup": False})
+    assert call("GET /settings") == (200, {"daily_backup": False})
+
+
+def test_backup_csv_headers_match_the_app():
+    """Os cabeçalhos dos CSV do backup diário são iguais aos da app (FORMATS no csv.js), para o "Importar" os reconhecer."""
+    js = (Path(__file__).resolve().parents[1] / "frontend" / "js" / "csv.js").read_text(encoding="utf-8")
+    headers = [re.findall(r"'([^']*)'", h) for h in re.findall(r"header: \[([^\]]*)\]", js)]
+    assert headers == list(app.BACKUP_FORMATS.values())
+
+
+def test_backup_day_is_the_day_that_just_ended():
+    """À meia-noite de Portugal (23:00 UTC no verão, 00:00 UTC no inverno) o backup é do dia anterior."""
+    assert app.backup_day(datetime(2026, 10, 4, 23, 0, 5, tzinfo=timezone.utc)) == "2026-10-04"
+    assert app.backup_day(datetime(2027, 1, 5, 0, 0, 5, tzinfo=timezone.utc)) == "2027-01-04"
+
+
+def test_backup_csv_content(table):
+    """Os CSV gerados no servidor têm as mesmas colunas e o mesmo formato que os do botão "Backup"."""
+    s = save([{"kind": "account", "name": "Ordem", "opening_balance": 0, "opening_date": "2026-01-01"},
+              {"kind": "account", "name": "Poupança", "opening_balance": 0, "opening_date": "2026-01-01"},
+              {"kind": "investment", "name": "ETF", "inv_type": "ETF"},
+              {"kind": "investment", "name": "Sem registos", "inv_type": "PPR", "notes": "nota"},
+              {"kind": "loan", "name": "Casa", "loan_type": "Habitação", "principal": 1000, "start_date": "2026-01-01",
+               "rate": "3.125", "payment": 50, "lender": "Banco"}])["saved"]
+    acc, sav, etf, loan = s[0]["id"], s[1]["id"], s[2]["id"], s[4]["id"]
+    save([{"kind": "transaction", "date": "2026-09-02", "account_id": acc, "direction": "out", "category": "Casa",
+           "description": 'Renda; "set"', "amount": 1234.5},
+          {"kind": "transaction", "date": "2026-09-01", "account_id": acc, "direction": "transfer", "to_account_id": sav, "amount": 10},
+          {"kind": "inv_move", "date": "2026-09-05", "investment_id": etf, "move": "contribution", "amount": 200},
+          {"kind": "valuation", "investment_id": etf, "month": "2026-09", "value": 204.5},
+          {"kind": "loan_balance", "loan_id": loan, "month": "2026-09", "balance": 950, "extra": 20},
+          {"kind": "property", "name": "Apartamento", "value": 100000, "loan_id": loan}])
+    files = dict(app.backup_files("u1", "2026-10-04"))
+    assert list(files) == ["ledger-movimentos-2026-10-04.csv", "ledger-investimentos-2026-10-04.csv",
+                           "ledger-creditos-2026-10-04.csv", "ledger-patrimonio-2026-10-04.csv"]
+    assert files["ledger-movimentos-2026-10-04.csv"].split("\r\n")[1:] == [
+        "2026-09-01;Ordem;Transferência;Transferência;;10,00;Poupança;não",
+        '2026-09-02;Ordem;Saída;Casa;"Renda; ""set""";1234,50;;não']
+    assert files["ledger-investimentos-2026-10-04.csv"].split("\r\n")[1:] == [
+        ";Sem registos;PPR;;;nota", "2026-09;ETF;ETF;Valor;204,50;", "2026-09-05;ETF;ETF;Aporte;200,00;"]
+    assert files["ledger-creditos-2026-10-04.csv"].split("\r\n")[1:] == [
+        "2026-09;Casa;Habitação;950,00;50,00;1000,00;2026-01-01;3,125;Banco;20,00;"]
+    assert files["ledger-patrimonio-2026-10-04.csv"].split("\r\n")[1:] == ["Apartamento;Habitação própria;100000,00;;;Casa;"]
+    assert app.backup_files("u2", "2026-10-04") == []   # sem dados, sem ficheiros
+
+
+def test_daily_backup_emails_only_active_subscribers(table, monkeypatch, capsys):
+    """O envio diário vai para o email do Cognito de quem ativou o backup; contas desativadas ou sem dados são saltadas.
+
+    Um email recusado pelo SES (por verificar) não trava os outros e o log não mostra o endereço.
+    """
+    cognito = boto3.client("cognito-idp")
+    pool = cognito.create_user_pool(PoolName="ledger-test", UsernameAttributes=["email"])["UserPool"]["Id"]
+    monkeypatch.setenv("USER_POOL_ID", pool)
+    subs = {}
+    for name in ("ativo", "vazio", "desativado", "desligado", "naoverificado"):
+        u = cognito.admin_create_user(UserPoolId=pool, Username=f"{name}@example.com",
+                                      UserAttributes=[{"Name": "email", "Value": f"{name}@example.com"}])["User"]
+        subs[name] = next(a["Value"] for a in u["Attributes"] if a["Name"] == "sub")
+    cognito.admin_disable_user(UserPoolId=pool, Username="desativado@example.com")
     sesv2 = boto3.client("sesv2")
-    for addr in ("ledger@example.com", "eu@example.com"):
+    for addr in ("ledger@example.com", "ativo@example.com", "desativado@example.com", "desligado@example.com"):
         sesv2.create_email_identity(EmailIdentity=addr)
-    files = [{"name": "ledger-movimentos-2026-10-03.csv", "content": "Data;Valor\r\n2026-10-01;10,00"}]
-    status, body = call("POST /backup", email="eu@example.com",
-                        body={"date": "2026-10-03", "files": files, "to": "outro@example.com"})
-    assert status == 200 and body == {"sent_to": "eu@example.com", "files": 1}
+    for name in ("ativo", "desativado", "desligado", "naoverificado"):
+        save([{"kind": "property", "name": "Casa", "value": 1}], user=subs[name])
+    for name in ("ativo", "vazio", "desativado", "naoverificado"):
+        assert call("POST /settings", user=subs[name], email="token@example.com", body={"daily_backup": True})[0] == 200
+    monkeypatch.setattr(app, "backup_day", lambda: "2026-10-04")
+    # o SES do moto não verifica destinatários: simula a recusa de um email por verificar
+    real_send = app.send_backup
+
+    def send(sender, email, day, files):
+        if email.startswith("naoverificado"):
+            raise ClientError({"Error": {"Code": "MessageRejected", "Message": f"Email address is not verified: {email}"}}, "SendEmail")
+        real_send(sender, email, day, files)
+    monkeypatch.setattr(app, "send_backup", send)
+
+    assert app.daily_backup({}, None) == {"sent": 1, "skipped": 2, "failed": 1}
+    logs = capsys.readouterr().out
+    assert "MessageRejected" in logs and "@" not in logs
     from moto.core import DEFAULT_ACCOUNT_ID
     from moto.ses.models import ses_backends
     sent = ses_backends[DEFAULT_ACCOUNT_ID]["eu-west-1"].sent_messages
-    raw = sent[-1].raw_data if hasattr(sent[-1], "raw_data") else str(sent[-1])
-    assert "BACKUP Ledger dia 03/10/2026" in raw and "ledger-movimentos-2026-10-03.csv" in raw
-    # o contador do limite diário não aparece nos dados da app
-    _, d = call("GET /data")
-    assert all(not v for v in d.values())
-
-
-def test_backup_limits_and_validation(table):
-    """Sem email na conta, ficheiros inválidos ou mais de 10 envios por dia dão erro."""
-    boto3.client("sesv2").create_email_identity(EmailIdentity="ledger@example.com")
-    boto3.client("sesv2").create_email_identity(EmailIdentity="eu@example.com")
-    ok = {"date": "2026-10-03", "files": [{"name": "a.csv", "content": "x"}]}
-    assert call("POST /backup", body=ok)[0] == 400                                  # conta sem email
-    for bad in ({"date": "2026-10-03", "files": []},
-                {"date": "2026-10-03", "files": [{"name": "../x.exe", "content": "x"}]},
-                {"date": "ontem", "files": [{"name": "a.csv", "content": "x"}]}):
-        assert call("POST /backup", email="eu@example.com", body=bad)[0] == 400
-    for _ in range(app.MAX_BACKUPS_PER_DAY):
-        assert call("POST /backup", email="eu@example.com", body=ok)[0] == 200
-    assert call("POST /backup", email="eu@example.com", body=ok)[0] == 429         # limite do dia
-    assert call("POST /backup", email="eu@example.com", body={**ok, "date": "2026-10-04"})[0] == 200
+    assert len(sent) == 1
+    raw = sent[0].raw_data if hasattr(sent[0], "raw_data") else str(sent[0])
+    assert "To: ativo@example.com" in raw and "BACKUP Ledger dia 04/10/2026" in raw
+    assert "ledger-patrimonio-2026-10-04.csv" in raw
 
 
 def test_request_size_limit(table):

@@ -99,7 +99,8 @@ function exportRows(format) {
   if (format === 'loan') {
     const rows = [];
     for (const l of sortByName(D.loans)) {
-      const meta = [l.principal, l.start_date, l.rate ?? '', l.lender];
+      // a taxa vai como texto (3,125) para não perder a 3.ª casa decimal com o arredondamento a 2 casas
+      const meta = [l.principal, l.start_date, l.rate != null ? String(l.rate).replace('.', ',') : '', l.lender];
       const bs = D.loan_balances.filter(b => b.loan_id === l.id).sort((a, b) => a.month.localeCompare(b.month));
       if (!bs.length) rows.push(['', l.name, l.loan_type, null, l.payment ?? null, ...meta, null, l.end_date || '']);
       for (const b of bs) rows.push([b.month, l.name, l.loan_type, b.balance, b.payment ?? l.payment ?? null, ...meta, b.extra || null, l.end_date || '']);
@@ -120,26 +121,18 @@ function exportCSV(format) {
   toast(`${FORMATS[format].label}: ${rows.length} linhas exportadas`);
 }
 
-// Botão "Backup": descarrega os 4 CSV (movimentos, investimentos, créditos, património) de uma vez
-// e envia os mesmos ficheiros, em anexo, para o email da conta ("BACKUP Ledger dia DD/MM/AAAA").
-// Se o email falhar, os ficheiros já foram descarregados: só aparece o aviso do erro.
-async function exportAll() {
-  const files = [];
+// Botão "Backup": descarrega os 4 CSV (movimentos, investimentos, créditos, património) de uma vez.
+// O envio por email é automático, uma vez por dia, para quem ligar o "Backup diário" (ver app.js);
+// esses CSV são gerados no backend (backup_rows no app.py) com as mesmas colunas.
+function exportAll() {
+  let files = 0;
   for (const f of ['mov', 'inv', 'loan', 'prop']) {
     const rows = exportRows(f);
     if (!rows.length) continue;
-    const name = `ledger-${FORMATS[f].label.toLowerCase()}-${todayISO()}.csv`, content = toCSV(FORMATS[f].header, rows);
-    download(name, content);
-    files.push({ name: norm(name).replace(/[^\w.-]/g, '-'), content });   // nome sem acentos para o anexo
+    download(`ledger-${FORMATS[f].label.toLowerCase()}-${todayISO()}.csv`, toCSV(FORMATS[f].header, rows));
+    files++;
   }
-  if (!files.length) return toast('Ainda não há dados', true);
-  toast(`Backup: ${files.length} ficheiro(s) descarregado(s). A enviar por email…`);
-  try {
-    const r = await api.emailBackup(todayISO(), files);
-    toast(`Backup descarregado e enviado para ${r.sent_to}`);
-  } catch (e) {
-    toast(`Backup descarregado, mas o email falhou: ${e.message}`, true);
-  }
+  toast(files ? `Backup: ${files} ficheiro(s) descarregado(s)` : 'Ainda não há dados', !files);
 }
 
 // Descarrega um modelo vazio (só com as linhas de exemplo) para preencher no Excel
