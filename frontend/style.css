@@ -140,6 +140,15 @@ details.multi[open] > summary { border-color: var(--accent); }
   display: flex; flex-direction: column; gap: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, .4);
 }
 .multi-panel .link-btn { align-self: flex-start; }
+/* A mesma lista nos formulários (campo "pick", ex.: categoria de um movimento): parece um campo e
+   abre por baixo dele, dentro da janela (uma lista a flutuar podia ficar cortada) */
+.field details.pick > summary { background: var(--bg); font-size: 13px; padding: 9px 28px 9px 12px; white-space: normal; text-align: left; }
+.field details.pick.pick-empty > summary { color: var(--muted); }
+.field details.pick .multi-panel { position: static; margin-top: 6px; min-width: 0; max-height: 240px; box-shadow: none; }
+.field details.pick label.check {   /* desfaz o estilo dos rótulos dos campos (.field label) */
+  display: flex; margin: 0; font-size: 13px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--text); cursor: pointer;
+}
+.field details.pick .multi-panel input.inline { max-width: none; width: 100%; }
 
 /* Seleção de movimentos e barra para mudar a categoria de vários */
 table.data .sel { width: 1%; padding-right: 0; }

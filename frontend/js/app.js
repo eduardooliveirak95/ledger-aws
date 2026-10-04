@@ -513,7 +513,7 @@ function txForm(tx = null, preset = {}) {
       { name: 'date', label: 'Data', type: 'date', required: true, half: true },
       { name: 'account_id', label: 'Conta', type: 'select', options: accOpts, required: true, half: true },
       { name: 'to_account_id', label: 'Para a conta', type: 'select', options: accOpts, required: true, half: true, showIf: v => v.direction === 'transfer' },
-      { name: 'category', label: 'Categoria', type: 'suggest', required: true, showIf: v => v.direction !== 'transfer', placeholder: 'Escolhe ou escreve uma nova',
+      { name: 'category', label: 'Categoria', type: 'pick', required: true, showIf: v => v.direction !== 'transfer', placeholder: 'Escolhe uma categoria',
         init: (st, f) => f.setSuggestions('category', knownCategories(st.direction === 'in' ? 'in' : 'out')) },
       { name: 'description', label: 'Descrição', type: 'text', placeholder: 'ex.: Continente, renda de março…' },
       { name: 'approx', label: 'Valor aproximado (ex.: reconstituído de papel)', type: 'check' },
