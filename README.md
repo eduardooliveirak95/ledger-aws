@@ -10,7 +10,7 @@ O acesso é feito por convite: não há registo público. Recebes um email e uma
 
 No primeiro login a app pede-te para escolheres uma password tua (mínimo 10 caracteres, com maiúsculas, minúsculas e um número). Para a mudares mais tarde, usa o botão **🔑 Password** no topo.
 
-Por segurança, a sessão só dura enquanto o separador estiver aberto: num separador novo ou ao reabrir o browser tens de entrar outra vez. Recarregar a página não te tira da conta.
+Por segurança, a sessão só dura enquanto o separador estiver aberto: num separador novo ou ao reabrir o browser (mesmo com os separadores restaurados) tens de entrar outra vez. Recarregar a página não te tira da conta.
 
 ## Separadores
 

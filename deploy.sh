@@ -63,7 +63,9 @@ echo -e "\n[3/4] A enviar o site..."
 printf "window.LEDGER_CONFIG = { apiUrl: '%s', region: '%s', clientId: '%s' };\n" "$API_URL" "$REGION" "$CLIENT_ID" > frontend/config.js
 # sync envia só o que mudou; --delete apaga do bucket o que já não existe em frontend/
 # (no GitHub, --only-show-errors não lista os ficheiros, que mostrariam o nome do bucket)
-aws s3 sync frontend "s3://$BUCKET" --delete --region "$REGION" ${GITHUB_ACTIONS:+--only-show-errors}
+# --cache-control no-cache: o browser confirma sempre se há uma versão nova (resposta curta "304"
+# quando não há), em vez de guardar os .js antigos durante dias depois de um deploy
+aws s3 sync frontend "s3://$BUCKET" --delete --region "$REGION" --cache-control "no-cache" ${GITHUB_ACTIONS:+--only-show-errors}
 
 echo -e "\n[4/4] A limpar a cache do CloudFront..."
 # Invalidação: obriga o CloudFront a ir buscar os ficheiros novos em vez de servir os da cache
