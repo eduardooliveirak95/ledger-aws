@@ -6,13 +6,17 @@ const CFG = window.LEDGER_CONFIG || {};
 const API_BASE = (CFG.apiUrl || '').replace(/\/$/, '');
 const COGNITO_URL = `https://cognito-idp.${CFG.region}.amazonaws.com/`;
 
-// Guarda os tokens e o email no localStorage do browser (sobrevivem a fechar a página).
-// Os try/catch evitam erros em modos privados que bloqueiam o localStorage.
+// Guarda os tokens e o email no sessionStorage do browser: duram só enquanto o separador estiver
+// aberto (recarregar a página mantém a sessão; um separador novo ou reabrir o browser pede login).
+// Os try/catch evitam erros em modos privados que bloqueiam o armazenamento.
+const SESSION_KEYS = ['idToken', 'accessToken', 'refreshToken', 'email'];
 const store = {
-  get(k) { try { return localStorage.getItem('ledger.' + k); } catch { return null; } },
-  set(k, v) { try { localStorage.setItem('ledger.' + k, v); } catch {} },
-  clear() { try { ['idToken', 'accessToken', 'refreshToken', 'email'].forEach(k => localStorage.removeItem('ledger.' + k)); } catch {} },
+  get(k) { try { return sessionStorage.getItem('ledger.' + k); } catch { return null; } },
+  set(k, v) { try { sessionStorage.setItem('ledger.' + k, v); } catch {} },
+  clear() { try { SESSION_KEYS.forEach(k => sessionStorage.removeItem('ledger.' + k)); } catch {} },
 };
+// Versões antigas guardavam a sessão no localStorage (ficava aberta para sempre): apaga-a
+try { SESSION_KEYS.forEach(k => localStorage.removeItem('ledger.' + k)); } catch {}
 
 // Erro de autenticação (password errada, sessão terminada...), distinto dos erros da API
 class AuthError extends Error {}
@@ -111,6 +115,13 @@ async function changePassword(oldPassword, newPassword) {
     t = store.get('accessToken');
   }
   await cognito('ChangePassword', { AccessToken: t, PreviousPassword: oldPassword, ProposedPassword: newPassword });
+}
+
+// Ao sair: anula o refresh token no Cognito, para não poder voltar a ser usado (mesmo que alguém o
+// tenha copiado). Se falhar (ex.: sem internet), não faz mal: a sessão local é apagada na mesma.
+function revokeSession() {
+  const rt = store.get('refreshToken');
+  if (rt) cognito('RevokeToken', { Token: rt, ClientId: CFG.clientId }).catch(() => {});
 }
 
 // Pede um ID token novo usando o refresh token, sem voltar a pedir a password

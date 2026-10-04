@@ -35,6 +35,7 @@ function setStatus(ok) {
 }
 // Sair: apaga os tokens, limpa os dados da memória e volta ao login
 function logout() {
+  revokeSession();
   store.clear();
   D = emptyData();
   setStatus(null);
