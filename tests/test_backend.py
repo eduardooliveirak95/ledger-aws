@@ -259,8 +259,11 @@ def test_backup_csv_content(table):
           {"kind": "loan_balance", "loan_id": loan, "month": "2026-09", "balance": 950, "extra": 20},
           {"kind": "property", "name": "Apartamento", "value": 100000, "loan_id": loan}])
     files = dict(app.backup_files("u1", "2026-10-04"))
-    assert list(files) == ["ledger-movimentos-2026-10-04.csv", "ledger-investimentos-2026-10-04.csv",
+    assert list(files) == ["ledger-contas-2026-10-04.csv", "ledger-movimentos-2026-10-04.csv", "ledger-investimentos-2026-10-04.csv",
                            "ledger-creditos-2026-10-04.csv", "ledger-patrimonio-2026-10-04.csv"]
+    # as contas levam o tipo e o saldo inicial (ordenadas por nome)
+    assert files["ledger-contas-2026-10-04.csv"].split("\r\n")[1:] == [
+        "Ordem;Conta à ordem;0,00;2026-01-01", "Poupança;Conta à ordem;0,00;2026-01-01"]
     assert files["ledger-movimentos-2026-10-04.csv"].split("\r\n")[1:] == [
         "2026-09-01;Ordem;Transferência;Transferência;;10,00;Poupança;não",
         '2026-09-02;Ordem;Saída;Casa;"Renda; ""set""";1234,50;;não']
@@ -309,13 +312,35 @@ def test_daily_backup_emails_only_active_subscribers(table, monkeypatch, capsys)
     assert app.daily_backup({}, None) == {"sent": 1, "skipped": 3, "failed": 1}
     logs = capsys.readouterr().out
     assert "MessageRejected" in logs and "@" not in logs
+    # teste à mão: só para um email (e só se for de quem ligou o backup); um evento estranho não estraga nada
+    assert app.daily_backup({"only_email": " Ativo@Example.com "}, None) == {"sent": 1, "skipped": 0, "failed": 0}
+    assert app.daily_backup({"only_email": "desligado@example.com"}, None) == {"sent": 0, "skipped": 0, "failed": 0}
+    assert app.daily_backup("texto", None)["sent"] == 1
     from moto.core import DEFAULT_ACCOUNT_ID
     from moto.ses.models import ses_backends
     sent = ses_backends[DEFAULT_ACCOUNT_ID]["eu-west-1"].sent_messages
-    assert len(sent) == 1
+    assert len(sent) == 3   # o envio normal + o teste para um email + o evento estranho
     raw = sent[0].raw_data if hasattr(sent[0], "raw_data") else str(sent[0])
     assert "To: ativo@example.com" in raw and "BACKUP Ledger dia 04/10/2026" in raw
     assert "ledger-patrimonio-2026-10-04.csv" in raw
+
+
+def test_bank_formats_are_saved_and_validated(table):
+    """As colunas escolhidas para os CSV de um banco ficam guardadas; colunas inválidas dão erro."""
+    acc = save([{"kind": "account", "name": "Banco X", "opening_balance": 0, "opening_date": "2026-01-01"}])["saved"][0]["id"]
+    cols = {"date": 0, "desc": 2, "amount": 3, "debit": -1, "credit": -1, "balance": 4}
+    f = save([{"kind": "bank_format", "name": "Banco X", "signature": "data|data valor|descricao|montante|saldo",
+               "columns": cols, "account_id": acc}])["saved"][0]
+    assert f["id"].startswith("BFMT_") and f["columns"] == cols and f["account_id"] == acc
+    _, d = call("GET /data")
+    assert [x["name"] for x in d["bank_formats"]] == ["Banco X"]
+    # atualizar mantém o id
+    assert save([dict(f, name="Banco Y")])["saved"][0]["id"] == f["id"]
+    for bad in ({"date": -1, "amount": 3}, {"date": 0}, {"date": "0", "amount": 1}, {"date": 0, "amount": 100}, {"date": 0, "amount": True}, "x"):
+        status, _ = call("POST /items", body={"items": [{"kind": "bank_format", "name": "B", "signature": "s", "columns": bad}]})
+        assert status == 400, bad
+    # o backup não inclui os formatos (não são dados financeiros)
+    assert not any("Banco Y" in content for _, content in app.backup_files("u1", "2026-10-04"))
 
 
 def test_request_size_limit(table):

@@ -1,16 +1,17 @@
 // ── calc.js: todos os números que a app mostra são calculados aqui, a partir dos dados em bruto ──
 // O backend só guarda e devolve os registos; saldos, ganhos e dívidas são calculados no browser.
-// D = { accounts, transactions, investments, inv_moves, valuations, loans, loan_balances, properties }
+// D = { accounts, transactions, investments, inv_moves, valuations, loans, loan_balances, properties, bank_formats }
 // é a cópia local de tudo o que veio de GET /data (uma lista por tipo de item).
 
 let D = emptyData();
 function emptyData() {
-  return { accounts: [], transactions: [], investments: [], inv_moves: [], valuations: [], loans: [], loan_balances: [], properties: [] };
+  return { accounts: [], transactions: [], investments: [], inv_moves: [], valuations: [], loans: [], loan_balances: [], properties: [],
+    bank_formats: [] };   // bank_formats: colunas escolhidas para os CSV de cada banco (ver bank.js)
 }
 // Tipo de item -> nome da lista em D (o mesmo mapa que existe no backend)
 const COLLECTION_OF = {
   account: 'accounts', transaction: 'transactions', investment: 'investments', inv_move: 'inv_moves',
-  valuation: 'valuations', loan: 'loans', loan_balance: 'loan_balances', property: 'properties',
+  valuation: 'valuations', loan: 'loans', loan_balance: 'loan_balances', property: 'properties', bank_format: 'bank_formats',
 };
 
 /**

@@ -1,4 +1,4 @@
-// ── bank.js: importação de extratos bancários em CSV (CGD Caixadirecta) ──
+// ── bank.js: importação de extratos bancários em CSV (Caixadirecta e outros bancos) ──
 // Em «Consultar saldos e movimentos» (à ordem ou poupança), o ícone do Excel da versão web da
 // Caixadirecta descarrega um CSV com ";" (em windows-1252) que começa com umas linhas sobre a conta:
 //   Consultar saldos e movimentos à ordem - 04-10-2026
@@ -89,6 +89,168 @@ function parseCgdCsv(text) {
   };
 }
 
+// ── outros bancos: CSV genérico ──
+// Para extratos de outros bancos, parecidos com o da Caixadirecta: umas linhas de título (opcionais),
+// uma linha de cabeçalho e uma linha por movimento, com a data, a descrição e o valor (numa coluna
+// com sinal, ou em Débito e Crédito) e, se houver, o saldo depois do movimento. As colunas são
+// reconhecidas pelos nomes habituais, em português e em inglês (Revolut, N26...); na pré-visualização
+// podem ser corrigidas, e a escolha fica guardada para esse formato de ficheiro (bank_format na API).
+
+// Nomes de coluna habituais (sem acentos, em minúsculas), por ordem de preferência.
+// Um nome serve se for igual ao da coluna ou se a coluna começar por ele ("descricao do movimento").
+const BANK_COLUMNS = {
+  date: ['data mov', 'data do mov', 'data lanc', 'data de lanc', 'data da oper', 'data oper', 'data trans', 'data contab',
+         'booking date', 'transaction date', 'completed date', 'started date', 'date', 'data'],
+  debit: ['debito', 'debit', 'saida', 'paid out', 'money out', 'levantamento'],
+  credit: ['credito', 'credit', 'entrada', 'paid in', 'money in', 'deposito'],
+  balance: ['saldo contab', 'saldo apos', 'saldo final', 'saldo atual', 'running balance', 'balance', 'saldo'],
+  amount: ['montante', 'valor', 'amount', 'importancia', 'quantia'],
+  desc: ['descricao', 'descritivo', 'description', 'detalhe', 'movimento', 'payee', 'merchant', 'beneficiario',
+         'counterparty', 'contraparte', 'referencia', 'reference', 'payment reference', 'nome', 'texto', 'observac', 'narrative'],
+};
+// As colunas que se podem escolher na pré-visualização (as outras são só reconhecidas automaticamente)
+const BANK_MAPPED = ['date', 'desc', 'amount', 'debit', 'credit', 'balance'];
+
+/** Colunas de um cabeçalho: { date, desc, amount, debit, credit, balance, sign, fee, state, currency } (-1 = não há). */
+function guessBankColumns(header) {
+  const h = header.map(c => norm(c).replace(/\s+/g, ' '));
+  const used = new Set();
+  const take = (names, exact = false) => {
+    for (const n of names) {
+      const i = h.findIndex((c, j) => !used.has(j) && c && (c === n || (!exact && c.startsWith(n))));
+      if (i >= 0) { used.add(i); return i; }
+    }
+    return -1;
+  };
+  // uma coluna "D/C" ou "Débito/Crédito" é o sinal, não o débito: fica reservada primeiro
+  const sign = take(['d/c', 'debito/credito', 'credito/debito', 'natureza', 'sinal'], true);
+  const cols = {};
+  for (const role of ['date', 'debit', 'credit', 'balance', 'amount', 'desc']) cols[role] = take(BANK_COLUMNS[role]);
+  cols.sign = sign >= 0 ? sign : take(['tipo de movimento', 'tipo', 'type'], true); // só conta se os valores forem D/C
+  cols.fee = take(['fee'], true);                       // comissão à parte (Revolut)
+  cols.state = take(['state', 'estado', 'status'], true); // pendente / anulado...
+  cols.currency = take(['moeda', 'currency', 'divisa'], true);
+  return cols;
+}
+
+/** Data num extrato: dd-mm-aaaa, dd/mm/aaaa, dd.mm.aaaa, dd/mm/aa, aaaa-mm-dd ou aaaa/mm/dd (com ou sem hora). */
+function bankDate(s) {
+  const t = String(s ?? '').trim().split(/[ T]/)[0];
+  let m;
+  if ((m = t.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/))) return parseDateFlexible(`${m[1]}-${m[2]}-${m[3]}`);
+  if ((m = t.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2})$/))) return parseDateFlexible(`${m[1]}/${m[2]}/20${m[3]}`);
+  return parseDateFlexible(t);
+}
+
+/** Valor num extrato: "1.234,56", "-12.50", "12,50 EUR", "€ 3,20", "(5,00)" ou "5,00-" (negativos). null se não houver. */
+function bankMoney(s) {
+  let t = String(s ?? '').trim().replace(/[−–]/g, '-');
+  if (!t) return null;
+  const neg = /^\(.*\)$/.test(t) || /-$/.test(t);
+  t = t.replace(/[^\d,.\-+]/g, '').replace(/-$/, '');
+  if (!/\d/.test(t)) return null;
+  const v = parseNum(t);
+  return isNaN(v) ? null : neg ? -Math.abs(v) : v;
+}
+
+/**
+ * Procura num CSV de um banco a linha de cabeçalho (nas primeiras 30) com data e valor, e as colunas.
+ * Experimenta os separadores ; , e tab e fica com o que der mais colunas.
+ * Devolve { rows, hi (posição do cabeçalho), header, cols, signature, number (conta/IBAN, se aparecer em cima) } ou null.
+ */
+function genericBankLayout(text) {
+  let best = null;
+  for (const delim of [';', ',', '\t']) {
+    const rows = parseCSV(text, delim);
+    for (let i = 0; i < Math.min(rows.length, 30); i++) {
+      if (rows[i].filter(c => c.trim()).length < 3) continue;
+      const cols = guessBankColumns(rows[i]);
+      if (cols.date < 0 || (cols.amount < 0 && cols.debit < 0 && cols.credit < 0)) continue;
+      if (!rows.slice(i + 1).some(r => bankDate(r[cols.date]))) continue; // tem de haver movimentos por baixo
+      if (!best || rows[i].length > best.header.length) best = { rows, hi: i, header: rows[i], cols };
+      break;
+    }
+  }
+  if (!best) return null;
+  // sem coluna de descrição reconhecida: a coluna de texto mais comprida que ainda não tem papel
+  if (best.cols.desc < 0) {
+    const taken = new Set(Object.values(best.cols));
+    const data = best.rows.slice(best.hi + 1, best.hi + 51);
+    let top = 0;
+    best.header.forEach((_, j) => {
+      if (taken.has(j)) return;
+      const texts = data.map(r => (r[j] || '').trim()).filter(c => c && bankMoney(c) === null && !bankDate(c));
+      const avg = texts.reduce((n, c) => n + c.length, 0) / Math.max(data.length, 1);
+      if (avg > top) { top = avg; best.cols.desc = j; }
+    });
+  }
+  best.signature = best.header.map(c => norm(c)).join('|').slice(0, 500);
+  // número da conta ou IBAN nas linhas de cima (para juntar ficheiros da mesma conta e reconhecê-la)
+  for (const cell of best.rows.slice(0, best.hi).flat()) {
+    const m = cell.match(/\b[A-Z]{2}\d{2}(?: ?\d{4}){4,7}(?: ?\d{1,4})?\b/) || cell.match(/\b\d{9,}\b/);
+    if (m) { best.number = m[0].replace(/ /g, ''); break; }
+  }
+  return best;
+}
+
+/**
+ * Extrato de outro banco → o mesmo formato do parseCgdCsv, com as colunas escolhidas (cols) e o nome
+ * da conta (name). Os valores vêm do Débito/Crédito ou da coluna com sinal (com uma coluna D/C, se houver);
+ * linhas pendentes ou anuladas ficam de fora. Os saldos só se usam se baterem com os valores.
+ */
+function buildGenericStatement(layout, cols, name) {
+  if (cols.date < 0) throw new Error('Escolhe a coluna da data');
+  if (cols.amount < 0 && cols.debit < 0 && cols.credit < 0) throw new Error('Escolhe a coluna do valor (ou as do débito e do crédito)');
+  const cell = (r, i) => (i >= 0 ? r[i] ?? '' : '');
+  const data = layout.rows.slice(layout.hi + 1).filter(r => bankDate(cell(r, cols.date)));
+  const signOf = v => {
+    const n = norm(v);
+    return ['d', 'db', 'deb', 'debito', 'debit', '-', 'saida'].includes(n) ? -1 : ['c', 'cr', 'cred', 'credito', 'credit', '+', 'entrada'].includes(n) ? 1 : 0;
+  };
+  const useSign = cols.sign >= 0 && data.length && data.every(r => signOf(cell(r, cols.sign)) !== 0);
+  const warnings = [], currencies = new Set();
+  let raw = [];
+  for (const r of data) {
+    if (cols.state >= 0 && /pend|revert|declin|fail|cancel|anulad|recusad/.test(norm(cell(r, cols.state)))) continue;
+    const debit = bankMoney(cell(r, cols.debit)), credit = bankMoney(cell(r, cols.credit));
+    let amount = debit !== null || credit !== null ? round2(Math.abs(credit || 0) - Math.abs(debit || 0)) : bankMoney(cell(r, cols.amount));
+    if (amount !== null && useSign && debit === null && credit === null) amount = Math.abs(amount) * signOf(cell(r, cols.sign));
+    if (amount !== null && cols.fee >= 0) amount = round2(amount - Math.abs(bankMoney(cell(r, cols.fee)) || 0));
+    const cur = cell(r, cols.currency).trim().toUpperCase();
+    if (cur && !['EUR', '€'].includes(cur)) currencies.add(cur);
+    raw.push({ date: bankDate(cell(r, cols.date)), description: cell(r, cols.desc).replace(/\s+/g, ' ').trim(), cgdCategory: '',
+      amount, balance: cols.balance >= 0 ? bankMoney(cell(r, cols.balance)) : null });
+  }
+  // do mais antigo para o mais recente (muitos bancos põem o mais recente em cima)
+  if (raw.length > 1 && raw[0].date > raw[raw.length - 1].date) raw.reverse();
+  // saldos: só se todas as linhas tiverem e se baterem com os valores (o "saldo disponível" muitas vezes não bate)
+  if (raw.some(r => r.balance === null)) raw.forEach(r => { r.balance = null; });
+  let checks = 0, wrong = [];
+  for (let i = 1; i < raw.length; i++) {
+    if (raw[i].balance === null) break;
+    const diff = round2(raw[i].balance - raw[i - 1].balance);
+    checks++;
+    if (raw[i].amount === null) raw[i].amount = diff;
+    else if (cents(diff) !== cents(raw[i].amount)) wrong.push([raw[i], diff]);
+  }
+  if (checks && wrong.length > Math.max(1, checks * 0.1)) {
+    raw.forEach(r => { r.balance = null; });
+    warnings.push('Os saldos do ficheiro não batem com os valores (talvez seja o saldo disponível): não foram usados');
+  } else {
+    for (const [r, diff] of wrong) warnings.push(`${dateLabel(r.date)} ${r.description}: o valor (${eurSigned(r.amount)}) não bate com a diferença de saldos (${eurSigned(diff)})`);
+  }
+  for (const r of raw.filter(r => r.amount === null)) warnings.push(`${dateLabel(r.date)} ${r.description}: sem valor`);
+  if (currencies.size) warnings.push(`Há movimentos em ${[...currencies].join(', ')}: os valores foram importados como estão, sem conversão para euros`);
+  raw = raw.filter(r => r.amount);
+  if (!raw.length) throw new Error('Não encontrei movimentos com data e valor nestas colunas');
+  const first = raw[0], last = raw[raw.length - 1];
+  return {
+    bank: 'outro', number: layout.number || 'csv:' + norm(name), shownNumber: layout.number || '', product: name, accountName: name,
+    savings: /poupan|saving/.test(norm(name)), from: first.date, to: last.date, rows: raw,
+    opening: first.balance === null ? null : round2(first.balance - first.amount), closing: last.balance, warnings, signature: layout.signature,
+  };
+}
+
 // ── categorias ──
 // Regras para adivinhar a categoria pela descrição. Ganha a primeira que bater certo.
 // São testadas na descrição sem espaços (ver compactDesc), em minúsculas e sem acentos.
@@ -154,7 +316,8 @@ const isTransferDesc = s => /^transfer/.test(compactDesc(s));
 
 // ── plano de importação ──
 // Nome sugerido para a conta na app, a partir do produto (ex.: "CGD à ordem")
-const bankAccountName = st => 'CGD ' + st.product.replace(/^conta\s+/i, '').replace(/^à\s+/i, 'à ');
+// (os extratos de outros bancos trazem o nome escolhido na pré-visualização em accountName)
+const bankAccountName = st => st.accountName || 'CGD ' + st.product.replace(/^conta\s+/i, '').replace(/^à\s+/i, 'à ');
 
 /**
  * Extratos lidos → plano para o runBankImport (nada é gravado aqui: é só a pré-visualização).
@@ -170,27 +333,48 @@ function planBankImport(statements, choice = {}, fixOpening = {}) {
   // uma entrada por conta bancária (vários ficheiros da mesma conta são juntos)
   const byNumber = new Map();
   for (const st of statements) {
-    if (!byNumber.has(st.number)) byNumber.set(st.number, { number: st.number, product: st.product, savings: st.savings, rows: [], warnings: [] });
+    if (!byNumber.has(st.number)) byNumber.set(st.number, { number: st.number, shown: st.shownNumber ?? st.number, product: st.product,
+      accountName: st.accountName, savings: st.savings, parts: [], warnings: [] });
     const acc = byNumber.get(st.number);
-    acc.rows.push(...st.rows);
+    acc.parts.push(st.rows);
     acc.warnings.push(...st.warnings);
   }
   for (const acc of byNumber.values()) {
-    // o mesmo movimento em dois ficheiros sobrepostos tem a mesma data, valor e saldo depois dele: fica só um
-    const seen = new Set();
-    acc.rows = acc.rows.filter(r => { const k = `${r.date}|${cents(r.amount)}|${cents(r.balance)}`; return seen.has(k) ? false : seen.add(k); })
-      .sort((a, b) => a.date.localeCompare(b.date));
-    // movimento mais antigo: aquele cujo saldo "antes" não é o saldo "depois" de outro do mesmo dia
-    // (dá o saldo inicial; o mesmo raciocínio ao contrário dá o saldo final)
-    const first = acc.rows[0].date;
-    const firstDay = acc.rows.filter(r => r.date === first);
-    const after = new Set(firstDay.map(r => cents(r.balance)));
-    const oldest = firstDay.find(r => !after.has(cents(r.balance - r.amount))) || firstDay[0];
-    acc.opening = round2(oldest.balance - oldest.amount);
-    acc.from = first; acc.to = acc.rows[acc.rows.length - 1].date;
-    const lastDay = acc.rows.filter(r => r.date === acc.to);
-    const before = new Set(lastDay.map(r => cents(r.balance - r.amount)));
-    acc.closing = (lastDay.find(r => !before.has(cents(r.balance))) || lastDay[lastDay.length - 1]).balance;
+    acc.noBalance = acc.parts.some(rows => rows.some(r => r.balance === null || r.balance === undefined));
+    if (!acc.noBalance) {
+      // o mesmo movimento em dois ficheiros sobrepostos tem a mesma data, valor e saldo depois dele: fica só um
+      const seen = new Set();
+      acc.rows = acc.parts.flat().filter(r => { const k = `${r.date}|${cents(r.amount)}|${cents(r.balance)}`; return seen.has(k) ? false : seen.add(k); });
+    } else {
+      // sem saldos, dois movimentos iguais no mesmo dia (dois cafés) só se distinguem pela quantidade:
+      // fica, para cada data + valor + descrição, o ficheiro que tiver mais (ficheiros sobrepostos não duplicam)
+      const best = new Map();
+      for (const rows of acc.parts) {
+        const mine = new Map();
+        for (const r of rows) {
+          const k = `${r.date}|${cents(r.amount)}|${compactDesc(r.description)}`;
+          if (!mine.has(k)) mine.set(k, []);
+          mine.get(k).push(r);
+        }
+        for (const [k, list] of mine) if (!best.has(k) || best.get(k).length < list.length) best.set(k, list);
+      }
+      acc.rows = [...best.values()].flat();
+    }
+    acc.rows.sort((a, b) => a.date.localeCompare(b.date));
+    acc.from = acc.rows[0].date; acc.to = acc.rows[acc.rows.length - 1].date;
+    if (acc.noBalance) {
+      acc.opening = acc.closing = null; // sem saldos não se sabe o saldo inicial nem o final
+    } else {
+      // movimento mais antigo: aquele cujo saldo "antes" não é o saldo "depois" de outro do mesmo dia
+      // (dá o saldo inicial; o mesmo raciocínio ao contrário dá o saldo final)
+      const firstDay = acc.rows.filter(r => r.date === acc.from);
+      const after = new Set(firstDay.map(r => cents(r.balance)));
+      const oldest = firstDay.find(r => !after.has(cents(r.balance - r.amount))) || firstDay[0];
+      acc.opening = round2(oldest.balance - oldest.amount);
+      const lastDay = acc.rows.filter(r => r.date === acc.to);
+      const before = new Set(lastDay.map(r => cents(r.balance - r.amount)));
+      acc.closing = (lastDay.find(r => !before.has(cents(r.balance))) || lastDay[lastDay.length - 1]).balance;
+    }
 
     // Conta da app a usar: a escolhida, ou a que tiver o nome sugerido, ou criar uma nova
     acc.defaultName = bankAccountName(acc);
@@ -199,7 +383,7 @@ function planBankImport(statements, choice = {}, fixOpening = {}) {
     acc.key = acc.choice === 'new' ? 'new:' + acc.defaultName : acc.choice;
     // Para uma conta existente, compara o saldo da app com o do banco no dia antes do extrato;
     // se forem diferentes, propõe acertar o saldo inicial da conta.
-    if (acc.choice !== 'new' && acc.choice !== 'skip') {
+    if (acc.choice !== 'new' && acc.choice !== 'skip' && acc.opening !== null) {
       const a = findById('accounts', acc.choice);
       const dayBefore = addDays(acc.from, -1);
       acc.appOpening = a && a.opening_date > dayBefore && !D.transactions.some(t => t.date <= dayBefore && (t.account_id === a.id || t.to_account_id === a.id))
@@ -207,8 +391,8 @@ function planBankImport(statements, choice = {}, fixOpening = {}) {
       acc.diff = round2(acc.opening - acc.appOpening);
       acc.fixOpening = fixOpening[acc.number] ?? true;
       if (acc.diff && acc.fixOpening && a) {
-        plan.updates.push({ kind: 'account', id: a.id, name: a.name, acc_type: a.acc_type,
-          opening_balance: round2(a.opening_balance + acc.diff), opening_date: a.opening_date < acc.from ? a.opening_date : acc.from });
+        plan.updates.push({ ...a, kind: 'account', opening_balance: round2(a.opening_balance + acc.diff),
+          opening_date: a.opening_date < acc.from ? a.opening_date : acc.from });
       }
     }
     plan.accounts.push(acc);
@@ -288,9 +472,15 @@ async function runBankImport(plan, onProgress) {
   const news = plan.accounts.filter(a => a.choice === 'new');
   if (news.length) {
     applyChanges(await api.save(news.map(a => ({ kind: 'account', name: a.defaultName, acc_type: a.savings ? 'Poupança' : 'Conta à ordem',
-      opening_balance: a.opening, opening_date: a.from }))));
+      opening_balance: a.opening ?? 0, opening_date: a.from }))));
   }
   const accId = name => D.accounts.find(a => norm(a.name) === norm(name))?.id;
+  // colunas escolhidas para cada formato de outro banco (e a conta da app), para a próxima vez
+  const formats = (plan.formats || []).map(f => {
+    const acc = plan.accounts.find(a => a.number === f.number);
+    const account = !acc || acc.choice === 'skip' ? null : acc.choice === 'new' ? accId(acc.defaultName) : acc.choice;
+    return { kind: 'bank_format', id: f.id, name: f.name, signature: f.signature, columns: f.columns, ...(account ? { account_id: account } : {}) };
+  });
   const items = plan.items.map(raw => {
     const it = { ...raw };
     if (it._acc) it.account_id = accId(it._acc);
@@ -298,7 +488,7 @@ async function runBankImport(plan, onProgress) {
     delete it._acc; delete it._to;
     return it;
   });
-  const res = await api.save([...plan.updates, ...items], [], onProgress);
+  const res = await api.save([...plan.updates, ...formats, ...items], [], onProgress);
   applyChanges(res);
   return { saved: items.length, updated: plan.updates.filter(u => u.kind === 'transaction').length, skipped: plan.skipped, parents: news.length };
 }
@@ -312,10 +502,13 @@ function bankPreviewHTML(plan) {
   ].join('');
   const accounts = plan.accounts.map(acc => `
     <div style="margin-bottom:10px">
-      <b>${esc(acc.product)}</b> · ${esc(acc.number)} · ${dateLabel(acc.from)} a ${dateLabel(acc.to)} · ${acc.rows.length} movimentos<br>
+      <b>${esc(acc.product)}</b>${acc.shown ? ` · ${esc(acc.shown)}` : ''} · ${dateLabel(acc.from)} a ${dateLabel(acc.to)} · ${acc.rows.length} movimentos<br>
       <div class="field" style="margin:6px 0;max-width:320px"><label>Conta na app</label><select data-bank-acc="${esc(acc.number)}">${accOpts(acc)}</select></div>
-      ${acc.choice === 'new' ? `Saldo inicial: <b>${eur(acc.opening)}</b> a ${dateLabel(acc.from)}, saldo no fim: ${eur(acc.closing)}`
-        : acc.choice === 'skip' ? '' : acc.diff
+      ${acc.choice === 'skip' ? '' : acc.opening === null
+        ? (acc.choice === 'new' ? 'O ficheiro não tem saldos: a conta nova começa com saldo inicial 0 (podes acertá-lo depois em ✎).'
+          : 'O ficheiro não tem saldos: não dá para conferir o saldo da conta com o do banco.')
+        : acc.choice === 'new' ? `Saldo inicial: <b>${eur(acc.opening)}</b> a ${dateLabel(acc.from)}, saldo no fim: ${eur(acc.closing)}`
+        : acc.diff
         ? `<label class="check"><input type="checkbox" data-bank-fix="${esc(acc.number)}" ${acc.fixOpening ? 'checked' : ''}>
            Acertar o saldo: a app tem ${eur(acc.appOpening)} antes de ${dateLabel(acc.from)}, o banco ${eur(acc.opening)} (${eurSigned(acc.diff)})</label>`
         : `Saldo antes de ${dateLabel(acc.from)} bate com o banco (${eur(acc.opening)}) ✓`}

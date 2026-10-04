@@ -46,8 +46,17 @@ function toCSV(header, rows) {
 }
 
 // ── FORMATOS ──────────────────────────────────────────────────────────────
-// Os quatro formatos próprios da app: cabeçalho das colunas e linhas de exemplo (usadas nos modelos)
+// Os formatos próprios da app: cabeçalho das colunas e linhas de exemplo (usadas nos modelos).
+// "Contas" vem primeiro: guarda o tipo e o saldo inicial de cada conta, que os movimentos não têm.
 const FORMATS = {
+  acc: {
+    label: 'Contas',
+    header: ['Conta', 'Tipo de conta', 'Saldo inicial', 'Data do saldo inicial'],
+    example: [
+      ['Conta principal', 'Conta à ordem', 1250, '2024-01-01'],
+      ['Poupança', 'Poupança', 5000, '2024-01-01'],
+    ],
+  },
   mov: {
     label: 'Movimentos',
     header: ['Data', 'Conta', 'Tipo', 'Categoria', 'Descrição', 'Valor', 'Conta destino', 'Aproximado'],
@@ -84,8 +93,11 @@ const FORMATS = {
   },
 };
 
-// Converte os dados da app em linhas de CSV para um formato ('mov', 'inv', 'loan' ou 'prop')
+// Converte os dados da app em linhas de CSV para um formato ('acc', 'mov', 'inv', 'loan' ou 'prop')
 function exportRows(format) {
+  if (format === 'acc') {
+    return sortByName(D.accounts).map(a => [a.name, a.acc_type, a.opening_balance, a.opening_date]);
+  }
   if (format === 'mov') {
     return [...D.transactions].sort((a, b) => a.date.localeCompare(b.date)).map(t => [
       t.date, accountName(t.account_id), DIRECTION_LABEL[t.direction], t.category, t.description, t.amount,
@@ -126,12 +138,12 @@ function exportCSV(format) {
   toast(`${FORMATS[format].label}: ${rows.length} linhas exportadas`);
 }
 
-// Botão "Backup": descarrega os 4 CSV (movimentos, investimentos, créditos, património) de uma vez.
+// Botão "Backup": descarrega os 5 CSV (contas, movimentos, investimentos, créditos, património) de uma vez.
 // O envio por email é automático, uma vez por dia, para quem ligar o "Backup diário" (ver app.js);
 // esses CSV são gerados no backend (backup_rows no app.py) com as mesmas colunas.
 function exportAll() {
   let files = 0;
-  for (const f of ['mov', 'inv', 'loan', 'prop']) {
+  for (const f of ['acc', 'mov', 'inv', 'loan', 'prop']) {
     const rows = exportRows(f);
     if (!rows.length) continue;
     download(`ledger-${FORMATS[f].label.toLowerCase()}-${todayISO()}.csv`, toCSV(FORMATS[f].header, rows));
@@ -147,7 +159,7 @@ function downloadTemplate(format) {
 
 // ── IMPORTAR: transformar linhas de CSV em itens ─────────────────────────
 // Descobre o formato do ficheiro pelas colunas do cabeçalho (sem acentos e em minúsculas).
-// Devolve 'mov', 'inv', 'loan', 'prop', 'legacy' (app antiga), um dos formatos DEGIRO, ou null.
+// Devolve 'acc', 'mov', 'inv', 'loan', 'prop', 'legacy' (app antiga), um dos formatos DEGIRO, ou null.
 function detectFormat(header) {
   const h = header.map(norm);
   // Exportações do DEGIRO (interface em português)
@@ -157,6 +169,7 @@ function detectFormat(header) {
   if (h.includes('operacao') && h.includes('investimento')) return 'inv';
   if (h.includes('credito') && (h.includes('saldo em divida') || h.includes('mes'))) return 'loan';
   if (h.includes('imovel') && h.includes('valor atual')) return 'prop';
+  if (h.includes('conta') && h.some(x => x.startsWith('saldo inicial'))) return 'acc';
   if (h.includes('conta') && h.includes('tipo') && h.includes('valor')) return 'mov';
   if (h.includes('date') && h.includes('type') && h.some(x => x.startsWith('amount'))) return 'legacy';
   return null;
@@ -303,6 +316,21 @@ function planImport(text) {
       const extra = parseNum(get(r, 'Amortiza'));
       if (get(r, 'Amortiza') && !(extra >= 0)) return err('amortização extra inválida');
       plan.items.push({ kind: 'loan_balance', _loan: name, month, balance, payment: payment >= 0 ? payment : null, extra: extra > 0 ? extra : null });
+    }
+
+    if (format === 'acc') {
+      // Contas: uma linha por conta. Uma conta com o mesmo nome é atualizada (tipo e saldo inicial),
+      // por isso tanto faz importar este ficheiro antes ou depois dos movimentos.
+      const name = get(r, 'Conta');
+      if (!name) return err('falta o nome da conta');
+      const opening = parseNum(get(r, 'Saldo inicial'));
+      if (isNaN(opening)) return err('saldo inicial inválido');
+      const dateRaw = get(r, 'Data do saldo inicial');
+      const date = dateRaw ? parseDateFlexible(dateRaw) : todayISO();
+      if (!date) return err('data do saldo inicial inválida');
+      const existing = D.accounts.find(a => norm(a.name) === norm(name));
+      plan.items.push({ kind: 'account', id: existing?.id, name, acc_type: get(r, 'Tipo de conta') || existing?.acc_type || 'Conta à ordem',
+        opening_balance: opening, opening_date: date });
     }
 
     if (format === 'prop') {
@@ -498,20 +526,23 @@ async function runImport(plan, skipDuplicates, onProgress) {
 
 // Abre a janela "Importar": escolher/arrastar ficheiros, pré-visualizar o plano e confirmar.
 // CSV da app (backup, modelos, DEGIRO...) -> planImport/runImport
-// CSV da Caixadirecta (extrato de movimentos) -> parseCgdCsv/planBankImport/runBankImport (bank.js)
+// Extratos: Caixadirecta -> parseCgdCsv; outros bancos -> genericBankLayout/buildGenericStatement;
+// depois planBankImport/runBankImport (bank.js)
 function openImport(defaultFormat) {
   let plan = null;
   const body = document.createElement('div');
   body.style.cssText = 'display:flex;flex-direction:column;gap:14px';
   body.innerHTML = `
     <div class="modal-hint">
-      Importa um backup, dados antigos ou os movimentos da Caixadirecta: em «Consultar saldos e movimentos» (à ordem ou poupança),
-      descarrega o CSV no ícone do Excel; podes largar vários de uma vez. Reconheço automaticamente o tipo de ficheiro
-      (Caixadirecta, Movimentos, Investimentos, Créditos, Património, DEGIRO ou o formato da versão antiga). Aceita separador <b>;</b> ou <b>,</b>,
+      Importa um backup, dados antigos ou os movimentos do banco: da Caixadirecta («Consultar saldos e movimentos», ícone do Excel)
+      ou o CSV de movimentos de outro banco (confirmas as colunas na pré-visualização); podes largar vários de uma vez.
+      Reconheço automaticamente o tipo de ficheiro (extratos, Contas, Movimentos, Investimentos, Créditos, Património,
+      DEGIRO ou o formato da versão antiga). Aceita separador <b>;</b> ou <b>,</b>,
       datas <b>AAAA-MM-DD</b> ou <b>DD/MM/AAAA</b> e valores como <b>1.234,56</b>.
     </div>
     <div class="templates">
       <span class="modal-hint">Descarregar modelo:</span>
+      <button class="link-btn" data-t="acc">Contas</button>
       <button class="link-btn" data-t="mov">Movimentos</button>
       <button class="link-btn" data-t="inv">Investimentos</button>
       <button class="link-btn" data-t="loan">Créditos</button>
@@ -533,8 +564,9 @@ function openImport(defaultFormat) {
     catch { return new TextDecoder('windows-1252').decode(buf); }
   };
 
-  // Ficheiros escolhidos: extratos da Caixadirecta (um ou vários, mesmo de contas diferentes)
-  // ou um CSV da app (só o primeiro). Os dois tipos não se misturam na mesma importação.
+  // Ficheiros escolhidos. Cada um é: um extrato da Caixadirecta, um CSV da app (backup, modelos, DEGIRO...)
+  // ou um extrato de outro banco (CSV genérico). Os extratos (de um ou vários bancos) importam-se juntos;
+  // os CSV da app importam-se à parte (só o primeiro).
   const readFiles = async list => {
     const files = [...(list || [])];
     if (!files.length) return;
@@ -545,28 +577,87 @@ function openImport(defaultFormat) {
     plan = null;
     try {
       const texts = await Promise.all(files.map(decode));
-      const statements = texts.map(parseCgdCsv);
-      const isBank = statements.some(Boolean);
+      const kinds = texts.map((text, i) => {
+        const st = parseCgdCsv(text);
+        if (st) return { st };
+        const rows = parseCSV(text);
+        if (rows.length && detectFormat(rows[0])) return { app: true };
+        const layout = genericBankLayout(text);
+        return layout ? { layout, fileName: files[i].name } : { unknown: files[i].name };
+      });
+      const unknown = kinds.find(k => k.unknown);
+      if (unknown) throw new Error(`Não reconheci «${unknown.unknown}». Os extratos têm de ter uma linha de cabeçalho com a data e o valor (ou o débito e o crédito); os outros CSV têm de seguir um dos modelos.`);
+      const isBank = kinds.some(k => !k.app);
       // nos extratos os repetidos são sempre ignorados (comparando data, conta e valor)
       $('#imp-skip', body).closest('label').classList.toggle('hidden', isBank);
       if (!isBank) return showAppCsv(texts[0]);
-      const other = files.find((f, i) => !statements[i]);
-      if (other) throw new Error(`«${other.name}» não é um extrato da Caixadirecta: importa-o à parte`);
-      showBank(statements);
+      const other = files.find((f, i) => kinds[i].app);
+      if (other) throw new Error(`«${other.name}» não é um extrato bancário: importa-o à parte`);
+      showBank(kinds.filter(k => k.st).map(k => k.st), kinds.filter(k => k.layout));
     } catch (e) {
       box.innerHTML = `<span class="err">${esc(e.message)}</span>`;
     }
   };
 
-  // Pré-visualização dos extratos do banco; mudar a conta ou o acerto do saldo volta a calcular o plano
-  const showBank = statements => {
+  // Pré-visualização dos extratos: em cima, as colunas de cada formato de outro banco (podem ser corrigidas);
+  // em baixo, o plano. Mudar uma coluna, o nome, a conta ou o acerto do saldo volta a calcular tudo.
+  const showBank = (cgd, generic) => {
     const box = $('#imp-preview', body);
     const choice = {}, fix = {};
+    // um estado por formato de ficheiro (vários ficheiros do mesmo banco partilham as colunas)
+    const formats = new Map();
+    for (const g of generic) {
+      if (formats.has(g.layout.signature)) continue;
+      const saved = D.bank_formats.find(f => f.signature === g.layout.signature);
+      const cols = { ...g.layout.cols };
+      if (saved) for (const k of BANK_MAPPED) if (saved.columns?.[k] !== undefined) cols[k] = Number(saved.columns[k]);
+      const name = saved?.name || g.fileName.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim().slice(0, 60) || 'Banco';
+      formats.set(g.layout.signature, { cols, name, saved, header: g.layout.header, fileName: g.fileName, preselect: true });
+    }
+    const colSelect = (sig, f, role, label, optional) => `<div class="field"><label>${label}</label>
+      <select data-map-sig="${esc(sig)}" data-map-col="${role}"><option value="-1">${optional ? '— nenhuma —' : '— escolhe —'}</option>
+      ${f.header.map((h, i) => `<option value="${i}" ${f.cols[role] === i ? 'selected' : ''}>${esc(h.trim() || 'coluna ' + (i + 1))}</option>`).join('')}</select></div>`;
     const render = () => {
-      plan = planBankImport(statements, choice, fix);
-      box.innerHTML = `<b>Formato:</b> CGD Caixadirecta (extrato de movimentos)<br>` + bankPreviewHTML(plan);
+      const statements = [...cgd];
+      for (const g of generic) {
+        const f = formats.get(g.layout.signature);
+        try { statements.push(buildGenericStatement(g.layout, f.cols, f.name)); f.error = ''; } catch (e) { f.error = e.message; }
+      }
+      // a conta da app usada da última vez com este formato fica escolhida (só na primeira vez)
+      for (const st of statements) {
+        const f = st.signature && formats.get(st.signature);
+        if (f?.preselect && f.saved?.account_id && D.accounts.some(a => a.id === f.saved.account_id) && !choice[st.number]) choice[st.number] = f.saved.account_id;
+        if (f) f.number = st.number;
+      }
+      formats.forEach(f => { f.preselect = false; });
+      plan = statements.length ? planBankImport(statements, choice, fix) : { format: 'bank', accounts: [], items: [], updates: [], skipped: 0 };
+      plan.formats = [...formats].filter(([, f]) => !f.error).map(([sig, f]) => ({ id: f.saved?.id, signature: sig, name: f.name, number: f.number,
+        columns: Object.fromEntries(BANK_MAPPED.map(k => [k, f.cols[k]])) }));
+      const maps = [...formats].map(([sig, f]) => `
+        <div class="bank-map">
+          <b>«${esc(f.fileName)}»</b> <span class="modal-hint">· ${f.saved ? 'colunas guardadas da última vez' : 'colunas reconhecidas automaticamente: confirma'}</span>
+          <div class="map-grid">
+            <div class="field"><label>Nome do banco / conta</label><input data-map-sig="${esc(sig)}" data-map-name maxlength="60" value="${esc(f.name)}"></div>
+            ${colSelect(sig, f, 'date', 'Data', false)}
+            ${colSelect(sig, f, 'desc', 'Descrição', true)}
+            ${colSelect(sig, f, 'amount', 'Valor (com sinal)', true)}
+            ${colSelect(sig, f, 'debit', 'Débito', true)}
+            ${colSelect(sig, f, 'credit', 'Crédito', true)}
+            ${colSelect(sig, f, 'balance', 'Saldo depois do movimento', true)}
+          </div>
+          ${f.error ? `<div class="err">${esc(f.error)}</div>` : ''}
+        </div>`).join('');
+      const label = cgd.length && generic.length ? 'Caixadirecta e outros bancos' : cgd.length ? 'CGD Caixadirecta (extrato de movimentos)' : 'Extrato bancário (CSV)';
+      box.innerHTML = `<b>Formato:</b> ${label}<br>${maps}` + (plan.accounts.length ? bankPreviewHTML(plan) : '');
       box.querySelectorAll('[data-bank-acc]').forEach(sel => sel.addEventListener('change', () => { choice[sel.dataset.bankAcc] = sel.value; render(); }));
       box.querySelectorAll('[data-bank-fix]').forEach(cb => cb.addEventListener('change', () => { fix[cb.dataset.bankFix] = cb.checked; render(); }));
+      box.querySelectorAll('[data-map-col]').forEach(sel => sel.addEventListener('change', () => {
+        formats.get(sel.dataset.mapSig).cols[sel.dataset.mapCol] = Number(sel.value); render();
+      }));
+      box.querySelectorAll('[data-map-name]').forEach(inp => inp.addEventListener('change', () => {
+        const f = formats.get(inp.dataset.mapSig);
+        f.name = inp.value.trim().slice(0, 60) || f.name; render();
+      }));
       $('#imp-go').disabled = !plan.items.length && !plan.updates.length && !plan.accounts.some(a => a.choice === 'new');
     };
     render();
@@ -579,7 +670,7 @@ function openImport(defaultFormat) {
       plan = planImport(text);
       const counts = {};
       for (const it of plan.items) counts[it.kind] = (counts[it.kind] || 0) + 1;
-      const label = { transaction: 'movimentos', inv_move: 'aportes/resgates', valuation: 'valores mensais', loan_balance: 'saldos de crédito', property: 'imóveis' };
+      const label = { account: 'contas', transaction: 'movimentos', inv_move: 'aportes/resgates', valuation: 'valores mensais', loan_balance: 'saldos de crédito', property: 'imóveis' };
       const newP = [
         plan.newAccounts.size && `${plan.newAccounts.size} conta(s) nova(s): ${[...plan.newAccounts.values()].map(a => esc(a.name)).join(', ')}`,
         plan.newInvestments.size && `${plan.newInvestments.size} investimento(s) novo(s): ${[...plan.newInvestments.values()].map(a => esc(a.name)).join(', ')}`,

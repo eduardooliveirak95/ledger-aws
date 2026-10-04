@@ -1,0 +1,78 @@
+# Workflow manual para confirmar o backup diário por email (não corre sozinho).
+# Separador Actions → "Test daily backup" → Run workflow → escolher o que fazer:
+#   enviar-teste      confirma o agendamento (ligado, meia-noite, Europe/Lisbon) e corre já a função do backup,
+#                     mas só para o email do secret ALERT_EMAIL (e só se essa conta tiver o backup ligado)
+#   ver-ultimos-envios  mostra o resultado dos envios das últimas 48 horas (lido dos logs da função)
+# Os logs são públicos: os nomes da função e do agendamento ficam escondidos e só aparecem contagens.
+name: Test daily backup
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: O que fazer
+        type: choice
+        options: [enviar-teste, ver-ultimos-envios]
+        default: enviar-teste
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    name: Daily backup
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write       # OIDC: a mesma role do deploy (só aceita o ramo main)
+    steps:
+      # Esconde o id da role (ver o deploy.yml)
+      - name: Hide the role id in the logs
+        env:
+          ROLE_ID: ${{ secrets.AWS_ROLE_ID }}
+        run: if [ -n "$ROLE_ID" ]; then echo "::add-mask::$ROLE_ID"; fi
+
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a   # v4.3.1
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN || vars.AWS_ROLE_ARN }}
+          aws-region: eu-west-1
+          mask-aws-account-id: true
+
+      # Nomes reais da função e do agendamento (gerados pelo CloudFormation), escondidos nos logs
+      - name: Find the backup function
+        run: |
+          res() { aws cloudformation describe-stack-resource --stack-name ledger --logical-resource-id "$1" \
+            --query StackResourceDetail.PhysicalResourceId --output text; }
+          FN=$(res DailyBackupFunction); SCHEDULE=$(res DailyBackupFunctionMidnight)
+          echo "::add-mask::$FN"; echo "::add-mask::$SCHEDULE"
+          echo "FN=$FN" >> "$GITHUB_ENV"; echo "SCHEDULE=$SCHEDULE" >> "$GITHUB_ENV"
+
+      - name: Check the midnight schedule
+        run: |
+          aws scheduler get-schedule --name "$SCHEDULE" \
+            --query '{Estado: State, Quando: ScheduleExpression, Fuso: ScheduleExpressionTimezone}' --output table
+
+      # Corre a função já, só para o email do dono. Sem repetições (AWS_MAX_ATTEMPTS=1) e com tempo para
+      # a função acabar: uma repetição automática do pedido mandaria o email duas vezes.
+      - name: Send a test backup to the owner
+        if: inputs.action == 'enviar-teste'
+        env:
+          OWNER_EMAIL: ${{ secrets.ALERT_EMAIL || vars.ALERT_EMAIL }}
+          AWS_MAX_ATTEMPTS: "1"
+        run: |
+          jq -nc --arg e "$OWNER_EMAIL" '{only_email: $e}' > payload.json
+          aws lambda invoke --function-name "$FN" --cli-binary-format raw-in-base64-out --cli-read-timeout 150 \
+            --payload file://payload.json out.json > /dev/null
+          jq -r 'if .errorType then "Erro: " + .errorType
+                 else "Enviados: \(.sent) · saltados: \(.skipped) · falhados: \(.failed)" end' out.json
+          jq -e '.sent == 1' out.json > /dev/null || { echo "::warning::Nenhum email enviado: confirma que o backup diário está ligado na app e que o email da conta é o do secret ALERT_EMAIL"; }
+
+      - name: Show the last runs (48 h)
+        run: |
+          START=$(( ($(date +%s) - 172800) * 1000 ))
+          aws logs filter-log-events --log-group-name "/aws/lambda/$FN" --start-time "$START" \
+            --filter-pattern '"daily_backup"' --query 'events[*].[timestamp,message]' --output text |
+          while IFS=$'\t' read -r ts msg; do
+            [ -n "$ts" ] && echo "$(TZ=Europe/Lisbon date -d "@$((ts / 1000))" '+%d/%m %H:%M') (Lisboa)  $msg"
+          done
+          echo "(cada linha é uma execução: as da meia-noite e os testes manuais)"
