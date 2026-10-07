@@ -2,7 +2,7 @@
 
 App de finanças pessoais: contas, investimentos, créditos e imóveis num só sítio, com o património líquido sempre à vista.
 
-Corre na AWS (site estático, login com Cognito, API em Lambda, dados em DynamoDB e backup diário por email com o SES). Cada utilizador só vê os seus próprios dados.
+Corre na AWS (site estático, login com Cognito, API em Lambda, dados em DynamoDB e backup diário por email com o SES). Cada utilizador só vê os seus próprios dados. O Cognito avisa uma Lambda a cada login, e o login fica registado para o administrador.
 
 ## Entrar
 
@@ -11,6 +11,8 @@ O acesso é feito por convite: não há registo público. Recebes um email e uma
 No primeiro login a app pede-te para escolheres uma password tua (mínimo 10 caracteres, com maiúsculas, minúsculas e um número). Para a mudares mais tarde, usa o botão **🔑 Password** no topo.
 
 Por segurança, a sessão só dura enquanto o separador estiver aberto: num separador novo ou ao reabrir o browser (mesmo com os separadores restaurados) tens de entrar outra vez. Recarregar a página não te tira da conta.
+
+Cada login fica registado (quem entrou e quando) durante 90 dias. Só o administrador vê esse registo.
 
 ## Separadores
 
@@ -38,6 +40,15 @@ As saídas nas categorias **Investimentos** e **Amortizações** (ou outra come�
 ### Património
 
 Em **+ Imóvel** basta o nome e o valor atual. O preço de compra e o crédito associado são opcionais e servem para ver a valorização e a parte da casa que já é tua.
+
+### Utilizadores (só administradores)
+
+As contas de administrador têm o selo **Admin** ao lado do email e um separador a mais, **Utilizadores**:
+
+- todas as contas, com o estado (ativa, com password temporária ou desativada), a data em que foram criadas, o último login e quantos logins fizeram;
+- os últimos 200 logins de todos, com a data e a hora de Portugal, e um filtro por utilizador.
+
+O administrador não vê os dados financeiros de ninguém. Renovar a sessão sem pedir a password não conta como login, e os logins anteriores a esta funcionalidade não aparecem.
 
 ## Importar e fazer backup
 

@@ -204,6 +204,8 @@ table.data .date { font-family: var(--mono); font-size: 12px; color: var(--muted
 .badge.transfer { background: rgba(57,135,229,.15); color: #7fb2f0; }
 .badge.approx { background: rgba(245,200,66,.12); color: var(--accent); margin-left: 6px; }
 .badge.extra { background: rgba(25,158,112,.15); color: #4cc79c; margin-left: 6px; }
+/* Selo "Admin": ao lado do email no topo e na lista do separador Utilizadores (só administradores) */
+.badge.admin { background: rgba(245,200,66,.12); color: var(--accent); }
 /* Linha de total de cada ano no histórico de prestações */
 table.data tr.year-row td { background: var(--surface2); font-weight: 700; font-size: 12px; }
 table.data tr.year-row td.num { color: var(--text); }
@@ -328,9 +330,10 @@ table.grid-edit .num { font-family: var(--mono); text-align: right; color: var(-
   .topbar { padding: 10px 16px; position: static; }
 }
 @media (max-width: 520px) {
-  /* 4 separadores não cabem numa linha: grelha 2 × 2 */
+  /* 4 separadores não cabem numa linha: grelha 2 × 2 (o Utilizadores, dos administradores, fica numa linha só dele) */
   .tabs { width: 100%; display: grid; grid-template-columns: 1fr 1fr; }
   .tab { padding: 8px 10px; justify-content: center; }
+  .tab[data-tab="admin"] { grid-column: span 2; }
   .stat-value { font-size: 18px; }
   .field-row, .map-grid { grid-template-columns: 1fr; }
   .user-box { gap: 6px; }
