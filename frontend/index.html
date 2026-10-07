@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <!--
   Ledger: a única página do site ("single-page app").
-  Todo o HTML dos 4 separadores está aqui; o JavaScript só mostra/esconde partes
-  e preenche os números, gráficos e tabelas com os dados que vêm da API.
+  Todo o HTML dos 4 separadores (e do Utilizadores, só para administradores) está aqui;
+  o JavaScript só mostra/esconde partes e preenche os números, gráficos e tabelas com os dados que vêm da API.
   O ficheiro é servido pelo CloudFront a partir do bucket S3.
 -->
 <html lang="pt-PT">
@@ -65,10 +65,13 @@
     <button class="tab" data-tab="inv" role="tab">Investimentos</button>
     <button class="tab" data-tab="loan" role="tab">Créditos</button>
     <button class="tab" data-tab="prop" role="tab">Património</button>
+    <!-- só aparece aos administradores (ver isAdmin no auth.js e o admin.js) -->
+    <button class="tab hidden" data-tab="admin" role="tab">Utilizadores</button>
   </nav>
   <div class="user-box">
     <div class="status-dot" id="status-dot"></div>
     <span id="user-email"></span>
+    <span class="badge admin hidden" id="admin-badge" title="Conta de administrador: vê o separador Utilizadores">Admin</span>
     <button class="btn" id="export-all-btn" title="Descarregar todos os dados em CSV">⬇ Backup</button>
     <label class="btn toggle" title="Receber todos os dias, à meia-noite (hora de Portugal), um email com o backup em CSV">
       <input type="checkbox" id="daily-backup" disabled> ✉ <span class="long-label">Backup diário</span><span class="short-label">Diário</span>
@@ -272,6 +275,32 @@
       <div class="table-wrap" id="prop-table"></div>
     </div>
   </section>
+
+  <!-- ════════ SEPARADOR: UTILIZADORES (só administradores; preenchido por renderAdmin no admin.js) ════════ -->
+  <section id="tab-admin" class="tab-panel hidden">
+    <div class="stats">
+      <div class="stat"><div class="stat-label">Utilizadores</div><div class="stat-value" id="adm-total">—</div><div class="stat-sub" id="adm-total-sub"></div></div>
+      <div class="stat"><div class="stat-label">Entraram nos últimos 7 dias</div><div class="stat-value" id="adm-week">—</div><div class="stat-sub" id="adm-week-sub"></div></div>
+      <div class="stat"><div class="stat-label">Sem login registado</div><div class="stat-value" id="adm-never">—</div><div class="stat-sub">desde que os logins são registados</div></div>
+      <div class="stat"><div class="stat-label">Último login</div><div class="stat-value" id="adm-last">—</div><div class="stat-sub" id="adm-last-sub"></div></div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <div class="panel-header">
+        <div class="panel-title">Utilizadores</div>
+        <button class="btn" id="adm-refresh">↻ Atualizar</button>
+      </div>
+      <div class="table-wrap" id="adm-users"></div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <div class="panel-header">
+        <div class="panel-title">Logins recentes</div>
+        <select class="inline" id="adm-filter"><option value="">Todos os utilizadores</option></select>
+      </div>
+      <div class="table-wrap" id="adm-logins"></div>
+    </div>
+  </section>
 </main>
 
 <!-- JANELA GENÉRICA (formulários, grelhas, importação): uma só, reutilizada (ver forms.js) -->
@@ -293,7 +322,7 @@
   Scripts, por esta ordem (cada um usa o que os anteriores definem):
   config.js  gerado pelo deploy: URL da API e dados do Cognito (não está no GitHub)
   Chart.js   biblioteca de gráficos
-  util → auth → calc → charts → forms → csv → bank → app (o app.js arranca tudo)
+  util → auth → calc → charts → forms → csv → bank → admin → app (o app.js arranca tudo)
 -->
 <script src="config.js"></script>
 <script src="vendor/chart.umd.min.js"></script>
@@ -304,6 +333,7 @@
 <script src="js/forms.js"></script>
 <script src="js/csv.js"></script>
 <script src="js/bank.js"></script>
+<script src="js/admin.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

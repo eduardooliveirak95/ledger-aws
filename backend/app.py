@@ -1,7 +1,9 @@
 """
-Backend do Ledger - código das duas funções AWS Lambda:
+Backend do Ledger - código das quatro funções AWS Lambda:
     handler        API chamada pelo API Gateway (HTTP API, formato de evento v2)
     daily_backup   backup diário por email, chamado pelo EventBridge Scheduler à meia-noite (hora de Portugal)
+    post_login     regista cada login, chamado pelo Cognito (trigger "Post authentication")
+    admin          separador Utilizadores (contas e logins), só para o grupo "admin" do Cognito
 
 Sem dependências externas: só usa a biblioteca padrão do Python + boto3
 (que já vem incluído no runtime Python da Lambda, por isso não é preciso empacotar nada).
@@ -21,8 +23,11 @@ Todos os dados vivem numa ÚNICA tabela DynamoDB ("single-table design"):
     PROP_<hex>                   imóvel (casa, terreno...) com o valor atual
     BFMT_<hex>                   colunas escolhidas para os CSV de um banco (importar extratos)
 
-Além das partições dos utilizadores há uma partição do sistema:
-    user_id = "DAILY_BACKUP", sk = <sub>   um item por utilizador que ativou o backup diário por email
+Além das partições dos utilizadores há partições do sistema:
+    user_id = "DAILY_BACKUP", sk = <sub>               um item por utilizador que ativou o backup diário por email
+    user_id = "LOGIN",        sk = <data e hora>_<sub> um item por login (quem e quando), apagado ao fim de
+                                                       90 dias pelo TTL da tabela (atributo "expires")
+    user_id = "LAST_LOGIN",   sk = <sub>               último login e número de logins de cada utilizador
 
 Como a data faz parte da sort key, uma Query com begins_with("TX_") devolve os
 movimentos já ordenados por data, sem ser preciso ordenar no código.
@@ -33,6 +38,7 @@ Rotas:
     DELETE /items/{id}    apagar um item (+ os "filhos" no caso de contas / investimentos / créditos)
     GET    /settings      definições do utilizador ({"daily_backup": true/false})
     POST   /settings      mudar as definições  {"daily_backup": true/false}
+    GET    /admin/users   (função admin, só para o grupo "admin") utilizadores, último login e logins recentes
 """
 
 import base64
@@ -60,6 +66,13 @@ MAX_BACKUP_BYTES = 6_000_000  # tamanho total dos CSV num email (o SES aceita at
 
 # Partição do sistema com quem ativou o backup diário (sk = sub do utilizador; ver o início do ficheiro)
 DAILY_BACKUP_PK = "DAILY_BACKUP"
+# Partições dos logins (ver o início do ficheiro) e quanto tempo fica cada login
+LOGIN_PK = "LOGIN"
+LAST_LOGIN_PK = "LAST_LOGIN"
+LOGIN_KEEP_DAYS = 90
+# Grupo do Cognito dos administradores e quantos logins recentes mostra o separador Utilizadores
+ADMIN_GROUP = "admin"
+MAX_LOGINS_SHOWN = 200
 
 # Tipo de item (nome usado pelo frontend) -> prefixo da sort key no DynamoDB
 KIND_PREFIX = {
@@ -107,6 +120,7 @@ LEGACY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_[0-9a-f]{16}$")
 
 # Ligação à tabela, criada só uma vez por contentor Lambda e reutilizada entre pedidos
 _table = None
+_login_table = None
 _ses = None
 _cognito = None
 
@@ -127,6 +141,19 @@ def table():
     return _table
 
 
+def login_table():
+    """A mesma tabela, para o registo dos logins: com tempos curtos e sem repetir pedidos.
+
+    O Cognito espera no máximo 5 s pelo trigger de login, e se a função não responder o login falha.
+    Mais vale perder o registo de um login do que deixar alguém à porta.
+    """
+    global _login_table
+    if _login_table is None:
+        cfg = Config(connect_timeout=1, read_timeout=1, retries={"total_max_attempts": 1})
+        _login_table = boto3.resource("dynamodb", config=cfg).Table(os.environ["TABLE_NAME"])
+    return _login_table
+
+
 def ses():
     """Cliente do Amazon SES (envio de emails), criado na primeira chamada e depois reutilizado."""
     global _ses
@@ -136,7 +163,7 @@ def ses():
 
 
 def cognito():
-    """Cliente do Cognito (lista de utilizadores, para o backup diário), criado na primeira chamada."""
+    """Cliente do Cognito (lista de utilizadores: backup diário e separador Utilizadores), criado na primeira chamada."""
     global _cognito
     if _cognito is None:
         _cognito = boto3.client("cognito-idp")
@@ -893,6 +920,131 @@ def daily_backup(event=None, context=None):
                 result["failed"] += 1
     print(json.dumps({"daily_backup": result}))
     return result
+
+
+# ── LOGINS E ADMINISTRAÇÃO ───────────────────────────────────────────────────
+def record_login(sub, email, now=None):
+    """Grava um login: um item na partição LOGIN (apagado pelo TTL ao fim de 90 dias) e, na LAST_LOGIN,
+    a data do último login e mais 1 no número de logins deste utilizador."""
+    now = now or datetime.now(timezone.utc)
+    at = now.isoformat(timespec="seconds")
+    expires = int((now + timedelta(days=LOGIN_KEEP_DAYS)).timestamp())
+    login_table().put_item(Item={"user_id": LOGIN_PK, "sk": f"{at}_{sub}", "sub": sub, "email": email,
+                                 "at": at, "expires": expires})
+    # "at" é palavra reservada do DynamoDB: nas expressões usa-se o nome alternativo #at
+    login_table().update_item(
+        Key={"user_id": LAST_LOGIN_PK, "sk": sub},
+        UpdateExpression="SET #at = :at, #email = :email ADD #logins :one",
+        ExpressionAttributeNames={"#at": "at", "#email": "email", "#logins": "logins"},
+        ExpressionAttributeValues={":at": at, ":email": email, ":one": 1},
+    )
+
+
+def post_login(event, context=None):
+    """Função Lambda do registo de logins (configurada como "app.post_login" no template.yaml).
+
+    O Cognito chama-a depois de cada login com sucesso (trigger "Post authentication"), incluindo o
+    primeiro login com password temporária. Renovar a sessão com o refresh token não conta como login.
+    Nunca lança erros: se a função falhasse, o Cognito recusava o login. O registo perde-se, a pessoa entra.
+    Tem de devolver o evento que recebeu.
+    """
+    try:
+        attrs = (event.get("request") or {}).get("userAttributes") or {}
+        if attrs.get("sub"):
+            record_login(attrs["sub"], attrs.get("email", ""))
+    except Exception as e:
+        # só o tipo de erro, como no backup diário: a mensagem pode ter o email
+        print(json.dumps({"post_login_error": getattr(e, "response", {}).get("Error", {}).get("Code") or type(e).__name__}))
+    return event
+
+
+def is_admin(claims):
+    """True se o token for de alguém do grupo "admin" do Cognito.
+
+    O Cognito põe os grupos no ID token como uma lista (claim "cognito:groups"), mas o API Gateway
+    entrega-a como texto: "[admin outro]" ou "admin,outro". Aceita os três formatos.
+    O token é assinado pelo Cognito e o grupo só se muda com credenciais AWS (make-admin.ps1),
+    por isso ninguém se consegue pôr no grupo sozinho.
+    """
+    groups = claims.get("cognito:groups") or []
+    if isinstance(groups, str):
+        groups = groups.strip("[]").replace(",", " ").split()
+    return ADMIN_GROUP in [str(g).strip("\"'") for g in groups]
+
+
+def _iso(dt):
+    """datetime do Cognito -> texto ISO em UTC (ex.: 2026-10-07T09:00:00+00:00)."""
+    return dt.astimezone(timezone.utc).isoformat(timespec="seconds") if isinstance(dt, datetime) else None
+
+
+def admin_users():
+    """GET /admin/users: todos os utilizadores do Cognito, com o último login e quantos logins fizeram,
+    e os logins mais recentes (no máximo MAX_LOGINS_SHOWN, do mais recente para o mais antigo).
+
+    Não devolve o "sub" de ninguém, só os emails. Os logins de contas já apagadas ficam com o email
+    que tinham na altura.
+    """
+    pool = os.environ["USER_POOL_ID"]
+    users = {}
+    kwargs = {"UserPoolId": pool}
+    while True:
+        r = cognito().list_users(**kwargs)
+        for u in r["Users"]:
+            attrs = {a["Name"]: a["Value"] for a in u.get("Attributes", [])}
+            if attrs.get("sub"):
+                users[attrs["sub"]] = {"email": attrs.get("email", ""), "status": u.get("UserStatus", ""),
+                                       "enabled": u.get("Enabled", True), "created": _iso(u.get("UserCreateDate")),
+                                       "admin": False, "last_login": None, "logins": 0}
+        if not r.get("PaginationToken"):
+            break
+        kwargs["PaginationToken"] = r["PaginationToken"]
+
+    # quem está no grupo admin
+    kwargs = {"UserPoolId": pool, "GroupName": ADMIN_GROUP}
+    while True:
+        r = cognito().list_users_in_group(**kwargs)
+        for u in r["Users"]:
+            sub = next((a["Value"] for a in u.get("Attributes", []) if a["Name"] == "sub"), None)
+            if sub in users:
+                users[sub]["admin"] = True
+        if not r.get("NextToken"):
+            break
+        kwargs["NextToken"] = r["NextToken"]
+
+    for item in query_all(LAST_LOGIN_PK):
+        if item["sk"] in users:
+            users[item["sk"]].update(last_login=item.get("at"), logins=int(item.get("logins", 0)))
+
+    r = table().query(KeyConditionExpression=Key("user_id").eq(LOGIN_PK), ScanIndexForward=False,
+                      Limit=MAX_LOGINS_SHOWN)
+    logins = [{"at": i["at"], "email": users.get(i.get("sub"), {}).get("email") or i.get("email", "")}
+              for i in r["Items"]]
+    return {"users": sorted(users.values(), key=lambda u: u["email"].lower()), "logins": logins}
+
+
+def admin(event, context=None):
+    """Função Lambda do separador Utilizadores (configurada como "app.admin" no template.yaml).
+
+    É uma função à parte da API normal: só ela pode listar os utilizadores do Cognito, e só lê as
+    partições dos logins (as permissões no template.yaml não a deixam ler os dados de ninguém).
+    Quem não estiver no grupo "admin" recebe 403.
+    """
+    try:
+        claims = event["requestContext"]["authorizer"]["jwt"]["claims"]
+        claims["sub"]
+    except (KeyError, TypeError):
+        return response(401, {"detail": "Unauthorized"})
+    if not is_admin(claims):
+        return response(403, {"detail": "Só os administradores podem ver os utilizadores"})
+
+    route = event.get("routeKey", "")
+    try:
+        if route == "GET /admin/users":
+            return response(200, admin_users())
+        return response(404, {"detail": f"Rota desconhecida: {route}"})
+    except Exception:
+        traceback.print_exc()
+        return response(500, {"detail": "Erro interno do servidor"})
 
 
 # ── PONTO DE ENTRADA ─────────────────────────────────────────────────────────

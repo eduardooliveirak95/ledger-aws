@@ -45,9 +45,9 @@ def table():
                        {"AttributeName": "sk", "KeyType": "RANGE"}],
             ProvisionedThroughput={"ReadCapacityUnits": 25, "WriteCapacityUnits": 25},
         )
-        app._table = app._ses = app._cognito = None
+        app._table = app._login_table = app._ses = app._cognito = None
         yield boto3.resource("dynamodb").Table("ledger-test")
-        app._table = app._ses = app._cognito = None
+        app._table = app._login_table = app._ses = app._cognito = None
 
 
 def call(route, user="u1", body=None, path=None, email=None):
@@ -57,6 +57,13 @@ def call(route, user="u1", body=None, path=None, email=None):
              "body": json.dumps(body) if body is not None else None,
              "requestContext": {"authorizer": {"jwt": {"claims": claims}}}}
     r = app.handler(event, None)
+    return r["statusCode"], (json.loads(r["body"]) if r["body"] else None)
+
+
+def call_admin(groups=None, route="GET /admin/users"):
+    """Simula um pedido ao separador Utilizadores (função admin), com os grupos na claim do token."""
+    claims = {"sub": "admin-sub", **({"cognito:groups": groups} if groups is not None else {})}
+    r = app.admin({"routeKey": route, "requestContext": {"authorizer": {"jwt": {"claims": claims}}}}, None)
     return r["statusCode"], (json.loads(r["body"]) if r["body"] else None)
 
 
@@ -350,3 +357,88 @@ def test_request_size_limit(table):
               "category": "C", "amount": i + 1} for i in range(301)]
     status, _ = call("POST /items", body={"items": items})
     assert status == 400
+
+
+def login_event(sub, email):
+    """Evento que o Cognito envia ao trigger "Post authentication" (só os campos que a app usa)."""
+    return {"version": "1", "triggerSource": "PostAuthentication_Authentication", "userName": sub,
+            "request": {"userAttributes": {"sub": sub, "email": email, "email_verified": "true"}}, "response": {}}
+
+
+def test_logins_are_recorded(table):
+    """Cada login fica na partição LOGIN (com prazo de 90 dias) e soma 1 na LAST_LOGIN; o Cognito recebe o evento de volta."""
+    ev = login_event("u1", "ana@example.com")
+    assert app.post_login(ev, None) is ev
+    [login] = app.query_all(app.LOGIN_PK)
+    assert login["sub"] == "u1" and login["email"] == "ana@example.com" and login["sk"] == f"{login['at']}_u1"
+    days = (int(login["expires"]) - datetime.now(timezone.utc).timestamp()) / 86400
+    assert 89.9 < days <= 90
+    app.record_login("u1", "ana@example.com", datetime(2099, 1, 1, tzinfo=timezone.utc))
+    assert len(app.query_all(app.LOGIN_PK)) == 2
+    last = table.get_item(Key={"user_id": app.LAST_LOGIN_PK, "sk": "u1"})["Item"]
+    assert last["logins"] == 2 and last["email"] == "ana@example.com" and last["at"] == "2099-01-01T00:00:00+00:00"
+    # os logins não aparecem nos dados de ninguém
+    assert call("GET /data", user="u1")[1]["transactions"] == []
+
+
+def test_login_trigger_never_fails(table, monkeypatch, capsys):
+    """Se o registo falhar, o login continua (o evento volta ao Cognito) e o log não mostra o email."""
+    def broken(sub, email, now=None):
+        raise ClientError({"Error": {"Code": "ProvisionedThroughputExceededException", "Message": email}}, "PutItem")
+    monkeypatch.setattr(app, "record_login", broken)
+    ev = login_event("u1", "ana@example.com")
+    assert app.post_login(ev, None) is ev
+    assert app.post_login({}, None) == {}   # evento estranho: não faz nada
+    logs = capsys.readouterr().out
+    assert "ProvisionedThroughputExceededException" in logs and "@" not in logs
+
+
+@pytest.mark.parametrize("groups,expected", [
+    ("[admin]", True), ("[outro admin]", True), ("outro,admin", True), (["admin"], True), ('["admin"]', True),
+    ("[outro]", False), ("[administrators]", False), ("", False), (None, False), ([], False),
+])
+def test_admin_group_claim_formats(groups, expected):
+    """O grupo vem no token como lista ou como texto (o API Gateway muda o formato); só "admin" conta."""
+    assert app.is_admin({"cognito:groups": groups}) is expected
+
+
+def test_admin_page_only_for_admins(table, monkeypatch):
+    """Sem token: 401. Fora do grupo admin: 403. No grupo: lista os utilizadores e os logins."""
+    cognito = boto3.client("cognito-idp")
+    pool = cognito.create_user_pool(PoolName="ledger-test", UsernameAttributes=["email"])["UserPool"]["Id"]
+    monkeypatch.setenv("USER_POOL_ID", pool)
+    cognito.create_group(GroupName="admin", UserPoolId=pool)
+    subs = {}
+    for name in ("chefe", "ana", "bruno"):
+        u = cognito.admin_create_user(UserPoolId=pool, Username=f"{name}@example.com", MessageAction="SUPPRESS",
+                                      UserAttributes=[{"Name": "email", "Value": f"{name}@example.com"}])["User"]
+        subs[name] = next(a["Value"] for a in u["Attributes"] if a["Name"] == "sub")
+    cognito.admin_add_user_to_group(UserPoolId=pool, Username="chefe@example.com", GroupName="admin")
+    cognito.admin_disable_user(UserPoolId=pool, Username="bruno@example.com")
+    app.record_login(subs["ana"], "ana@example.com", datetime(2026, 10, 1, 9, 0, tzinfo=timezone.utc))
+    app.record_login(subs["chefe"], "chefe@example.com", datetime(2026, 10, 2, 9, 0, tzinfo=timezone.utc))
+    app.record_login(subs["ana"], "ana@example.com", datetime(2026, 10, 3, 9, 0, tzinfo=timezone.utc))
+    app.record_login("apagado", "antigo@example.com", datetime(2026, 9, 30, 9, 0, tzinfo=timezone.utc))
+
+    assert app.admin({"routeKey": "GET /admin/users"}, None)["statusCode"] == 401
+    assert call_admin()[0] == 403
+    assert call_admin("[outro]")[0] == 403
+    assert call_admin("[admin]", route="GET /admin/nada")[0] == 404
+    status, body = call_admin("[admin]")
+    assert status == 200
+    users = {u["email"]: u for u in body["users"]}
+    assert [u["email"] for u in body["users"]] == ["ana@example.com", "bruno@example.com", "chefe@example.com"]
+    assert users["chefe@example.com"]["admin"] and not users["ana@example.com"]["admin"]
+    assert users["ana@example.com"]["logins"] == 2 and users["ana@example.com"]["last_login"].startswith("2026-10-03T09:00")
+    assert users["bruno@example.com"]["enabled"] is False and users["bruno@example.com"]["last_login"] is None
+    assert users["ana@example.com"]["status"] == "FORCE_CHANGE_PASSWORD" and users["ana@example.com"]["created"]
+    assert "sub" not in json.dumps(body)
+    # mais recente primeiro; a conta apagada fica com o email que tinha
+    assert [(x["at"][:10], x["email"]) for x in body["logins"]] == [
+        ("2026-10-03", "ana@example.com"), ("2026-10-02", "chefe@example.com"),
+        ("2026-10-01", "ana@example.com"), ("2026-09-30", "antigo@example.com")]
+
+
+def test_normal_api_has_no_admin_routes(table):
+    """A API normal não responde às rotas de administração (são de outra função, com outras permissões)."""
+    assert call("GET /admin/users")[0] == 404

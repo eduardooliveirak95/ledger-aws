@@ -71,6 +71,11 @@ Resources:
           KeyType: RANGE            # RANGE = sort key
       SSESpecification:
         SSEEnabled: false           # mesmo assim fica encriptada em repouso, com a chave gratuita da AWS
+      # TTL: o DynamoDB apaga sozinho (e de graça) os itens cujo "expires" (segundos desde 1970) já passou.
+      # Só os registos de login têm este atributo (duram 90 dias); os dados das contas nunca o têm.
+      TimeToLiveSpecification:
+        AttributeName: expires
+        Enabled: true
 
   # ── LOGIN ────────────────────────────────────────────────────────────────
   # User pool do Cognito: guarda os utilizadores e as passwords e emite os tokens JWT
@@ -95,6 +100,19 @@ Resources:
         RecoveryMechanisms:
           - Name: admin_only
             Priority: 1
+      # Depois de cada login com sucesso, o Cognito chama esta Lambda, que o regista (ver PostLoginFunction)
+      LambdaConfig:
+        PostAuthentication: !GetAtt PostLoginFunction.Arn
+
+  # Grupo "admin": quem está nele vê o separador Utilizadores (todas as contas e os logins).
+  # O Cognito põe os grupos no ID token (claim "cognito:groups"). Ninguém se põe no grupo sozinho:
+  # só com credenciais AWS (make-admin.ps1).
+  AdminGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      UserPoolId: !Ref UserPool
+      GroupName: admin
+      Description: Ledger administrators (see all users and their logins)
 
   # App client: a "aplicação" (o site) que pode pedir tokens a esta user pool
   UserPoolClient:
@@ -212,6 +230,67 @@ Resources:
             RetryPolicy:
               MaximumRetryAttempts: 0
 
+  # Regista cada login (função app.post_login): trigger "Post authentication" do Cognito.
+  # Grava quem entrou e quando nas partições LOGIN (90 dias) e LAST_LOGIN (último login e quantos).
+  # Se esta função der erro, o login falha: por isso o código nunca lança erros e o tempo é curto.
+  PostLoginFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/
+      Handler: app.post_login
+      Timeout: 5                    # o Cognito só espera 5 s pela resposta
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref EntriesTable
+      Policies:
+        - Statement:
+            # Só gravar, e só nas partições dos logins (nunca nos dados de um utilizador)
+            - Effect: Allow
+              Action: [dynamodb:PutItem, dynamodb:UpdateItem]
+              Resource: !GetAtt EntriesTable.Arn
+              Condition:
+                ForAllValues:StringEquals:
+                  dynamodb:LeadingKeys: [LOGIN, LAST_LOGIN]
+
+  # Autoriza o Cognito (só esta user pool) a chamar a função dos logins
+  PostLoginPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt PostLoginFunction.Arn
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt UserPool.Arn
+
+  # Separador Utilizadores (função app.admin): lista as contas e os logins, só para o grupo "admin".
+  # Função à parte para a API normal não ter permissão de listar utilizadores.
+  # Não consegue ler os dados financeiros de ninguém: só as partições dos logins.
+  AdminFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/
+      Handler: app.admin
+      Timeout: 30                   # o API Gateway desiste ao fim de 30 s
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref EntriesTable
+          USER_POOL_ID: !Ref UserPool
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: dynamodb:Query
+              Resource: !GetAtt EntriesTable.Arn
+              Condition:
+                ForAllValues:StringEquals:
+                  dynamodb:LeadingKeys: [LOGIN, LAST_LOGIN]
+            # Listar os utilizadores e quem está no grupo admin
+            - Effect: Allow
+              Action: [cognito-idp:ListUsers, cognito-idp:ListUsersInGroup]
+              Resource: !GetAtt UserPool.Arn
+      Events:
+        GetUsers:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: /admin/users, Method: GET }
+
   # Remetente dos emails de backup no Amazon SES. Ao ser criado, a AWS envia um email de
   # verificação para este endereço: só depois de carregar no link é que o SES envia emails.
   # Enquanto a conta SES estiver em modo de testes ("sandbox"), cada destinatário também tem
@@ -231,6 +310,16 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /aws/lambda/${DailyBackupFunction}
+      RetentionInDays: 14
+  PostLoginFunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${PostLoginFunction}
+      RetentionInDays: 14
+  AdminFunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AdminFunction}
       RetentionInDays: 14
 
   # ── SITE (bucket S3 privado, servido pelo CloudFront com HTTPS) ──────────

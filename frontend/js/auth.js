@@ -70,14 +70,23 @@ async function cognito(target, body) {
   return data;
 }
 
-// Lê a data de expiração ("exp") de dentro de um JWT, em milissegundos.
-// Um JWT tem 3 partes separadas por pontos; a do meio é JSON em base64url.
-// (Só lê, não verifica a assinatura: quem verifica é o API Gateway.)
-function jwtExp(token) {
+// Lê o conteúdo ("claims") de um JWT: um JWT tem 3 partes separadas por pontos e a do meio é JSON
+// em base64url. Só lê, não verifica a assinatura: quem verifica é o API Gateway. {} se for inválido.
+function jwtClaims(token) {
   try {
     const b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
-    return JSON.parse(atob(b64 + '==='.slice((b64.length + 3) % 4))).exp * 1000;
-  } catch { return 0; }
+    return JSON.parse(atob(b64 + '==='.slice((b64.length + 3) % 4))) || {};
+  } catch { return {}; }
+}
+// Data de expiração ("exp") de um JWT, em milissegundos (0 se for inválido)
+function jwtExp(token) { return (jwtClaims(token).exp || 0) * 1000; }
+
+// true se a conta estiver no grupo "admin" do Cognito (claim "cognito:groups" do ID token, uma lista).
+// Só decide o que se mostra (separador Utilizadores e selo Admin): quem protege os dados é o backend,
+// que recusa os pedidos de quem não está no grupo. Entrar no grupo obriga a sair e voltar a entrar.
+function isAdmin() {
+  const groups = jwtClaims(store.get('idToken') || '')['cognito:groups'];
+  return Array.isArray(groups) && groups.includes('admin');
 }
 
 // Guarda os tokens devolvidos pelo Cognito. O ID token (60 min) vai nos pedidos à API;
@@ -226,4 +235,7 @@ const api = {
   // GET /settings e POST /settings: definições do utilizador ({ daily_backup: true/false })
   getSettings: () => apiFetch('/settings'),
   saveSettings: settings => apiFetch('/settings', { method: 'POST', body: JSON.stringify(settings) }),
+
+  // GET /admin/users: todos os utilizadores e os logins recentes (só administradores; ver admin.js)
+  adminUsers: () => apiFetch('/admin/users'),
 };

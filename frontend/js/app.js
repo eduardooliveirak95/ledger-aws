@@ -14,6 +14,7 @@ const S = {
   movBulkCat: '',    // categoria escolhida para os selecionados
   invFilter: '',
   loanHistory: '',   // crédito mostrado no histórico de prestações
+  adminUser: '',     // utilizador escolhido no filtro dos logins (separador Utilizadores)
 };
 
 // ════════ LOGIN / ARRANQUE ════════
@@ -28,6 +29,15 @@ function showLogin(msg = '') {
 function hideLogin() {
   $('#login-screen').classList.add('hidden');
   $('#user-email').textContent = store.get('email') || '';
+  updateAdminUi();
+}
+// Selo "Admin" e separador Utilizadores: só para contas do grupo admin (ver isAdmin no auth.js).
+// Quem não é administrador e abriu o endereço #admin vai para Movimentos.
+function updateAdminUi() {
+  const on = isAdmin();
+  $('#admin-badge').classList.toggle('hidden', !on);
+  $('.tab[data-tab="admin"]').classList.toggle('hidden', !on);
+  if (!on && S.tab === 'admin') setTab('mov', false);
 }
 // Bolinha de estado no topo: verde (ligado à API), vermelha (erro) ou neutra
 function setStatus(ok) {
@@ -41,6 +51,8 @@ function logout() {
   setStatus(null);
   $('#daily-backup').checked = false;
   $('#daily-backup').disabled = true;
+  clearAdmin();
+  updateAdminUi();   // já sem sessão: esconde o selo e o separador Utilizadores
   modal.close();
   showLogin();
 }
@@ -177,13 +189,20 @@ async function removeItem(id, what) {
 }
 
 // ════════ SEPARADORES ════════
-// Muda de separador (Movimentos / Investimentos / Créditos / Património) e guarda-o no endereço (#mov, #inv, #loan, #prop)
-function setTab(tab) {
-  S.tab = tab;
+// Mostra o separador escolhido e esconde os outros. O património líquido do topo não aparece no
+// separador Utilizadores (são dados teus, não de quem está na lista).
+function showTab(tab) {
   $$('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   $$('.tab-panel').forEach(p => p.classList.toggle('hidden', p.id !== 'tab-' + tab));
+  $('.networth').classList.toggle('hidden', tab === 'admin');
+}
+// Muda de separador (Movimentos / Investimentos / Créditos / Património / Utilizadores), guarda-o no
+// endereço (#mov, #inv, #loan, #prop, #admin) e desenha-o (render = false: só muda, sem desenhar)
+function setTab(tab, render = true) {
+  S.tab = tab;
+  showTab(tab);
   if (location.hash !== '#' + tab) history.replaceState(null, '', '#' + tab);
-  renderAll();
+  if (render) renderAll();
 }
 $$('.tab').forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
 
@@ -194,6 +213,7 @@ function renderAll() {
   if (S.tab === 'inv') renderInvestments();
   if (S.tab === 'loan') renderLoans();
   if (S.tab === 'prop') renderProperties();
+  if (S.tab === 'admin') renderAdmin();
 }
 
 // Os 5 números do topo: contas, investimentos, imóveis, dívidas e património líquido
@@ -1163,6 +1183,10 @@ function propertyForm(prop = null) {
   });
 }
 
+// ════════ UTILIZADORES (só administradores; o resto está no admin.js) ════════
+$('#adm-refresh').addEventListener('click', () => loadAdmin());
+$('#adm-filter').addEventListener('change', e => { S.adminUser = e.target.value; renderAdmin(); });
+
 // ════════ ENCAMINHAMENTO DE CLIQUES (botões com atributos data-*) ════════
 // Um único "listener" para a página toda (delegação de eventos): funciona também para botões
 // criados depois, dentro das tabelas. O atributo diz o que fazer (ex.: data-edit-tx="<id>").
@@ -1199,9 +1223,8 @@ document.addEventListener('click', e => {
 // verifica se o config.js existe e, se já houver sessão guardada, entra sem pedir password.
 (function init() {
   const hashTab = location.hash.slice(1);
-  if (['mov', 'inv', 'loan', 'prop'].includes(hashTab)) S.tab = hashTab;
-  $$('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === S.tab));
-  $$('.tab-panel').forEach(p => p.classList.toggle('hidden', p.id !== 'tab-' + S.tab));
+  if (['mov', 'inv', 'loan', 'prop', 'admin'].includes(hashTab)) S.tab = hashTab;   // #admin: só se for admin (updateAdminUi)
+  showTab(S.tab);
 
   if (!API_BASE || !CFG.clientId) {
     showLogin('Falta o config.js. Faz o deploy com o deploy.ps1 primeiro.');
