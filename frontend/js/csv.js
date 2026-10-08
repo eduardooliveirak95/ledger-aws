@@ -7,7 +7,7 @@
 // - descobre o separador (; , ou tab) pelo que aparece mais vezes na primeira linha, se não for indicado
 //   (os extratos do banco começam com uma linha de título sem separadores: usam sempre ";")
 // - respeita aspas: "a;b" é uma só célula e "" dentro de aspas é uma aspa literal
-// - tira a ' que o toCSV põe antes de textos começados por = + - @ (ver toCSV)
+// - tira a ' que o toCSV põe antes de textos começados por = + - @, tab ou mudança de linha (ver toCSV)
 // - ignora linhas vazias
 function parseCSV(text, delim) {
   text = text.replace(/^﻿/, '');
@@ -33,8 +33,8 @@ function parseCSV(text, delim) {
 
 // Monta o texto de um CSV com ";" (números com 2 casas e vírgula decimal;
 // células com ; aspas ou quebras de linha vão entre aspas).
-// Um texto começado por = + - @ (ou tab) seria lido pelo Excel como fórmula (uma descrição vinda do
-// banco podia trazer uma): leva uma ' à frente, que o Excel não mostra e que o parseCSV tira.
+// Um texto começado por = + - @, tab ou mudança de linha seria lido pelo Excel como fórmula (uma
+// descrição vinda do banco podia trazer uma): leva uma ' à frente, que o Excel não mostra e que o parseCSV tira.
 function toCSV(header, rows) {
   const cell = v => {
     if (v === null || v === undefined) return '';
