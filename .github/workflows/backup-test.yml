@@ -34,7 +34,7 @@ jobs:
 
       - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a   # v4.3.1
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN || vars.AWS_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: eu-west-1
           mask-aws-account-id: true
 
@@ -57,7 +57,7 @@ jobs:
       - name: Send a test backup to the owner
         if: inputs.action == 'enviar-teste'
         env:
-          OWNER_EMAIL: ${{ secrets.ALERT_EMAIL || vars.ALERT_EMAIL }}
+          OWNER_EMAIL: ${{ secrets.ALERT_EMAIL }}
           AWS_MAX_ATTEMPTS: "1"
         run: |
           jq -nc --arg e "$OWNER_EMAIL" '{only_email: $e}' > payload.json

@@ -86,16 +86,15 @@ jobs:
 
       # Troca o token OIDC do GitHub por credenciais temporárias da role (stack ledger-github).
       # O ARN e o email vêm de secrets: o GitHub esconde-os nos logs (aparecem como ***).
-      # Enquanto os secrets não existirem, usa as variáveis antigas (que aparecem nos logs).
       - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a   # v4.3.1
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN || vars.AWS_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: eu-west-1
           mask-aws-account-id: true   # esconde o número da conta AWS nos logs
 
       # O mesmo script que se pode correr à mão: sam deploy + enviar o site + limpar a cache
       - name: Deploy backend + website
-        run: bash deploy.sh "${{ secrets.ALERT_EMAIL || vars.ALERT_EMAIL }}"
+        run: bash deploy.sh "${{ secrets.ALERT_EMAIL }}"
 
       # Resumo da execução (página do run no separador Actions). Sem o endereço do site: o repositório
       # e os logs são públicos (o endereço está nos outputs da stack, na consola da AWS)
