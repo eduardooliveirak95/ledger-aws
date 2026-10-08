@@ -8,8 +8,12 @@
 #   3. Se o repositório e o ramo baterem com a trust policy da role, a AWS devolve
 #      credenciais temporárias (1 hora) dessa role.
 #
-# NÃO é publicada pelo GitHub Actions: cria-se uma vez à mão (ver README, "GitHub e deploy
-# automático", passo 2). Se mudares este ficheiro, volta a correr esse comando.
+# NÃO é publicada pelo GitHub Actions: cria-se uma vez à mão, com a AWS CLI:
+#   aws cloudformation deploy --region eu-west-1 --stack-name ledger-github \
+#     --template-file infra/github-oidc.yaml --capabilities CAPABILITY_NAMED_IAM \
+#     --parameter-overrides GitHubOwner=<o-teu-utilizador-do-github>
+# (acrescenta CreateOidcProvider=false se a conta já tiver o provider do GitHub).
+# Se mudares este ficheiro, volta a correr esse comando.
 # ════════════════════════════════════════════════════════════════════════════
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
