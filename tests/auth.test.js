@@ -95,3 +95,24 @@ test('se a API recusar o token duas vezes, a sessão termina', async () => {
   assert.equal(calls.expired, 1);
   assert.equal(calls.api, 2);
 });
+
+// Mudar a password (botão 🔑 Password): sem access token válido, renova primeiro
+const changePassword = ctx => vm.runInContext('changePassword("Antiga123456", "Nova1234567")', ctx);
+
+test('mudar a password: uma falha passageira na renovação não diz que a sessão expirou', async () => {
+  const { ctx, calls } = setup({ renovacoes: [networkError] });
+  await assert.rejects(changePassword(ctx), /Sem ligação ao serviço de login/);
+  assert.equal(calls.expired, 0);
+});
+
+test('mudar a password: com o refresh token recusado, diz que a sessão expirou', async () => {
+  const { ctx } = setup({ renovacoes: [cognitoError('NotAuthorizedException')] });
+  await assert.rejects(changePassword(ctx), /A sessão expirou/);
+});
+
+test('sem internet, o pedido ao Cognito dá a mensagem em português (não o "Failed to fetch" do browser)', async () => {
+  const { ctx } = setup({ renovacoes: [renovado(), networkError] });   // renova bem, depois o ChangePassword falha
+  await assert.rejects(changePassword(ctx), err => err.message.startsWith('Sem ligação ao serviço de login') && !/Failed to fetch/.test(err.message));
+  const login = setup({ renovacoes: [networkError] });
+  await assert.rejects(vm.runInContext('login("eu@example.com", "Password1234")', login.ctx), /Sem ligação ao serviço de login/);
+});
