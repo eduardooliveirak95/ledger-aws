@@ -493,7 +493,7 @@ function accountForm(acc = null, after) {
     title: acc ? 'Editar conta' : 'Nova conta',
     values: acc || { acc_type: 'Conta à ordem', opening_balance: '', opening_date: todayISO() },
     fields: [
-      { name: 'name', label: 'Nome', type: 'text', required: true, placeholder: 'ex.: CGD, Revolut, Carteira' },
+      { name: 'name', label: 'Nome', type: 'text', required: true, placeholder: 'ex.: Conta à ordem, Poupança, Carteira' },
       { name: 'acc_type', label: 'Tipo', type: 'select', options: ACCOUNT_TYPES, required: true },
       { name: 'opening_balance', label: 'Saldo inicial (€)', type: 'money', required: false,
         hint: 'O dinheiro que já estava na conta antes do primeiro movimento que vais registar. Pode ser 0.' },
@@ -535,7 +535,7 @@ function txForm(tx = null, preset = {}) {
       { name: 'to_account_id', label: 'Para a conta', type: 'select', options: accOpts, required: true, half: true, showIf: v => v.direction === 'transfer' },
       { name: 'category', label: 'Categoria', type: 'pick', required: true, showIf: v => v.direction !== 'transfer', placeholder: 'Escolhe uma categoria',
         init: (st, f) => f.setSuggestions('category', knownCategories(st.direction === 'in' ? 'in' : 'out')) },
-      { name: 'description', label: 'Descrição', type: 'text', placeholder: 'ex.: Continente, renda de março…' },
+      { name: 'description', label: 'Descrição', type: 'text', placeholder: 'ex.: supermercado, renda de março…' },
       { name: 'approx', label: 'Valor aproximado (ex.: reconstituído de papel)', type: 'check' },
     ],
     onSubmit: async v => {
@@ -1161,7 +1161,7 @@ function propertyForm(prop = null) {
     title: prop ? 'Editar imóvel' : 'Novo imóvel',
     values: prop ? { ...prop, loan_id: prop.loan_id || '' } : { prop_type: 'Habitação própria', loan_id: D.loans.find(l => l.loan_type === 'Habitação')?.id || '' },
     fields: [
-      { name: 'name', label: 'Nome', type: 'text', required: true, placeholder: 'ex.: Casa, Apartamento Porto' },
+      { name: 'name', label: 'Nome', type: 'text', required: true, placeholder: 'ex.: Casa, Apartamento T2' },
       { name: 'prop_type', label: 'Tipo', type: 'select', options: PROPERTY_TYPES, required: true, half: true },
       { name: 'value', label: 'Valor atual (€)', type: 'money', required: true, min: 0, half: true,
         hint: 'Quanto achas que vale hoje (avaliação do banco, preço de casas parecidas…). É este valor que entra no património líquido.' },

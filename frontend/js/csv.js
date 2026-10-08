@@ -7,7 +7,7 @@
 // - descobre o separador (; , ou tab) pelo que aparece mais vezes na primeira linha, se não for indicado
 //   (os extratos do banco começam com uma linha de título sem separadores: usam sempre ";")
 // - respeita aspas: "a;b" é uma só célula e "" dentro de aspas é uma aspa literal
-// - tira a ' que o toCSV põe antes de textos começados por = + - @, tab ou mudança de linha (ver toCSV)
+// - tira a ' que o toCSV põe antes de textos começados por = + - @, tab ou retorno do carro (ver toCSV)
 // - ignora linhas vazias
 function parseCSV(text, delim) {
   text = text.replace(/^﻿/, '');
@@ -33,7 +33,7 @@ function parseCSV(text, delim) {
 
 // Monta o texto de um CSV com ";" (números com 2 casas e vírgula decimal;
 // células com ; aspas ou quebras de linha vão entre aspas).
-// Um texto começado por = + - @, tab ou mudança de linha seria lido pelo Excel como fórmula (uma
+// Um texto começado por = + - @, tab ou retorno do carro (\r) seria lido pelo Excel como fórmula (uma
 // descrição vinda do banco podia trazer uma): leva uma ' à frente, que o Excel não mostra e que o parseCSV tira.
 function toCSV(header, rows) {
   const cell = v => {
@@ -356,7 +356,7 @@ function planImport(text) {
 
 // ── DEGIRO ────────────────────────────────────────────────────────────────
 // O DEGIRO às vezes parte nomes de produto compridos numa linha extra com a data vazia:
-//   02-08-2023,09:52,VANGUARD FTSE ALL-WORLD UCITS - (USD),IE00BK5BQT80,...
+//   15-01-2024,10:00,EXEMPLO ALL-WORLD UCITS ETF - (USD),IE0000000000,...
 //   ,,ACCUMULATING ETF,,,,...
 // Essas linhas são coladas à anterior. Os investimentos são identificados pelo ISIN
 // (guardado nas notas do investimento), por isso mudar-lhes o nome na app não estraga nada.
@@ -381,7 +381,7 @@ function mergeWrappedRows(rows, iFirst, iName) {
   return out;
 }
 
-// "VANGUARD FTSE ALL-WORLD UCITS" -> "Vanguard FTSE All-World UCITS" (mantém siglas em maiúsculas)
+// "EXEMPLO ALL-WORLD UCITS ETF" -> "Exemplo All-World UCITS ETF" (mantém siglas em maiúsculas)
 function prettyProduct(name) {
   const KEEP = new Set(['ETF', 'UCITS', 'MSCI', 'FTSE', 'USD', 'EUR', 'GBP', 'S&P', 'ESG', 'SRI', 'EM', 'ACWI', 'IMI', 'REIT', 'II', 'III', 'PLC', 'SA', 'AG', 'NV']);
   return name.trim().split(/\s+/).map(w => {
