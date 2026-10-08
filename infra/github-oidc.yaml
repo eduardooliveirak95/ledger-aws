@@ -21,7 +21,7 @@ Parameters:
   # O teu utilizador do GitHub
   GitHubOwner:
     Type: String
-    Description: Your GitHub username (e.g. eduardooliveira)
+    Description: Your GitHub username (e.g. your-username)
   # Nome do repositório
   GitHubRepo:
     Type: String
