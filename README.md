@@ -53,7 +53,7 @@ O administrador não vê os dados financeiros de ninguém. Renovar a sessão sem
 ## Importar e fazer backup
 
 - **⬇ Backup** (no topo) descarrega todos os teus dados em CSV: contas (com o tipo e o saldo inicial), movimentos, investimentos, créditos e património.
-- **✉ Backup diário** (no topo; em ecrãs médios aparece como **✉ Diário**): marca a caixa para receberes no email da tua conta, todos os dias à meia-noite (hora de Portugal), os mesmos CSV ("BACKUP Ledger dia DD/MM/AAAA", com os dados até ao fim desse dia). Vem desligado; desmarca quando quiseres deixar de receber.
+- **✉ Backup diário** (no topo; em ecrãs médios aparece como **✉ Diário**): marca a caixa para receberes no email da tua conta, todos os dias à meia-noite (hora de Portugal), os mesmos CSV ("BACKUP Ledger dia DD/MM/AAAA", com os dados até ao fim desse dia). Vem desligado; desmarca quando quiseres deixar de receber. Se ao ligar a app avisar que o email ainda não está confirmado, carrega no link do email que a Amazon Web Services te enviou quando a tua conta foi criada (vê também no spam); se não o encontrares, pede ao administrador para o enviar outra vez.
 - **⬆ Importar** (em cada separador) recupera um backup ou traz dados de outros sítios:
   - modelos CSV (descarregam-se na própria janela);
   - CSV do Excel;

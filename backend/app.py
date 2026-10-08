@@ -37,7 +37,7 @@ Rotas:
     POST   /items         criar / atualizar muitos itens de uma vez  {"items": [...], "delete": [...]}
     DELETE /items/{id}    apagar um item (+ os "filhos" no caso de contas / investimentos / créditos)
     GET    /settings      definições do utilizador ({"daily_backup": true/false})
-    POST   /settings      mudar as definições  {"daily_backup": true/false}
+    POST   /settings      mudar as definições  {"daily_backup": true/false} (ao ligar, pode trazer um "warning")
     GET    /admin/users   (função admin, só para o grupo "admin") utilizadores, último login e logins recentes
 """
 
@@ -155,7 +155,7 @@ def login_table():
 
 
 def ses():
-    """Cliente do Amazon SES (envio de emails), criado na primeira chamada e depois reutilizado."""
+    """Cliente do Amazon SES (envio do backup; na API, só ver se um email está verificado), criado na primeira chamada."""
     global _ses
     if _ses is None:
         _ses = boto3.client("sesv2")
@@ -714,23 +714,56 @@ def get_settings(user):
     return {"daily_backup": "Item" in r}
 
 
-def post_settings(user, email, event):
+def backup_email_warning(claims):
+    """Ao ligar o backup diário: um aviso (texto) se o email da conta ainda não pode receber os CSV; senão None.
+
+    - Email por verificar no Cognito (claim "email_verified" do token): o envio da meia-noite salta a conta.
+    - Email por verificar no SES: enquanto a conta SES estiver em modo de testes ("sandbox"), o SES só envia
+      para endereços (ou domínios) verificados, e o envio falhava todas as noites (MessageRejected).
+      É o link que a AWS envia quando o create-user cria a conta.
+    Só lê o estado no SES (ses:GetEmailIdentity). Se essa consulta falhar por outro motivo, não avisa
+    (fica só o código do erro no log). Se a conta SES sair do modo de testes, esta verificação deixa de ser
+    precisa (os destinatários deixam de ter de estar verificados) e deve ser revista.
+    """
+    if str(claims.get("email_verified", "")).lower() != "true":
+        return ("Backup diário ligado, mas o email da tua conta não está verificado: os CSV só começam "
+                "a chegar depois de ele ser verificado. Fala com o administrador.")
+    email = claims["email"]
+    for identity in (email, email.rsplit("@", 1)[-1]):   # o endereço ou o domínio inteiro
+        try:
+            r = ses().get_email_identity(EmailIdentity=identity)
+        except Exception as e:
+            code = getattr(e, "response", {}).get("Error", {}).get("Code") or type(e).__name__
+            if code == "NotFoundException":
+                continue
+            print(json.dumps({"settings_ses_error": code}))   # só o código: a mensagem pode ter o email
+            return None
+        if r.get("VerifiedForSendingStatus") or r.get("VerificationStatus") == "SUCCESS":
+            return None
+    return ("Backup diário ligado, mas ainda não vais receber os emails: confirma o teu endereço no link "
+            "do email que a Amazon Web Services te enviou (vê também no spam). Se não o encontrares, "
+            "pede ao administrador para o enviar outra vez.")
+
+
+def post_settings(user, claims, event):
     """POST /settings: ativa ou desativa o backup diário por email  {"daily_backup": true/false}.
 
     Ativar grava um item na partição DAILY_BACKUP (com o sub do utilizador); desativar apaga-o.
     O email não é guardado: o backup diário vai sempre para o email atual da conta no Cognito.
+    Ao ativar, se o email ainda não puder receber os CSV, a resposta traz também um "warning" para a app mostrar.
     """
     body = read_body(event)
     daily = body.get("daily_backup")
     if not isinstance(daily, bool):
         raise ApiError(400, "daily_backup: tem de ser true ou false")
-    if daily:
-        if not email:
-            raise ApiError(400, "A tua conta não tem email associado")
-        table().put_item(Item={"user_id": DAILY_BACKUP_PK, "sk": user, "since": now_iso()})
-    else:
+    if not daily:
         table().delete_item(Key={"user_id": DAILY_BACKUP_PK, "sk": user})
-    return {"daily_backup": daily}
+        return {"daily_backup": False}
+    if not claims.get("email"):
+        raise ApiError(400, "A tua conta não tem email associado")
+    table().put_item(Item={"user_id": DAILY_BACKUP_PK, "sk": user, "since": now_iso()})
+    warning = backup_email_warning(claims)
+    return {"daily_backup": True, **({"warning": warning} if warning else {})}
 
 
 # ── BACKUP DIÁRIO POR EMAIL ──────────────────────────────────────────────────
@@ -1075,7 +1108,7 @@ def handler(event, context):
         if route == "GET /settings":
             return response(200, get_settings(user))
         if route == "POST /settings":
-            return response(200, post_settings(user, claims.get("email"), event))
+            return response(200, post_settings(user, claims, event))
         return response(404, {"detail": f"Rota desconhecida: {route}"})
     except ApiError as e:
         return response(e.status, {"detail": e.detail})

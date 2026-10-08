@@ -172,6 +172,12 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:       # permissões mínimas: ler/escrever SÓ nesta tabela
             TableName: !Ref EntriesTable
+        - Statement:
+            # Só leitura: ao ligar o "Backup diário", ver se o email da conta já está verificado no SES,
+            # para avisar a pessoa (o SES em modo de testes só envia para emails verificados). Não envia emails.
+            - Effect: Allow
+              Action: ses:GetEmailIdentity
+              Resource: !Sub arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*
       # Cada "Event" liga uma rota do API Gateway a esta função
       Events:
         GetData:
