@@ -138,12 +138,22 @@ $('#password-btn').addEventListener('click', passwordForm);
 
 // Interruptor "Backup diário": liga/desliga o email automático com os CSV (todos os dias à meia-noite,
 // hora de Portugal; o envio é feito pelo backend). Se a gravação falhar, volta ao estado anterior.
+// Se o email da conta ainda não puder receber os CSV (por verificar), o backend liga na mesma e devolve
+// um "warning", que aparece numa janela (é longo demais para a mensagem rápida do fundo do ecrã).
 $('#daily-backup').addEventListener('change', async e => {
   const box = e.target, on = box.checked;
   box.disabled = true;
   try {
-    await api.saveSettings({ daily_backup: on });
-    toast(on ? 'Backup diário ligado: vais receber os CSV por email todos os dias à meia-noite' : 'Backup diário desligado');
+    const res = await api.saveSettings({ daily_backup: on });
+    if (on && res?.warning) {
+      modal.open({
+        title: 'Backup diário',
+        body: `<div class="modal-hint" style="font-size:14px;color:var(--text)">${esc(res.warning)}</div>`,
+        footer: [{ label: 'OK', cls: 'primary', onClick: () => modal.close() }],
+      });
+    } else {
+      toast(on ? 'Backup diário ligado: vais receber os CSV por email todos os dias à meia-noite' : 'Backup diário desligado');
+    }
   } catch (err) {
     box.checked = !on;
     toast(err.message, true);

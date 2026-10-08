@@ -50,9 +50,12 @@ def table():
         app._table = app._login_table = app._ses = app._cognito = None
 
 
-def call(route, user="u1", body=None, path=None, email=None):
-    """Simula um pedido do API Gateway à Lambda (com o utilizador já autenticado) e devolve (código, corpo)."""
-    claims = {"sub": user, **({"email": email} if email else {})}
+def call(route, user="u1", body=None, path=None, email=None, verified=True):
+    """Simula um pedido do API Gateway à Lambda (com o utilizador já autenticado) e devolve (código, corpo).
+
+    Com email, o token traz também "email_verified" (o API Gateway entrega as claims como texto).
+    """
+    claims = {"sub": user, **({"email": email, "email_verified": "true" if verified else "false"} if email else {})}
     event = {"routeKey": route, "pathParameters": path,
              "body": json.dumps(body) if body is not None else None,
              "requestContext": {"authorizer": {"jwt": {"claims": claims}}}}
@@ -217,6 +220,7 @@ def test_transfer_categories_are_renamed(table):
 
 def test_daily_backup_setting(table):
     """O backup diário começa desligado, liga-se e desliga-se por utilizador e não aparece nos dados."""
+    boto3.client("sesv2").create_email_identity(EmailIdentity="eu@example.com")   # email já verificado no SES
     assert call("GET /settings") == (200, {"daily_backup": False})
     assert call("POST /settings", body={"daily_backup": True})[0] == 400              # conta sem email
     assert call("POST /settings", email="eu@example.com", body={"daily_backup": "sim"})[0] == 400
@@ -227,6 +231,32 @@ def test_daily_backup_setting(table):
     assert all(not v for v in d.values())
     assert call("POST /settings", email="eu@example.com", body={"daily_backup": False}) == (200, {"daily_backup": False})
     assert call("GET /settings") == (200, {"daily_backup": False})
+
+
+def test_daily_backup_warns_if_the_email_cannot_receive(table, monkeypatch, capsys):
+    """Ao ligar o backup diário, a resposta traz um aviso se o email ainda não pode receber os CSV
+    (por verificar no Cognito ou no SES); o backup fica ligado na mesma e desligar nunca avisa."""
+    sesv2 = boto3.client("sesv2")
+    sesv2.create_email_identity(EmailIdentity="eu@example.com")     # o moto dá-o logo como verificado
+    sesv2.create_email_identity(EmailIdentity="empresa.example")    # um domínio inteiro verificado também serve
+    on = {"daily_backup": True}
+    assert call("POST /settings", email="eu@example.com", body=on) == (200, {"daily_backup": True})
+    assert call("POST /settings", email="ana@empresa.example", body=on) == (200, {"daily_backup": True})
+    status, body = call("POST /settings", email="novo@example.com", body=on)        # nunca carregou no link do SES
+    assert status == 200 and body["daily_backup"] is True and "link" in body["warning"]
+    assert call("GET /settings") == (200, {"daily_backup": True})
+    _, body = call("POST /settings", email="eu@example.com", verified=False, body=on)   # por verificar no Cognito
+    assert "não está verificado" in body["warning"]
+    assert call("POST /settings", email="novo@example.com", body={"daily_backup": False}) == (200, {"daily_backup": False})
+
+    # se a consulta ao SES falhar por outro motivo: liga sem aviso, e o log só tem o código do erro (nunca o email)
+    class BrokenSes:
+        def get_email_identity(self, **kwargs):
+            raise ClientError({"Error": {"Code": "AccessDeniedException", "Message": "novo@example.com"}}, "GetEmailIdentity")
+    monkeypatch.setattr(app, "ses", lambda: BrokenSes())
+    assert call("POST /settings", email="novo@example.com", body=on) == (200, {"daily_backup": True})
+    logs = capsys.readouterr().out
+    assert "AccessDeniedException" in logs and "@" not in logs
 
 
 def test_backup_csv_headers_match_the_app():
