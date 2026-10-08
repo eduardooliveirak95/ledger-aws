@@ -743,7 +743,7 @@ function investmentForm(inv = null, after) {
     title: inv ? 'Editar investimento' : 'Novo investimento',
     values: inv || { inv_type: 'ETF' },
     fields: [
-      { name: 'name', label: 'Nome', type: 'text', required: true, placeholder: 'ex.: VWCE, PPR Save & Grow, Bitcoin' },
+      { name: 'name', label: 'Nome', type: 'text', required: true, placeholder: 'ex.: ETF Mundial, PPR, Bitcoin' },
       { name: 'inv_type', label: 'Tipo', type: 'select', options: INVESTMENT_TYPES, required: true },
       { name: 'notes', label: 'Notas', type: 'textarea', placeholder: 'Corretora, objetivo, etc.' },
     ],
