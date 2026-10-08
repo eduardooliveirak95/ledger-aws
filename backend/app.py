@@ -752,8 +752,8 @@ DIRECTION_LABEL = {"in": "Entrada", "out": "Saída", "transfer": "Transferência
 def csv_cell(v):
     """Uma célula do CSV: valores (Decimal) com 2 casas e vírgula decimal; ; aspas ou quebras de linha vão entre aspas.
 
-    Um texto começado por = + - @ (ou tab) seria lido pelo Excel como fórmula: leva uma ' à frente,
-    que o Excel não mostra e que o "Importar" da app tira (como o toCSV/parseCSV do csv.js).
+    Um texto começado por = + - @, tab ou mudança de linha seria lido pelo Excel como fórmula: leva
+    uma ' à frente, que o Excel não mostra e que o "Importar" da app tira (como o toCSV/parseCSV do csv.js).
     """
     if v is None:
         return ""
