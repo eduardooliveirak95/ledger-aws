@@ -29,8 +29,12 @@ try {
 } catch {}
 addEventListener('pagehide', () => { try { localStorage.setItem('ledger.left', String(Date.now())); } catch {} });
 
-// Erro de autenticação (password errada, sessão terminada...), distinto dos erros da API
-class AuthError extends Error {}
+// Erro de autenticação (password errada, sessão terminada...), distinto dos erros da API.
+// type = o tipo de erro do Cognito (ex.: "NotAuthorizedException"), para distinguir uma sessão que
+// acabou mesmo de um problema passageiro (ver sessionIsOver).
+class AuthError extends Error {
+  constructor(message, type = '') { super(message); this.type = type; }
+}
 
 // Traduz os erros do Cognito para mensagens em português.
 // O mesmo erro quer dizer coisas diferentes conforme a operação: NotAuthorized no login é
@@ -66,7 +70,7 @@ async function cognito(target, body) {
     body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new AuthError(cognitoMessage(target, data));
+  if (!res.ok) throw new AuthError(cognitoMessage(target, data), data.__type || '');
   return data;
 }
 
@@ -147,7 +151,7 @@ function revokeSession() {
 // Pede um ID token novo usando o refresh token, sem voltar a pedir a password
 async function refreshToken() {
   const rt = store.get('refreshToken');
-  if (!rt) throw new AuthError('Sessão terminada');
+  if (!rt) throw new AuthError('Sessão terminada', 'NoSession');
   const data = await cognito('InitiateAuth', {
     AuthFlow: 'REFRESH_TOKEN_AUTH',
     ClientId: CFG.clientId,
@@ -165,16 +169,35 @@ async function getToken(force = false) {
   return refreshToken();
 }
 
+// true se a sessão acabou mesmo: não há refresh token, ou o Cognito recusou-o (expirado, anulado no
+// "Sair", conta desativada ou apagada). false se o problema for passageiro (sem internet, demasiados
+// pedidos, erro do Cognito): aí não se termina a sessão.
+function sessionIsOver(err) {
+  return err instanceof AuthError && /NoSession|NotAuthorized|UserNotFound|PasswordResetRequired/.test(err.type);
+}
+
 // Chamada quando a sessão não se consegue recuperar (volta ao ecrã de login); o app.js define-a.
 let onSessionExpired = () => {};
 
+// Token para um pedido à API. Se a sessão acabou mesmo, termina-a (volta ao login). Se a renovação
+// falhar por um problema passageiro, tenta outra vez daqui a 2 s; se voltar a falhar, mostra o erro
+// mas mantém a sessão: a próxima ação volta a tentar.
+async function tokenForApi(force = false) {
+  for (let attempt = 1; ; attempt++) {
+    try { return await getToken(force); }
+    catch (err) {
+      if (sessionIsOver(err)) { onSessionExpired(); throw new Error('Sessão expirada, entra outra vez'); }
+      if (attempt >= 2) throw new Error('Sem ligação ao serviço de login. Verifica a internet e tenta outra vez.');
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+  }
+}
+
 // Faz um pedido à API com o token no cabeçalho Authorization: Bearer <token>.
 // Se a API responder 401 (token recusado), renova o token e tenta uma segunda vez;
-// se falhar outra vez, termina a sessão. Erros da API viram Error com a mensagem do backend.
+// se a API voltar a recusar, termina a sessão. Erros da API viram Error com a mensagem do backend.
 async function apiFetch(path, opts = {}) {
-  let token;
-  try { token = await getToken(); }
-  catch { onSessionExpired(); throw new Error('Sessão expirada, entra outra vez'); }
+  const token = await tokenForApi();
 
   const send = t => fetch(API_BASE + path, {
     ...opts,
@@ -185,8 +208,7 @@ async function apiFetch(path, opts = {}) {
   try {
     let res = await send(token);
     if (res.status === 401) {
-      try { res = await send(await getToken(true)); }
-      catch { onSessionExpired(); throw new Error('Sessão expirada, entra outra vez'); }
+      res = await send(await tokenForApi(true));
       if (res.status === 401) { onSessionExpired(); throw new Error('Sessão expirada, entra outra vez'); }
     }
     if (!res.ok) {
