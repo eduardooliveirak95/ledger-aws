@@ -58,17 +58,24 @@ function passwordProblem(pw, confirm) {
   return '';
 }
 
+// Mensagem para quando o Cognito não responde (sem internet, ou o Cognito com problemas)
+const NO_CONNECTION = 'Sem ligação ao serviço de login. Verifica a internet e tenta outra vez.';
+
 // Chama uma operação da API do Cognito (ex.: 'InitiateAuth'). O nome da operação vai no
-// cabeçalho X-Amz-Target e os parâmetros em JSON no corpo. Os erros saem já traduzidos.
+// cabeçalho X-Amz-Target e os parâmetros em JSON no corpo. Os erros saem já traduzidos
+// (uma falha de rede também: em vez do "Failed to fetch" do browser, tipo "Network").
 async function cognito(target, body) {
-  const res = await fetch(COGNITO_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-amz-json-1.1',
-      'X-Amz-Target': 'AWSCognitoIdentityProviderService.' + target,
-    },
-    body: JSON.stringify(body),
-  });
+  let res;
+  try {
+    res = await fetch(COGNITO_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-amz-json-1.1',
+        'X-Amz-Target': 'AWSCognitoIdentityProviderService.' + target,
+      },
+      body: JSON.stringify(body),
+    });
+  } catch { throw new AuthError(NO_CONNECTION, 'Network'); }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new AuthError(cognitoMessage(target, data), data.__type || '');
   return data;
@@ -135,7 +142,11 @@ async function changePassword(oldPassword, newPassword) {
   let t = store.get('accessToken');
   // sessões abertas antes desta versão não têm access token; a renovação vai buscá-lo
   if (!t || jwtExp(t) <= Date.now() + 60000) {
-    try { await refreshToken(); } catch { throw new AuthError('A sessão expirou. Sai, volta a entrar e tenta outra vez.'); }
+    try { await refreshToken(); }
+    catch (err) {
+      // só diz que a sessão expirou se for verdade; uma falha passageira não obriga a sair (ver sessionIsOver)
+      throw new AuthError(sessionIsOver(err) ? 'A sessão expirou. Sai, volta a entrar e tenta outra vez.' : NO_CONNECTION);
+    }
     t = store.get('accessToken');
   }
   await cognito('ChangePassword', { AccessToken: t, PreviousPassword: oldPassword, ProposedPassword: newPassword });
@@ -187,7 +198,7 @@ async function tokenForApi(force = false) {
     try { return await getToken(force); }
     catch (err) {
       if (sessionIsOver(err)) { onSessionExpired(); throw new Error('Sessão expirada, entra outra vez'); }
-      if (attempt >= 2) throw new Error('Sem ligação ao serviço de login. Verifica a internet e tenta outra vez.');
+      if (attempt >= 2) throw new Error(NO_CONNECTION);
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
   }
