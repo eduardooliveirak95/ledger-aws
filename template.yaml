@@ -434,12 +434,13 @@ Resources:
           ResponseHeadersPolicyId: !Ref SecurityHeaders   # cabeçalhos de segurança (abaixo)
 
   # Cabeçalhos de segurança que o CloudFront junta a todas as respostas do site (grátis):
-  #   CSP              o browser só corre scripts do próprio site e só fala com o Cognito e com a API
-  #                    (se alguém conseguisse meter HTML na página, o script não corria nem enviava dados)
+  #   CSP              o browser só corre scripts do próprio site, só usa estilos e tipos de letra do próprio
+  #                    site e só fala com o Cognito e com a API (se alguém conseguisse meter HTML na página,
+  #                    o script não corria nem enviava dados)
   #   HSTS             o browser passa a usar sempre HTTPS neste endereço, durante 1 ano
   #   X-Frame-Options  a app não pode ser aberta dentro de outra página (proteção contra clickjacking)
   #   nosniff          o browser não "adivinha" o tipo dos ficheiros
-  #   Referrer-Policy  o endereço da app não é enviado a outros sites (ex.: Google Fonts)
+  #   Referrer-Policy  o endereço da app não é enviado a outros sites
   #   Permissions-Policy  sem câmara, microfone, localização...
   # Na CSP, a API aparece como *.execute-api: o endereço exato criaria uma dependência circular
   # (a API já depende do CloudFront por causa do CORS). 'unsafe-inline' nos estilos é preciso porque
@@ -457,8 +458,8 @@ Resources:
               - "; "
               - - "default-src 'self'"
                 - "script-src 'self'"
-                - "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com"
-                - "font-src https://fonts.gstatic.com"
+                - "style-src 'self' 'unsafe-inline'"
+                - "font-src 'self'"
                 - "img-src 'self' data: blob:"
                 - !Sub "connect-src 'self' https://cognito-idp.${AWS::Region}.amazonaws.com https://*.execute-api.${AWS::Region}.amazonaws.com"
                 - "object-src 'none'"
