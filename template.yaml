@@ -100,9 +100,12 @@ Resources:
         RecoveryMechanisms:
           - Name: admin_only
             Priority: 1
-      # Depois de cada login com sucesso, o Cognito chama esta Lambda, que o regista (ver PostLoginFunction)
+      # Depois de cada login com sucesso, o Cognito chama esta Lambda, que o regista (ver PostLoginFunction).
+      # Antes de enviar o convite de uma conta criada no separador Utilizadores, chama a CustomMessageFunction,
+      # que escreve o texto do convite em português, com o endereço do site.
       LambdaConfig:
         PostAuthentication: !GetAtt PostLoginFunction.Arn
+        CustomMessage: !GetAtt CustomMessageFunction.Arn
 
   # Grupo "admin": quem está nele vê o separador Utilizadores (todas as contas e os logins).
   # O Cognito põe os grupos no ID token (claim "cognito:groups"). Ninguém se põe no grupo sozinho:
@@ -267,9 +270,32 @@ Resources:
       Principal: cognito-idp.amazonaws.com
       SourceArn: !GetAtt UserPool.Arn
 
-  # Separador Utilizadores (função app.admin): lista as contas e os logins, só para o grupo "admin".
-  # Função à parte para a API normal não ter permissão de listar utilizadores.
-  # Não consegue ler os dados financeiros de ninguém: só as partições dos logins.
+  # Texto do email de convite (função app.custom_message): trigger "Custom message" do Cognito.
+  # Só muda o convite das contas criadas no separador Utilizadores; os outros emails do Cognito ficam iguais.
+  # Não tem permissões (só escreve o texto); se der erro, o Cognito usa o convite por omissão.
+  CustomMessageFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/
+      Handler: app.custom_message
+      Timeout: 5                    # o Cognito só espera 5 s pela resposta
+      Environment:
+        Variables:
+          SITE_URL: !Sub https://${Distribution.DomainName}
+
+  # Autoriza o Cognito (só esta user pool) a chamar a função do convite
+  CustomMessagePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt CustomMessageFunction.Arn
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt UserPool.Arn
+
+  # Separador Utilizadores (função app.admin), só para o grupo "admin": lista as contas e os logins,
+  # cria contas normais (com convite por email), desativa / reativa contas e repõe passwords.
+  # Função à parte para a API normal não ter acesso ao Cognito. Não consegue ler os dados financeiros
+  # de ninguém (só as partições dos logins) nem mudar o grupo admin (isso só com o make-admin).
   AdminFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -288,14 +314,42 @@ Resources:
               Condition:
                 ForAllValues:StringEquals:
                   dynamodb:LeadingKeys: [LOGIN, LAST_LOGIN]
-            # Listar os utilizadores e quem está no grupo admin
+            # Listar os utilizadores e quem está no grupo admin; criar contas (com convite), desativar /
+            # reativar, repor a password e terminar as sessões. Nenhuma permissão sobre os grupos.
             - Effect: Allow
-              Action: [cognito-idp:ListUsers, cognito-idp:ListUsersInGroup]
+              Action:
+                - cognito-idp:ListUsers
+                - cognito-idp:ListUsersInGroup
+                - cognito-idp:AdminCreateUser
+                - cognito-idp:AdminDisableUser
+                - cognito-idp:AdminEnableUser
+                - cognito-idp:AdminSetUserPassword
+                - cognito-idp:AdminUserGlobalSignOut
               Resource: !GetAtt UserPool.Arn
+            # Pedir ao SES a verificação do email de uma conta nova (como o create-user), para o backup diário.
+            # Só identidades de email (têm @), nunca domínios.
+            - Effect: Allow
+              Action: ses:CreateEmailIdentity
+              Resource: !Sub arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*@*
       Events:
         GetUsers:
           Type: HttpApi
           Properties: { ApiId: !Ref Api, Path: /admin/users, Method: GET }
+        CreateUser:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: /admin/users/create, Method: POST }
+        ResendInvite:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: /admin/users/resend-invite, Method: POST }
+        DisableUser:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: /admin/users/disable, Method: POST }
+        EnableUser:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: /admin/users/enable, Method: POST }
+        ResetPassword:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: /admin/users/reset-password, Method: POST }
 
   # Remetente dos emails de backup no Amazon SES. Ao ser criado, a AWS envia um email de
   # verificação para este endereço: só depois de carregar no link é que o SES envia emails.
@@ -321,6 +375,11 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /aws/lambda/${PostLoginFunction}
+      RetentionInDays: 14
+  CustomMessageFunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${CustomMessageFunction}
       RetentionInDays: 14
   AdminFunctionLogs:
     Type: AWS::Logs::LogGroup

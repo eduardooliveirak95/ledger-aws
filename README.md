@@ -6,13 +6,15 @@ Corre na AWS (site estático, login com Cognito, API em Lambda, dados em DynamoD
 
 ## Entrar
 
-O acesso é feito por convite: não há registo público. Recebes um email e uma password temporária.
+O acesso é feito por convite: não há registo público. Recebes um email de convite com o endereço da app e uma password temporária, válida 7 dias (vê também no spam). Se expirar, pede ao administrador para reenviar o convite.
 
 No primeiro login a app pede-te para escolheres uma password tua (mínimo 10 caracteres, com maiúsculas, minúsculas e um número). Para a mudares mais tarde, usa o botão **🔑 Password** no topo.
 
 Por segurança, a sessão só dura enquanto o separador estiver aberto: num separador novo ou ao reabrir o browser (mesmo com os separadores restaurados) tens de entrar outra vez. Recarregar a página não te tira da conta.
 
 Cada login fica registado (quem entrou e quando) durante 90 dias. Só o administrador vê esse registo.
+
+Se te esqueceres da password, o administrador repõe-na: dá-te uma password temporária e no login seguinte escolhes uma nova. O administrador também pode desativar uma conta (deixa de conseguir entrar, mas os dados ficam guardados) e voltar a ativá-la.
 
 ## Separadores
 
@@ -46,9 +48,11 @@ Em **+ Imóvel** basta o nome e o valor atual. O preço de compra e o crédito a
 As contas de administrador têm o selo **Admin** ao lado do email e um separador a mais, **Utilizadores**:
 
 - todas as contas, com o estado (ativa, com password temporária ou desativada), a data em que foram criadas, o último login e quantos logins fizeram;
-- os últimos 200 logins de todos, com a data e a hora de Portugal, e um filtro por utilizador.
+- os últimos 200 logins de todos, com a data e a hora de Portugal, e um filtro por utilizador;
+- **+ Nova conta**: cria uma conta de utilizador normal e a pessoa recebe o convite por email;
+- em cada conta, **Reenviar convite** (enquanto a pessoa não escolheu a password), **Desativar** / **Reativar** e **Repor password** (mostra uma password temporária, só dessa vez, para lhe dares).
 
-O administrador não vê os dados financeiros de ninguém. Renovar a sessão sem pedir a password não conta como login, e os logins anteriores a esta funcionalidade não aparecem.
+As contas de administrador não têm estas ações, e ninguém passa a administrador (nem deixa de o ser) pela app. O administrador não vê os dados financeiros de ninguém. Renovar a sessão sem pedir a password não conta como login, e os logins anteriores a esta funcionalidade não aparecem.
 
 ## Importar e fazer backup
 

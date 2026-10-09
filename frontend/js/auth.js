@@ -271,4 +271,6 @@ const api = {
 
   // GET /admin/users: todos os utilizadores e os logins recentes (só administradores; ver admin.js)
   adminUsers: () => apiFetch('/admin/users'),
+  // POST /admin/users/<ação> {email}: create, resend-invite, disable, enable ou reset-password (só administradores)
+  adminAction: (action, email) => apiFetch('/admin/users/' + action, { method: 'POST', body: JSON.stringify({ email }) }),
 };
