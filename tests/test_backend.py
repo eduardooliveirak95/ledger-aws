@@ -63,10 +63,11 @@ def call(route, user="u1", body=None, path=None, email=None, verified=True):
     return r["statusCode"], (json.loads(r["body"]) if r["body"] else None)
 
 
-def call_admin(groups=None, route="GET /admin/users"):
+def call_admin(groups=None, route="GET /admin/users", body=None, sub="admin-sub"):
     """Simula um pedido ao separador Utilizadores (função admin), com os grupos na claim do token."""
-    claims = {"sub": "admin-sub", **({"cognito:groups": groups} if groups is not None else {})}
-    r = app.admin({"routeKey": route, "requestContext": {"authorizer": {"jwt": {"claims": claims}}}}, None)
+    claims = {"sub": sub, **({"cognito:groups": groups} if groups is not None else {})}
+    r = app.admin({"routeKey": route, "body": json.dumps(body) if body is not None else None,
+                   "requestContext": {"authorizer": {"jwt": {"claims": claims}}}}, None)
     return r["statusCode"], (json.loads(r["body"]) if r["body"] else None)
 
 
@@ -472,3 +473,150 @@ def test_admin_page_only_for_admins(table, monkeypatch):
 def test_normal_api_has_no_admin_routes(table):
     """A API normal não responde às rotas de administração (são de outra função, com outras permissões)."""
     assert call("GET /admin/users")[0] == 404
+    for action in ("create", "resend-invite", "disable", "enable", "reset-password"):
+        assert call(f"POST /admin/users/{action}", body={"email": "ana@example.com"})[0] == 404
+
+
+@pytest.fixture()
+def pool(table, monkeypatch):
+    """User pool falsa com o grupo admin, o administrador "chefe" e a conta normal "ana" (já com a password dela).
+
+    Devolve (id da pool, {nome: sub}).
+    """
+    cognito = boto3.client("cognito-idp")
+    rules = {"MinimumLength": 10, "RequireUppercase": True, "RequireLowercase": True, "RequireNumbers": True,
+             "RequireSymbols": False}   # as mesmas regras do template.yaml (PasswordPolicy)
+    pool_id = cognito.create_user_pool(PoolName="ledger-test", UsernameAttributes=["email"],
+                                       Policies={"PasswordPolicy": rules})["UserPool"]["Id"]
+    monkeypatch.setenv("USER_POOL_ID", pool_id)
+    cognito.create_group(GroupName="admin", UserPoolId=pool_id)
+    subs = {}
+    for name in ("chefe", "ana"):
+        u = cognito.admin_create_user(UserPoolId=pool_id, Username=f"{name}@example.com", MessageAction="SUPPRESS",
+                                      UserAttributes=[{"Name": "email", "Value": f"{name}@example.com"}])["User"]
+        subs[name] = next(a["Value"] for a in u["Attributes"] if a["Name"] == "sub")
+    cognito.admin_add_user_to_group(UserPoolId=pool_id, Username="chefe@example.com", GroupName="admin")
+    cognito.admin_set_user_password(UserPoolId=pool_id, Username="ana@example.com", Password="Abcdefgh12", Permanent=True)
+    return pool_id, subs
+
+
+def act(subs, action, email):
+    """O administrador "chefe" faz uma ação numa conta: POST /admin/users/<action> {"email": ...}."""
+    return call_admin("[admin]", route=f"POST /admin/users/{action}", body={"email": email}, sub=subs["chefe"])
+
+
+def cognito_user(pool_id, email):
+    return boto3.client("cognito-idp").admin_get_user(UserPoolId=pool_id, Username=email)
+
+
+def test_admin_creates_normal_accounts_with_an_invite(pool, monkeypatch, capsys):
+    """Criar conta: fica com password temporária, email verificado e fora de qualquer grupo; pede ao SES a
+    verificação do email. 409 se já existir, 400 se o email não servir. O log não tem emails."""
+    pool_id, subs = pool
+    assert act(subs, "create", " Nova@Example.com ") == (200, {"ok": True})
+    u = cognito_user(pool_id, "nova@example.com")
+    attrs = {a["Name"]: a["Value"] for a in u["UserAttributes"]}
+    assert u["UserStatus"] == "FORCE_CHANGE_PASSWORD" and attrs["email"] == "nova@example.com"
+    assert attrs["email_verified"] == "true"
+    assert boto3.client("cognito-idp").admin_list_groups_for_user(
+        UserPoolId=pool_id, Username="nova@example.com")["Groups"] == []
+    assert boto3.client("sesv2").get_email_identity(EmailIdentity="nova@example.com")["IdentityType"] == "EMAIL_ADDRESS"
+
+    assert act(subs, "create", "nova@example.com")[0] == 409
+    assert act(subs, "create", "Ana@example.com")[0] == 409
+    for bad in (None, "", "sem-arroba", "a b@example.com", 'a"b@example.com', "x" * 250 + "@example.com", 5):
+        assert act(subs, "create", bad)[0] == 400
+    assert call_admin("[outro]", route="POST /admin/users/create", body={"email": "outra@example.com"})[0] == 403
+
+    # se o pedido ao SES falhar, a conta fica criada e a resposta traz um aviso
+    class FailingSes:
+        def create_email_identity(self, **kw):
+            raise ClientError({"Error": {"Code": "LimitExceededException", "Message": "x@example.com"}}, "CreateEmailIdentity")
+    monkeypatch.setattr(app, "ses", lambda: FailingSes())
+    status, body = act(subs, "create", "terceira@example.com")
+    assert status == 200 and "backup diário" in body["warning"]
+    assert cognito_user(pool_id, "terceira@example.com")["UserStatus"] == "FORCE_CHANGE_PASSWORD"
+
+    out = capsys.readouterr().out
+    assert out.count('"admin_action": "create"') == 2 and "@" not in out
+
+
+def test_admin_resends_the_invite_only_before_the_first_login(pool):
+    """Reenviar o convite: só para contas que ainda não escolheram a password e que não estão desativadas."""
+    pool_id, subs = pool
+    assert act(subs, "create", "nova@example.com")[0] == 200
+    assert act(subs, "resend-invite", "nova@example.com") == (200, {"ok": True})
+    assert act(subs, "resend-invite", "ana@example.com")[0] == 409        # já escolheu a password
+    assert act(subs, "disable", "nova@example.com")[0] == 200
+    assert act(subs, "resend-invite", "nova@example.com")[0] == 409       # desativada
+    assert act(subs, "resend-invite", "ninguem@example.com")[0] == 404
+
+
+def test_admin_disables_enables_and_resets_normal_accounts(pool, capsys):
+    """Desativar, reativar e repor a password (fica temporária e só aparece na resposta)."""
+    pool_id, subs = pool
+    assert act(subs, "disable", "ana@example.com") == (200, {"ok": True})
+    assert cognito_user(pool_id, "ana@example.com")["Enabled"] is False
+    assert act(subs, "enable", "ana@example.com") == (200, {"ok": True})
+    assert cognito_user(pool_id, "ana@example.com")["Enabled"] is True
+
+    status, body = act(subs, "reset-password", "ana@example.com")
+    password = body["temporary_password"]
+    assert status == 200 and len(password) == 14
+    assert re.search(r"[a-z]", password) and re.search(r"[A-Z]", password) and re.search(r"\d", password)
+    assert cognito_user(pool_id, "ana@example.com")["UserStatus"] == "FORCE_CHANGE_PASSWORD"
+
+    out = capsys.readouterr().out
+    actions = [json.loads(line) for line in out.splitlines() if "admin_action" in line]
+    assert [a["admin_action"] for a in actions] == ["disable", "enable", "reset-password"]
+    assert all(a == {"admin_action": a["admin_action"], "by": subs["chefe"], "user": subs["ana"]} for a in actions)
+    assert password not in out and "@" not in out
+
+
+def test_admin_actions_never_touch_admin_accounts(pool):
+    """Contas de administrador (incluindo a própria) só se mudam pela AWS: 403 e ficam iguais.
+    Quem não é administrador recebe 403; um email que não existe dá 404."""
+    pool_id, subs = pool
+    cognito = boto3.client("cognito-idp")
+    cognito.admin_create_user(UserPoolId=pool_id, Username="outro@example.com", MessageAction="SUPPRESS",
+                              UserAttributes=[{"Name": "email", "Value": "outro@example.com"}])
+    cognito.admin_add_user_to_group(UserPoolId=pool_id, Username="outro@example.com", GroupName="admin")
+    for action in ("resend-invite", "disable", "enable", "reset-password"):
+        for email in ("chefe@example.com", "outro@example.com"):
+            assert act(subs, action, email)[0] == 403
+        assert act(subs, action, "ninguem@example.com")[0] == 404
+        assert call_admin(None, route=f"POST /admin/users/{action}", body={"email": "ana@example.com"})[0] == 403
+    assert cognito_user(pool_id, "chefe@example.com")["Enabled"] is True
+    assert cognito_user(pool_id, "outro@example.com")["UserStatus"] == "FORCE_CHANGE_PASSWORD"
+    assert cognito_user(pool_id, "ana@example.com")["UserStatus"] == "CONFIRMED"
+
+
+def test_temporary_passwords_follow_the_pool_rules():
+    """14 caracteres, com minúsculas, maiúsculas e números, sem os que se confundem (0/O, 1/l/I)."""
+    for _ in range(300):
+        pw = app.temp_password()
+        assert len(pw) == 14 and re.search(r"[a-z]", pw) and re.search(r"[A-Z]", pw) and re.search(r"\d", pw)
+        assert not set(pw) & set("0O1lI")
+
+
+def test_invite_email_in_portuguese_with_the_site(monkeypatch):
+    """O convite das contas novas leva o endereço do site, o email e os dois marcadores do Cognito.
+    As outras mensagens ficam iguais e um erro nunca sai da função (o Cognito usa o texto por omissão)."""
+    monkeypatch.setenv("SITE_URL", "https://exemplo.cloudfront.net")
+    event = {"triggerSource": "CustomMessage_AdminCreateUser",
+             "request": {"userAttributes": {"email": "nova@example.com"}, "codeParameter": "{####}",
+                         "usernameParameter": "{username}"},
+             "response": {"emailSubject": None, "emailMessage": None, "smsMessage": None}}
+    out = app.custom_message(json.loads(json.dumps(event)))
+    msg = out["response"]["emailMessage"]
+    assert out["response"]["emailSubject"] == "Convite para o Ledger"
+    for text in ("{####}", "{username}", "https://exemplo.cloudfront.net", "nova@example.com", "7 dias"):
+        assert text in msg
+
+    other = {"triggerSource": "CustomMessage_ForgotPassword", "request": {"codeParameter": "{####}"},
+             "response": {"emailSubject": None, "emailMessage": None}}
+    assert app.custom_message(json.loads(json.dumps(other))) == other
+    assert app.custom_message({"triggerSource": "CustomMessage_AdminCreateUser"}) == {
+        "triggerSource": "CustomMessage_AdminCreateUser"}
+    monkeypatch.delenv("SITE_URL")
+    assert app.custom_message(json.loads(json.dumps(event))) == event

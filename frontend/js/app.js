@@ -1195,6 +1195,12 @@ function propertyForm(prop = null) {
 
 // ════════ UTILIZADORES (só administradores; o resto está no admin.js) ════════
 $('#adm-refresh').addEventListener('click', () => loadAdmin());
+$('#adm-new').addEventListener('click', () => newAccountForm());
+// Botões "Ações" da tabela de contas (Desativar, Repor password...): a tabela é redesenhada, por isso um só ouvinte
+$('#adm-users').addEventListener('click', e => {
+  const b = e.target.closest('[data-adm-action]');
+  if (b) runAdminAction(b.dataset.admAction, b.dataset.email);
+});
 $('#adm-filter').addEventListener('change', e => { S.adminUser = e.target.value; renderAdmin(); });
 
 // ════════ ENCAMINHAMENTO DE CLIQUES (botões com atributos data-*) ════════

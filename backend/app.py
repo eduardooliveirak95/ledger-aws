@@ -1,8 +1,9 @@
 """
-Backend do Ledger - código das quatro funções AWS Lambda:
+Backend do Ledger - código das cinco funções AWS Lambda:
     handler        API chamada pelo API Gateway (HTTP API, formato de evento v2)
     daily_backup   backup diário por email, chamado pelo EventBridge Scheduler à meia-noite (hora de Portugal)
     post_login     regista cada login, chamado pelo Cognito (trigger "Post authentication")
+    custom_message texto do email de convite das contas novas, chamado pelo Cognito (trigger "Custom message")
     admin          separador Utilizadores (contas e logins), só para o grupo "admin" do Cognito
 
 Sem dependências externas: só usa a biblioteca padrão do Python + boto3
@@ -39,12 +40,17 @@ Rotas:
     GET    /settings      definições do utilizador ({"daily_backup": true/false})
     POST   /settings      mudar as definições  {"daily_backup": true/false} (ao ligar, pode trazer um "warning")
     GET    /admin/users   (função admin, só para o grupo "admin") utilizadores, último login e logins recentes
+    POST   /admin/users/create | resend-invite | disable | enable | reset-password  {"email": ...}
+                          (função admin) criar uma conta normal com convite por email, reenviar o convite,
+                          desativar / reativar uma conta e repor a password (nunca em contas de administrador)
 """
 
 import base64
+import html
 import json
 import os
 import re
+import secrets
 import traceback
 import unicodedata
 import uuid
@@ -73,6 +79,10 @@ LOGIN_KEEP_DAYS = 90
 # Grupo do Cognito dos administradores e quantos logins recentes mostra o separador Utilizadores
 ADMIN_GROUP = "admin"
 MAX_LOGINS_SHOWN = 200
+# Letras e números das passwords temporárias, sem os que se confundem ao ditar ou copiar à mão (0/O, 1/l/I)
+TEMP_PASSWORD_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+# Email com aspecto válido (algo@algo.algo), sem espaços nem aspas (vai dentro do filtro do ListUsers)
+EMAIL_RE = re.compile(r'^[^@\s"\\]+@[^@\s"\\]+\.[^@\s"\\]+$')
 
 # Tipo de item (nome usado pelo frontend) -> prefixo da sort key no DynamoDB
 KIND_PREFIX = {
@@ -991,6 +1001,40 @@ def post_login(event, context=None):
     return event
 
 
+# Email de convite de uma conta nova. O Cognito troca {username} pelo utilizador e {####} pela password
+# temporária, e só aceita o texto se tiver os dois (senão envia o convite por omissão, em inglês).
+INVITE_SUBJECT = "Convite para o Ledger"
+INVITE_MESSAGE = """Olá!<br><br>
+Foi criada uma conta para ti no <b>Ledger</b>, uma app de finanças pessoais.<br><br>
+Entra em <a href="{site}">{site}</a> com:<br>
+&nbsp;&nbsp;Email: <b>{email}</b><br>
+&nbsp;&nbsp;Password temporária: <b>{code}</b><br><br>
+No primeiro login escolhes a tua password. A password temporária é válida durante 7 dias.<br><br>
+Vais receber também um email da Amazon Web Services a pedir para confirmares este endereço:
+só é preciso se quiseres receber o backup diário por email.<br><br>
+<small>Referência da conta: {username}</small>"""
+
+
+def custom_message(event, context=None):
+    """Função Lambda do texto do convite (configurada como "app.custom_message" no template.yaml).
+
+    O Cognito chama-a antes de enviar uma mensagem (trigger "Custom message"). Só muda o convite das
+    contas criadas no separador Utilizadores (ou o seu reenvio): em português e com o endereço do site.
+    As outras mensagens ficam como estão. Nunca lança erros: se falhar, o Cognito envia o convite por omissão.
+    Tem de devolver o evento que recebeu.
+    """
+    try:
+        if event.get("triggerSource") == "CustomMessage_AdminCreateUser":
+            req = event["request"]
+            message = INVITE_MESSAGE.format(
+                site=html.escape(os.environ["SITE_URL"]), email=html.escape(req["userAttributes"].get("email", "")),
+                code=req["codeParameter"], username=req["usernameParameter"])
+            event["response"].update(emailSubject=INVITE_SUBJECT, emailMessage=message)
+    except Exception as e:
+        print(json.dumps({"custom_message_error": type(e).__name__}))
+    return event
+
+
 def is_admin(claims):
     """True se o token for de alguém do grupo "admin" do Cognito.
 
@@ -1032,17 +1076,9 @@ def admin_users():
             break
         kwargs["PaginationToken"] = r["PaginationToken"]
 
-    # quem está no grupo admin
-    kwargs = {"UserPoolId": pool, "GroupName": ADMIN_GROUP}
-    while True:
-        r = cognito().list_users_in_group(**kwargs)
-        for u in r["Users"]:
-            sub = next((a["Value"] for a in u.get("Attributes", []) if a["Name"] == "sub"), None)
-            if sub in users:
-                users[sub]["admin"] = True
-        if not r.get("NextToken"):
-            break
-        kwargs["NextToken"] = r["NextToken"]
+    for sub in admin_subs():
+        if sub in users:
+            users[sub]["admin"] = True
 
     for item in query_all(LAST_LOGIN_PK):
         if item["sk"] in users:
@@ -1055,12 +1091,168 @@ def admin_users():
     return {"users": sorted(users.values(), key=lambda u: u["email"].lower()), "logins": logins}
 
 
+def admin_subs():
+    """Os "sub" de quem está no grupo admin do Cognito."""
+    subs = set()
+    kwargs = {"UserPoolId": os.environ["USER_POOL_ID"], "GroupName": ADMIN_GROUP}
+    while True:
+        r = cognito().list_users_in_group(**kwargs)
+        subs.update(a["Value"] for u in r["Users"] for a in u.get("Attributes", []) if a["Name"] == "sub")
+        if not r.get("NextToken"):
+            return subs
+        kwargs["NextToken"] = r["NextToken"]
+
+
+def error_code(e):
+    """Código de um erro da AWS (ex.: "UsernameExistsException"); noutros erros, o nome da classe."""
+    return getattr(e, "response", {}).get("Error", {}).get("Code") or type(e).__name__
+
+
+def temp_password(length=14):
+    """Password temporária aleatória que cumpre as regras da user pool (maiúsculas, minúsculas e números)."""
+    while True:
+        pw = "".join(secrets.choice(TEMP_PASSWORD_CHARS) for _ in range(length))
+        if any(c.islower() for c in pw) and any(c.isupper() for c in pw) and any(c.isdigit() for c in pw):
+            return pw
+
+
+def admin_email(body):
+    """O email de um pedido de administração ({"email": ...}), sem espaços à volta. 400 se não servir."""
+    email = body.get("email")
+    if not isinstance(email, str) or len(email.strip()) > 254 or not EMAIL_RE.match(email.strip()):
+        raise ApiError(400, "Email inválido")
+    return email.strip()
+
+
+def users_with_email(email):
+    """As contas do Cognito com este email (no máximo uma)."""
+    return cognito().list_users(UserPoolId=os.environ["USER_POOL_ID"], Filter=f'email = "{email}"', Limit=1)["Users"]
+
+
+def admin_target(claims, email):
+    """A conta em que o administrador vai mexer: (Username, sub, utilizador do Cognito).
+
+    404 se não existir. 403 se for a própria conta ou uma conta do grupo admin: essas só se mudam com a
+    AWS CLI (create-user / make-admin), para ninguém ficar trancado por engano.
+    """
+    found = users_with_email(email)
+    if not found:
+        raise ApiError(404, "Não existe nenhuma conta com este email")
+    u = found[0]
+    sub = next((a["Value"] for a in u.get("Attributes", []) if a["Name"] == "sub"), None)
+    if sub == claims["sub"] or sub in admin_subs():
+        raise ApiError(403, "As contas de administrador só se mudam pela AWS (create-user / make-admin)")
+    return u["Username"], sub, u
+
+
+def log_admin_action(action, claims, sub):
+    """Uma linha no CloudWatch por ação de administração: o quê, quem fez e a quem (só os "sub", sem emails)."""
+    print(json.dumps({"admin_action": action, "by": claims["sub"], "user": sub}))
+
+
+def sign_out_everywhere(username):
+    """Anula os refresh tokens da conta (as sessões abertas acabam quando o ID token expirar, no máximo 60 min).
+
+    Se falhar, a ação principal já foi feita: fica só o código do erro no log.
+    """
+    try:
+        cognito().admin_user_global_sign_out(UserPoolId=os.environ["USER_POOL_ID"], Username=username)
+    except Exception as e:
+        print(json.dumps({"admin_sign_out_error": error_code(e)}))
+
+
+def send_invite(**kwargs):
+    """AdminCreateUser com envio do convite por email (conta nova ou reenvio). 429 se o Cognito já não
+    puder enviar mais emails hoje (o email do próprio Cognito tem um limite diário)."""
+    try:
+        return cognito().admin_create_user(UserPoolId=os.environ["USER_POOL_ID"], DesiredDeliveryMediums=["EMAIL"],
+                                           **kwargs)
+    except Exception as e:
+        if error_code(e) == "LimitExceededException":
+            raise ApiError(429, "O Cognito já enviou hoje o máximo de emails. Tenta amanhã ou cria a conta com o create-user.")
+        raise
+
+
+def admin_create_user(claims, email):
+    """POST /admin/users/create: cria uma conta normal (nunca de administrador) e o Cognito envia o convite.
+
+    O convite (texto em custom_message, acima) leva o endereço do site e uma password temporária,
+    válida 7 dias; no primeiro login a pessoa escolhe a dela. Tal como o create-user, também pede ao SES
+    a verificação do email (a AWS envia um link), precisa para o backup diário enquanto o SES estiver em testes.
+    """
+    email = email.lower()
+    if users_with_email(email):
+        raise ApiError(409, "Já existe uma conta com este email")
+    try:
+        user = send_invite(Username=email, UserAttributes=[{"Name": "email", "Value": email},
+                                                           {"Name": "email_verified", "Value": "true"}])["User"]
+    except Exception as e:
+        if error_code(e) == "UsernameExistsException":
+            raise ApiError(409, "Já existe uma conta com este email")
+        raise
+    log_admin_action("create", claims, next((a["Value"] for a in user.get("Attributes", []) if a["Name"] == "sub"), None))
+    try:
+        ses().create_email_identity(EmailIdentity=email)
+    except Exception as e:
+        if error_code(e) != "AlreadyExistsException":
+            print(json.dumps({"admin_ses_error": error_code(e)}))   # só o código: a mensagem pode ter o email
+            return {"ok": True, "warning": "Conta criada e convite enviado, mas a AWS não enviou o email de verificação "
+                                           "do endereço (só é preciso para o backup diário)."}
+    return {"ok": True}
+
+
+def admin_resend_invite(claims, email):
+    """POST /admin/users/resend-invite: envia outra vez o convite, com uma password temporária nova.
+
+    Só para contas que ainda não escolheram a password (o convite expira ao fim de 7 dias).
+    """
+    _, sub, user = admin_target(claims, email)
+    if user.get("UserStatus") != "FORCE_CHANGE_PASSWORD":
+        raise ApiError(409, "Esta conta já escolheu a password: usa \"Repor password\"")
+    if user.get("Enabled") is False:
+        raise ApiError(409, "Esta conta está desativada: reativa-a primeiro")
+    send_invite(Username=email, MessageAction="RESEND")
+    log_admin_action("resend-invite", claims, sub)
+    return {"ok": True}
+
+
+def admin_set_enabled(claims, email, enabled):
+    """POST /admin/users/enable e /admin/users/disable: reativa ou desativa uma conta.
+
+    Uma conta desativada não consegue entrar nem renovar a sessão; os dados ficam guardados.
+    """
+    username, sub, _ = admin_target(claims, email)
+    pool = os.environ["USER_POOL_ID"]
+    if enabled:
+        cognito().admin_enable_user(UserPoolId=pool, Username=username)
+    else:
+        sign_out_everywhere(username)
+        cognito().admin_disable_user(UserPoolId=pool, Username=username)
+    log_admin_action("enable" if enabled else "disable", claims, sub)
+    return {"ok": True}
+
+
+def admin_reset_password(claims, email):
+    """POST /admin/users/reset-password: põe uma password temporária nova e devolve-a (só esta vez).
+
+    O administrador dá-a à pessoa, que escolhe a dela no login seguinte (a conta fica em "Password temporária",
+    tal como com o create-user --temporaria). As sessões abertas da conta terminam.
+    """
+    username, sub, _ = admin_target(claims, email)
+    password = temp_password()
+    cognito().admin_set_user_password(UserPoolId=os.environ["USER_POOL_ID"], Username=username,
+                                      Password=password, Permanent=False)
+    sign_out_everywhere(username)
+    log_admin_action("reset-password", claims, sub)
+    return {"temporary_password": password}
+
+
 def admin(event, context=None):
     """Função Lambda do separador Utilizadores (configurada como "app.admin" no template.yaml).
 
-    É uma função à parte da API normal: só ela pode listar os utilizadores do Cognito, e só lê as
-    partições dos logins (as permissões no template.yaml não a deixam ler os dados de ninguém).
-    Quem não estiver no grupo "admin" recebe 403.
+    É uma função à parte da API normal: só ela mexe nas contas do Cognito, e só lê as partições
+    dos logins (as permissões no template.yaml não a deixam ler os dados de ninguém nem mudar o
+    grupo admin). Quem não estiver no grupo "admin" recebe 403.
     """
     try:
         claims = event["requestContext"]["authorizer"]["jwt"]["claims"]
@@ -1068,13 +1260,25 @@ def admin(event, context=None):
     except (KeyError, TypeError):
         return response(401, {"detail": "Unauthorized"})
     if not is_admin(claims):
-        return response(403, {"detail": "Só os administradores podem ver os utilizadores"})
+        return response(403, {"detail": "Só os administradores têm acesso aos utilizadores"})
 
     route = event.get("routeKey", "")
     try:
         if route == "GET /admin/users":
             return response(200, admin_users())
+        if route == "POST /admin/users/create":
+            return response(200, admin_create_user(claims, admin_email(read_body(event))))
+        if route == "POST /admin/users/resend-invite":
+            return response(200, admin_resend_invite(claims, admin_email(read_body(event))))
+        if route == "POST /admin/users/disable":
+            return response(200, admin_set_enabled(claims, admin_email(read_body(event)), False))
+        if route == "POST /admin/users/enable":
+            return response(200, admin_set_enabled(claims, admin_email(read_body(event)), True))
+        if route == "POST /admin/users/reset-password":
+            return response(200, admin_reset_password(claims, admin_email(read_body(event))))
         return response(404, {"detail": f"Rota desconhecida: {route}"})
+    except ApiError as e:
+        return response(e.status, {"detail": e.detail})
     except Exception:
         traceback.print_exc()
         return response(500, {"detail": "Erro interno do servidor"})

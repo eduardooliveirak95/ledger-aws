@@ -62,3 +62,21 @@ test('números do topo do separador', () => {
   });
   assert.equal(run('adminStats([], [], now).last', { now: NOW }), null);
 });
+
+test('ações de cada conta: nenhuma nas contas de administrador nem na tua', () => {
+  const actions = u => run('adminActions(u, me)', { u: { admin: false, enabled: true, status: 'CONFIRMED', ...u }, me: 'chefe@example.com' });
+  assert.deepEqual(actions({ email: 'chefe@example.com', admin: true }), []);
+  assert.deepEqual(actions({ email: 'outro@example.com', admin: true }), []);
+  assert.deepEqual(actions({ email: 'Chefe@Example.com' }), []);   // a tua conta, mesmo sem o selo
+  assert.deepEqual(actions({ email: 'ana@example.com' }), ['disable', 'reset-password']);
+  assert.deepEqual(actions({ email: 'ana@example.com', status: 'FORCE_CHANGE_PASSWORD' }), ['resend-invite', 'disable', 'reset-password']);
+  assert.deepEqual(actions({ email: 'ana@example.com', status: 'FORCE_CHANGE_PASSWORD', enabled: false }), ['enable', 'reset-password']);
+  for (const a of ['resend-invite', 'disable', 'enable', 'reset-password']) assert.ok(run(`ADMIN_ACTION_LABEL['${a}']`));
+});
+
+test('email da conta nova', () => {
+  const valid = s => run('isValidEmail(s)', { s });
+  assert.equal(valid('ana@example.com'), true);
+  assert.equal(valid(' ana.silva+teste@example.com '), true);
+  for (const s of ['', null, 'sem-arroba', 'a b@example.com', 'a"b@example.com', 'ana@example']) assert.equal(valid(s), false);
+});
