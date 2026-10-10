@@ -23,6 +23,7 @@ os.environ.update(AWS_DEFAULT_REGION="eu-west-1", AWS_ACCESS_KEY_ID="test",
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 import boto3  # noqa: E402
+from boto3.dynamodb.conditions import Key  # noqa: E402
 from botocore.exceptions import ClientError  # noqa: E402
 from moto import mock_aws  # noqa: E402
 
@@ -473,7 +474,7 @@ def test_admin_page_only_for_admins(table, monkeypatch):
 def test_normal_api_has_no_admin_routes(table):
     """A API normal não responde às rotas de administração (são de outra função, com outras permissões)."""
     assert call("GET /admin/users")[0] == 404
-    for action in ("create", "resend-invite", "disable", "enable", "reset-password"):
+    for action in ("create", "resend-invite", "disable", "enable", "reset-password", "delete"):
         assert call(f"POST /admin/users/{action}", body={"email": "ana@example.com"})[0] == 404
 
 
@@ -581,14 +582,92 @@ def test_admin_actions_never_touch_admin_accounts(pool):
     cognito.admin_create_user(UserPoolId=pool_id, Username="outro@example.com", MessageAction="SUPPRESS",
                               UserAttributes=[{"Name": "email", "Value": "outro@example.com"}])
     cognito.admin_add_user_to_group(UserPoolId=pool_id, Username="outro@example.com", GroupName="admin")
-    for action in ("resend-invite", "disable", "enable", "reset-password"):
+    for action in ("resend-invite", "disable", "enable", "reset-password", "delete"):
         for email in ("chefe@example.com", "outro@example.com"):
             assert act(subs, action, email)[0] == 403
         assert act(subs, action, "ninguem@example.com")[0] == 404
         assert call_admin(None, route=f"POST /admin/users/{action}", body={"email": "ana@example.com"})[0] == 403
+    # mesmo desativada, uma conta de administrador não se apaga pela app
+    cognito.admin_disable_user(UserPoolId=pool_id, Username="outro@example.com")
+    assert act(subs, "delete", "outro@example.com")[0] == 403
     assert cognito_user(pool_id, "chefe@example.com")["Enabled"] is True
     assert cognito_user(pool_id, "outro@example.com")["UserStatus"] == "FORCE_CHANGE_PASSWORD"
     assert cognito_user(pool_id, "ana@example.com")["UserStatus"] == "CONFIRMED"
+
+
+def keys_of(table, user):
+    return [i["sk"] for i in table.query(KeyConditionExpression=Key("user_id").eq(user))["Items"]]
+
+
+def test_admin_deletes_disabled_accounts_with_all_their_data(pool, table, monkeypatch, capsys):
+    """Apagar: só contas desativadas (409 se estiver ativa). Apaga a conta, todos os dados dela, o backup diário,
+    o último login e o email no SES; os logins ficam até ao TTL e os outros utilizadores ficam iguais.
+    Na partição do utilizador só se pedem as chaves (a permissão IAM só deixa isso). O log não tem emails."""
+    pool_id, subs = pool
+    ana, chefe = subs["ana"], subs["chefe"]
+    with table.batch_writer() as bw:
+        for i in range(60):
+            bw.put_item(Item={"user_id": ana, "sk": f"TX_2026-10-01_{i:04x}", "amount": Decimal("12.5")})
+        bw.put_item(Item={"user_id": ana, "sk": "ACC_0001", "name": "Conta"})
+        bw.put_item(Item={"user_id": chefe, "sk": "ACC_0002", "name": "Outra"})
+        bw.put_item(Item={"user_id": app.DAILY_BACKUP_PK, "sk": ana})
+        bw.put_item(Item={"user_id": app.DAILY_BACKUP_PK, "sk": chefe})
+    app.record_login(ana, "ana@example.com")
+    app.record_login(chefe, "chefe@example.com")
+    boto3.client("sesv2").create_email_identity(EmailIdentity="ana@example.com")
+
+    assert act(subs, "delete", "ana@example.com")[0] == 409      # ainda ativa: nada muda
+    assert len(keys_of(table, ana)) == 61 and cognito_user(pool_id, "ana@example.com")["Enabled"] is True
+
+    queries = []
+    real_query = app.table().query
+    monkeypatch.setattr(app.table(), "query", lambda **kw: queries.append(kw) or real_query(**kw))
+    assert act(subs, "disable", "ana@example.com")[0] == 200
+    assert act(subs, "delete", "ana@example.com") == (200, {"ok": True})
+
+    with pytest.raises(ClientError):
+        cognito_user(pool_id, "ana@example.com")
+    assert keys_of(table, ana) == []
+    assert keys_of(table, app.DAILY_BACKUP_PK) == [chefe]
+    assert keys_of(table, app.LAST_LOGIN_PK) == [chefe]
+    logins = table.query(KeyConditionExpression=Key("user_id").eq(app.LOGIN_PK))["Items"]
+    assert sorted(i["sub"] for i in logins) == sorted([ana, chefe])     # os logins ficam até ao TTL
+    assert keys_of(table, chefe) == ["ACC_0002"]
+    with pytest.raises(ClientError):
+        boto3.client("sesv2").get_email_identity(EmailIdentity="ana@example.com")
+    assert queries and all(q["Select"] == "SPECIFIC_ATTRIBUTES" and q["ProjectionExpression"] == "sk" for q in queries)
+
+    assert act(subs, "delete", "ana@example.com")[0] == 404
+    out = capsys.readouterr().out
+    actions = [json.loads(line) for line in out.splitlines() if "admin_action" in line]
+    assert actions[-1] == {"admin_action": "delete", "by": chefe, "user": ana}
+    assert "@" not in out
+
+
+def test_admin_delete_warns_if_the_email_stays_in_ses(pool, monkeypatch, capsys):
+    """Se o SES falhar, a conta e os dados são apagados na mesma e a resposta traz um aviso (sem email no log).
+    Um email que já não está no SES não é um erro."""
+    pool_id, subs = pool
+    assert act(subs, "disable", "ana@example.com")[0] == 200
+    assert act(subs, "create", "nova@example.com")[0] == 200
+    boto3.client("sesv2").delete_email_identity(EmailIdentity="nova@example.com")
+    assert act(subs, "disable", "nova@example.com")[0] == 200
+
+    class Ses:
+        def __init__(self, code):
+            self.code = code
+
+        def delete_email_identity(self, **kw):
+            raise ClientError({"Error": {"Code": self.code, "Message": kw["EmailIdentity"]}}, "DeleteEmailIdentity")
+    monkeypatch.setattr(app, "ses", lambda: Ses("NotFoundException"))
+    assert act(subs, "delete", "nova@example.com") == (200, {"ok": True})
+    monkeypatch.setattr(app, "ses", lambda: Ses("TooManyRequestsException"))
+    status, body = act(subs, "delete", "ana@example.com")
+    assert status == 200 and "SES" in body["warning"]
+    with pytest.raises(ClientError):
+        cognito_user(pool_id, "ana@example.com")
+    out = capsys.readouterr().out
+    assert '"admin_ses_error": "TooManyRequestsException"' in out and "@" not in out
 
 
 def test_temporary_passwords_follow_the_pool_rules():

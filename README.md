@@ -14,7 +14,7 @@ Por segurança, a sessão só dura enquanto o separador estiver aberto: num sepa
 
 Cada login fica registado (quem entrou e quando) durante 90 dias. Só o administrador vê esse registo.
 
-Se te esqueceres da password, o administrador repõe-na: dá-te uma password temporária e no login seguinte escolhes uma nova. O administrador também pode desativar uma conta (deixa de conseguir entrar, mas os dados ficam guardados) e voltar a ativá-la.
+Se te esqueceres da password, o administrador repõe-na: dá-te uma password temporária e no login seguinte escolhes uma nova. O administrador também pode desativar uma conta (deixa de conseguir entrar, mas os dados ficam guardados) e voltar a ativá-la, ou, depois de a desativar, apagá-la de vez com todos os dados.
 
 ## Separadores
 
@@ -50,7 +50,8 @@ As contas de administrador têm o selo **Admin** ao lado do email e um separador
 - todas as contas, com o estado (ativa, com password temporária ou desativada), a data em que foram criadas, o último login e quantos logins fizeram;
 - os últimos 200 logins de todos, com a data e a hora de Portugal, e um filtro por utilizador;
 - **+ Nova conta**: cria uma conta de utilizador normal e a pessoa recebe o convite por email;
-- em cada conta, **Reenviar convite** (enquanto a pessoa não escolheu a password), **Desativar** / **Reativar** e **Repor password** (mostra uma password temporária, só dessa vez, para lhe dares).
+- em cada conta, **Reenviar convite** (enquanto a pessoa não escolheu a password), **Desativar** / **Reativar** e **Repor password** (mostra uma password temporária, só dessa vez, para lhe dares);
+- nas contas desativadas, **Apagar**: apaga de vez a conta e todos os dados dela (não se pode desfazer).
 
 As contas de administrador não têm estas ações, e ninguém passa a administrador (nem deixa de o ser) pela app. O administrador não vê os dados financeiros de ninguém. Renovar a sessão sem pedir a password não conta como login, e os logins anteriores a esta funcionalidade não aparecem.
 

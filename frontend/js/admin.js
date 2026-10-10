@@ -52,14 +52,16 @@ function isValidEmail(s) {
 
 // Ações em cada conta (botões da coluna "Ações"), pela ordem em que aparecem. As contas de administrador
 // (incluindo a tua) não têm nenhuma: só se mudam pela AWS (create-user / make-admin); o backend recusa-as (403).
+// Apagar só aparece nas contas desativadas (primeiro desativar, depois apagar; o backend também obriga).
 // me = o teu email em minúsculas
 function adminActions(u, me) {
   if (u.admin || u.email.toLowerCase() === me) return [];
-  if (u.enabled === false) return ['enable', 'reset-password'];
+  if (u.enabled === false) return ['enable', 'reset-password', 'delete'];
   return [...(u.status === 'FORCE_CHANGE_PASSWORD' ? ['resend-invite'] : []), 'disable', 'reset-password'];
 }
 const ADMIN_ACTION_LABEL = {
   'resend-invite': 'Reenviar convite', disable: 'Desativar', enable: 'Reativar', 'reset-password': 'Repor password',
+  delete: 'Apagar',
 };
 // Texto da confirmação de cada ação (e = email já escapado) e mensagem quando corre bem
 const ADMIN_ACTION_CONFIRM = {
@@ -69,11 +71,14 @@ const ADMIN_ACTION_CONFIRM = {
   enable: e => `Reativar a conta de <b>${e}</b>?<br><br>Volta a conseguir entrar com a password que tinha.`,
   'reset-password': e => `Repor a password de <b>${e}</b>?<br><br>As sessões abertas terminam e recebes uma password
     temporária para lhe dares. No login seguinte, a pessoa escolhe uma nova.`,
+  delete: e => `Apagar de vez a conta de <b>${e}</b>?<br><br>Apaga a conta e todos os dados dela (movimentos,
+    investimentos, créditos, património e o backup diário). <b>Não se pode desfazer.</b>`,
 };
 const ADMIN_ACTION_DONE = {
   'resend-invite': e => `Convite enviado outra vez para ${e} (pode cair no spam)`,
   disable: e => `Conta de ${e} desativada`,
   enable: e => `Conta de ${e} reativada`,
+  delete: e => `Conta de ${e} apagada, com todos os dados`,
 };
 
 // Corre uma ação numa conta, depois de pedir confirmação, e volta a carregar a lista
@@ -82,7 +87,7 @@ async function runAdminAction(action, email) {
   try {
     const r = await api.adminAction(action, email);
     if (action === 'reset-password') showTempPassword(email, r.temporary_password);
-    else toast(ADMIN_ACTION_DONE[action](email));
+    else toast(r.warning || ADMIN_ACTION_DONE[action](email), !!r.warning);
   } catch (e) {
     toast(e.message, true);
   }
@@ -182,7 +187,7 @@ function renderAdmin() {
       <td class="date">${u.created ? dateTimeLabel(u.created).slice(0, 10) : '—'}</td>
       <td>${u.last_login ? `<span class="date">${dateTimeLabel(u.last_login)}</span><div class="li-sub">${sinceLabel(u.last_login)}</div>` : '<span class="muted">sem registo</span>'}</td>
       <td class="num">${u.logins}</td>
-      <td>${adminActions(u, me).map(a => `<button class="btn" style="margin:2px" data-adm-action="${a}" data-email="${esc(u.email)}">${ADMIN_ACTION_LABEL[a]}</button>`).join('')
+      <td>${adminActions(u, me).map(a => `<button class="btn${a === 'delete' ? ' danger' : ''}" style="margin:2px" data-adm-action="${a}" data-email="${esc(u.email)}">${ADMIN_ACTION_LABEL[a]}</button>`).join('')
         || '<span class="muted" title="As contas de administrador só se mudam pela AWS">—</span>'}</td>
     </tr>`).join('')}</tbody></table>`;
 

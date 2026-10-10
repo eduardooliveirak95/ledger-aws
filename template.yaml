@@ -314,8 +314,24 @@ Resources:
               Condition:
                 ForAllValues:StringEquals:
                   dynamodb:LeadingKeys: [LOGIN, LAST_LOGIN]
+            # Apagar uma conta: nas outras partições só lê as chaves (nunca os valores, por isso continua
+            # sem ver os dados financeiros de ninguém) e só apaga itens (nunca escreve nem devolve o conteúdo).
+            - Effect: Allow
+              Action: dynamodb:Query
+              Resource: !GetAtt EntriesTable.Arn
+              Condition:
+                ForAllValues:StringEquals:
+                  dynamodb:Attributes: [user_id, sk]
+                StringEquals:
+                  dynamodb:Select: SPECIFIC_ATTRIBUTES
+            - Effect: Allow
+              Action: dynamodb:DeleteItem
+              Resource: !GetAtt EntriesTable.Arn
+              Condition:
+                StringEqualsIfExists:
+                  dynamodb:ReturnValues: NONE
             # Listar os utilizadores e quem está no grupo admin; criar contas (com convite), desativar /
-            # reativar, repor a password e terminar as sessões. Nenhuma permissão sobre os grupos.
+            # reativar, repor a password, terminar as sessões e apagar contas. Nenhuma permissão sobre os grupos.
             - Effect: Allow
               Action:
                 - cognito-idp:ListUsers
@@ -325,12 +341,19 @@ Resources:
                 - cognito-idp:AdminEnableUser
                 - cognito-idp:AdminSetUserPassword
                 - cognito-idp:AdminUserGlobalSignOut
+                - cognito-idp:AdminDeleteUser
               Resource: !GetAtt UserPool.Arn
-            # Pedir ao SES a verificação do email de uma conta nova (como o create-user), para o backup diário.
-            # Só identidades de email (têm @), nunca domínios.
+            # Pedir ao SES a verificação do email de uma conta nova (como o create-user), para o backup diário,
+            # e retirá-lo quando a conta é apagada. Só identidades de email (têm @), nunca domínios.
             - Effect: Allow
-              Action: ses:CreateEmailIdentity
+              Action:
+                - ses:CreateEmailIdentity
+                - ses:DeleteEmailIdentity
               Resource: !Sub arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*@*
+            # O remetente dos backups (BackupSender) nunca pode ser apagado por esta função.
+            - Effect: Deny
+              Action: ses:DeleteEmailIdentity
+              Resource: !Sub arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/${AlertEmail}
       Events:
         GetUsers:
           Type: HttpApi
@@ -350,6 +373,9 @@ Resources:
         ResetPassword:
           Type: HttpApi
           Properties: { ApiId: !Ref Api, Path: /admin/users/reset-password, Method: POST }
+        DeleteUser:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: /admin/users/delete, Method: POST }
 
   # Remetente dos emails de backup no Amazon SES. Ao ser criado, a AWS envia um email de
   # verificação para este endereço: só depois de carregar no link é que o SES envia emails.
