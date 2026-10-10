@@ -65,21 +65,36 @@ button, input, select, textarea { font: inherit; }
 /* ── BARRA DO TOPO ─────────────────────────── */
 .topbar {
   background: var(--surface); border-bottom: 1px solid var(--border);
-  padding: 0 24px; display: flex; align-items: center; justify-content: space-between;
-  gap: 16px; min-height: 60px; position: sticky; top: 0; z-index: 50; flex-wrap: wrap;
+  padding: 8px 24px; display: flex; align-items: center; justify-content: space-between;
+  gap: 8px 16px; min-height: 60px; position: sticky; top: 0; z-index: 50; flex-wrap: wrap;
 }
 .logo { font-size: 15px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); white-space: nowrap; }
 .logo span { color: var(--muted); font-weight: 400; }
+/* No topo, o nome é um botão que leva à página inicial */
+.logo-btn { background: none; border: none; padding: 0; cursor: pointer; }
+.logo-btn:hover span { color: var(--text); }
 
-.tabs { display: flex; gap: 2px; background: var(--bg); border-radius: 10px; padding: 3px; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
-.tab {
-  padding: 8px 18px; border-radius: 8px; font-size: 12px; font-weight: 700;
-  letter-spacing: .06em; text-transform: uppercase; cursor: pointer;
-  color: var(--muted); border: none; background: transparent; transition: all .15s;
-  display: flex; align-items: center; gap: 8px; white-space: nowrap; flex-shrink: 0;
+/* Dentro de um separador: "← Início" e o menu dos separadores (o nome do separador atual, com ▾) */
+.tab-nav { display: flex; align-items: center; gap: 8px; margin-right: auto; }
+.tab-menu { position: relative; }
+.tab-menu-btn {
+  display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 8px;
+  background: var(--bg); border: 1px solid var(--border2); color: var(--accent); cursor: pointer;
+  font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap;
 }
-.tab.active { background: var(--surface2); color: var(--accent); }
-.tab:hover:not(.active) { color: var(--text); }
+.tab-menu-btn:hover, .tab-menu-btn[aria-expanded="true"] { border-color: var(--accent); }
+.tab-menu-list {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 60; min-width: 200px; padding: 4px;
+  display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border2);
+  border-radius: 10px; box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
+}
+.tab-menu-list button {
+  padding: 10px 12px; border: none; border-radius: 6px; background: transparent; text-align: left;
+  color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.tab-menu-list button:hover { background: var(--surface2); }
+.tab-menu-list button.active { color: var(--accent); }
+.tab-menu-list button.active::after { content: ' ✓'; }
 
 .user-box { display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 11px; color: var(--muted); flex-wrap: wrap; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
@@ -103,15 +118,22 @@ button, input, select, textarea { font: inherit; }
 .grid-3-1 { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
 .grid-1-2 { display: grid; grid-template-columns: 1fr 2fr; gap: 16px; }
 
-/* ── FAIXA DO PATRIMÓNIO LÍQUIDO ───────────── */
-.networth {
-  display: grid; grid-template-columns: repeat(5, 1fr); gap: 1px;
-  background: var(--border); border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+/* ── PÁGINA INICIAL: património líquido e um cartão por separador ── */
+.home-total { text-align: center; padding: 8px 0 4px; }
+.nw-label { font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.home-total-value { font-family: var(--mono); font-size: 34px; letter-spacing: -.02em; color: var(--accent); margin-top: 6px; }
+.home-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 20px; }
+.home-card {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-height: 150px; padding: 22px 24px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  color: var(--text); text-align: left; cursor: pointer; transition: border-color .15s;
 }
-.networth > div { background: var(--surface); padding: 12px 18px; }
-.networth .nw-label { font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
-.networth .nw-value { font-family: var(--mono); font-size: 18px; margin-top: 4px; }
-.networth .nw-total .nw-value { color: var(--accent); }
+.home-card:hover, .home-card:focus-visible { border-color: var(--accent); outline: none; }
+.home-card-title { font-size: 13px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); }
+.home-card-desc { font-size: 13px; color: var(--muted); }
+.home-card-value { font-family: var(--mono); font-size: 24px; letter-spacing: -.02em; margin-top: auto; padding-top: 12px; }
+.home-card-sub { font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.home-card-admin { grid-column: span 2; min-height: 0; }
 
 /* ── BARRA DE FERRAMENTAS (período, filtros, botões) ── */
 .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
@@ -352,16 +374,16 @@ table.grid-edit .num { font-family: var(--mono); text-align: right; color: var(-
 /* Ecrãs pequenos: tablets (até 900px) e telemóveis (até 520px) passam a uma coluna */
 @media (max-width: 900px) {
   .grid-2, .grid-3-1, .grid-1-2, .grid-cols { grid-template-columns: 1fr; }
-  .stats, .networth { grid-template-columns: 1fr 1fr; }
-  .networth .nw-total { grid-column: span 2; }
+  .stats { grid-template-columns: 1fr 1fr; }
   .loan-meta { grid-template-columns: 1fr 1fr; }
   .topbar { padding: 10px 16px; position: static; }
 }
 @media (max-width: 520px) {
-  /* 4 separadores não cabem numa linha: grelha 2 × 2 (o Utilizadores, dos administradores, fica numa linha só dele) */
-  .tabs { width: 100%; display: grid; grid-template-columns: 1fr 1fr; }
-  .tab { padding: 8px 10px; justify-content: center; }
-  .tab[data-tab="admin"] { grid-column: span 2; }
+  /* Página inicial: um cartão por linha, mais baixos */
+  .home-grid { grid-template-columns: 1fr; gap: 12px; margin-top: 12px; }
+  .home-card { min-height: 0; padding: 18px 20px; }
+  .home-card-admin { grid-column: auto; }
+  .home-total-value { font-size: 28px; }
   .stat-value { font-size: 18px; }
   .field-row, .map-grid { grid-template-columns: 1fr; }
   .user-box { gap: 6px; }

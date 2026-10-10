@@ -1,6 +1,6 @@
 # Ledger
 
-App de finanças pessoais: contas, investimentos, créditos e imóveis num só sítio, com o património líquido sempre à vista.
+App de finanças pessoais: contas, investimentos, créditos e imóveis num só sítio, com o património líquido logo na página inicial.
 
 Corre na AWS (site estático, login com Cognito, API em Lambda, dados em DynamoDB e backup diário por email com o SES). Cada utilizador só vê os seus próprios dados. O Cognito avisa uma Lambda a cada login, e o login fica registado para o administrador.
 
@@ -25,7 +25,7 @@ Se te esqueceres da password, o administrador repõe-na: dá-te uma password tem
 | **Créditos** | Quanto deves, quanto já pagaste e quanto foi juro | "Atualizar mês": saldo em dívida, prestação e amortização extra, se houver |
 | **Património** | Casa, terreno, garagem… e quanto valem | Atualizar o valor quando mudar (✎ no imóvel) |
 
-No topo aparece o património líquido: contas + investimentos + imóveis − créditos.
+Depois do login entras na **página inicial**: o património líquido (contas + investimentos + imóveis − créditos) e um cartão por separador, com o número principal de cada um. Carrega num cartão para abrir o separador. Lá dentro, **← Início** volta à página inicial e o nome do separador, no topo, abre um menu para saltar para outro. O botão de voltar do browser ou do telemóvel também te leva à página inicial.
 
 Em **Movimentos**, os filtros **Entradas** e **Saídas** deixam escolher várias categorias de cada vez. As transferências de e para outras pessoas ficam em **Transferências in** e **Transferências out**.
 
@@ -45,7 +45,7 @@ Em **+ Imóvel** basta o nome e o valor atual. O preço de compra e o crédito a
 
 ### Utilizadores (só administradores)
 
-As contas de administrador têm o selo **Admin** ao lado do email e um separador a mais, **Utilizadores**:
+As contas de administrador têm o selo **Admin** ao lado do email e um separador a mais, **Utilizadores** (um cartão a mais na página inicial e no menu):
 
 - todas as contas, com o estado (ativa, com password temporária ou desativada), a data em que foram criadas, o último login e quantos logins fizeram;
 - os últimos 200 logins de todos, com a data e a hora de Portugal, e um filtro por utilizador;

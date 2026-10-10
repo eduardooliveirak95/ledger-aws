@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Ledger: a única página do site ("single-page app").
-  Todo o HTML dos 4 separadores (e do Utilizadores, só para administradores) está aqui;
+  Todo o HTML da página inicial e dos 4 separadores (e do Utilizadores, só para administradores) está aqui;
   o JavaScript só mostra/esconde partes e preenche os números, gráficos e tabelas com os dados que vêm da API.
   O ficheiro é servido pelo CloudFront a partir do bucket S3.
 -->
@@ -54,16 +54,26 @@
   </form>
 </div>
 
-<!-- BARRA DO TOPO: nome, separadores, estado da ligação, backup, backup diário por email e sair -->
+<!-- BARRA DO TOPO: nome (leva à página inicial), navegação entre separadores, estado da ligação, backup,
+     backup diário por email e sair. Os botões com data-go mudam de página (ver go() no app.js). -->
 <header class="topbar">
-  <div class="logo">Ledger<span> / Finanças</span></div>
-  <nav class="tabs" role="tablist">
-    <button class="tab active" data-tab="mov" role="tab">Movimentos</button>
-    <button class="tab" data-tab="inv" role="tab">Investimentos</button>
-    <button class="tab" data-tab="loan" role="tab">Créditos</button>
-    <button class="tab" data-tab="prop" role="tab">Património</button>
-    <!-- só aparece aos administradores (ver isAdmin no auth.js e o admin.js) -->
-    <button class="tab hidden" data-tab="admin" role="tab">Utilizadores</button>
+  <button class="logo logo-btn" data-go="home" title="Página inicial">Ledger<span> / Finanças</span></button>
+  <!-- Só dentro de um separador: voltar à página inicial e menu para saltar para outro separador -->
+  <nav class="tab-nav hidden" id="tab-nav" aria-label="Separadores">
+    <button class="btn" data-go="home">← Início</button>
+    <div class="tab-menu">
+      <button class="tab-menu-btn" id="tab-menu-btn" aria-haspopup="true" aria-expanded="false" aria-controls="tab-menu-list">
+        <span id="tab-menu-label"></span> <span aria-hidden="true">▾</span>
+      </button>
+      <div class="tab-menu-list hidden" id="tab-menu-list">
+        <button data-go="mov">Movimentos</button>
+        <button data-go="inv">Investimentos</button>
+        <button data-go="loan">Créditos</button>
+        <button data-go="prop">Património</button>
+        <!-- só aparece aos administradores (ver isAdmin no auth.js e o admin.js) -->
+        <button data-go="admin" class="hidden" data-admin-only>Utilizadores</button>
+      </div>
+    </div>
   </nav>
   <div class="user-box">
     <div class="status-dot" id="status-dot"></div>
@@ -79,17 +89,49 @@
 </header>
 
 <main class="main">
-  <!-- PATRIMÓNIO LÍQUIDO (visível em todos os separadores; ver netWorth() no calc.js) -->
-  <section class="networth" aria-label="Património">
-    <div><div class="nw-label">Saldo em contas</div><div class="nw-value" id="nw-accounts">—</div></div>
-    <div><div class="nw-label">Investimentos</div><div class="nw-value" id="nw-investments">—</div></div>
-    <div><div class="nw-label">Imóveis</div><div class="nw-value" id="nw-properties">—</div></div>
-    <div><div class="nw-label">Créditos em dívida</div><div class="nw-value" id="nw-debt">—</div></div>
-    <div class="nw-total"><div class="nw-label">Património líquido</div><div class="nw-value" id="nw-total">—</div></div>
+  <!-- ════════ PÁGINA INICIAL: onde se entra depois do login ════════
+       Um cartão por separador, com o número principal de cada um, e o património líquido por cima
+       (contas + investimentos + imóveis − créditos; ver netWorth() no calc.js e renderNetWorth() no app.js) -->
+  <section id="tab-home" class="tab-panel">
+    <div class="home-total">
+      <div class="nw-label">Património líquido</div>
+      <div class="home-total-value" id="nw-total">—</div>
+    </div>
+    <div class="home-grid">
+      <button class="home-card" data-go="mov">
+        <span class="home-card-title">Movimentos</span>
+        <span class="home-card-desc">Entradas, saídas e transferências entre contas</span>
+        <span class="home-card-value" id="nw-accounts">—</span>
+        <span class="home-card-sub">saldo em contas</span>
+      </button>
+      <button class="home-card" data-go="inv">
+        <span class="home-card-title">Investimentos</span>
+        <span class="home-card-desc">Quanto investiste, quanto vale e o ganho ou perda</span>
+        <span class="home-card-value" id="nw-investments">—</span>
+        <span class="home-card-sub">valor atual</span>
+      </button>
+      <button class="home-card" data-go="loan">
+        <span class="home-card-title">Créditos</span>
+        <span class="home-card-desc">Quanto deves, quanto já pagaste e quanto foi juro</span>
+        <span class="home-card-value" id="nw-debt">—</span>
+        <span class="home-card-sub">em dívida</span>
+      </button>
+      <button class="home-card" data-go="prop">
+        <span class="home-card-title">Património</span>
+        <span class="home-card-desc">Casa, terreno, garagem… e quanto valem</span>
+        <span class="home-card-value" id="nw-properties">—</span>
+        <span class="home-card-sub">valor dos imóveis</span>
+      </button>
+      <!-- só aparece aos administradores -->
+      <button class="home-card home-card-admin hidden" data-go="admin" data-admin-only>
+        <span class="home-card-title">Utilizadores</span>
+        <span class="home-card-desc">Contas, convites e logins (só administradores)</span>
+      </button>
+    </div>
   </section>
 
   <!-- ════════ SEPARADOR: MOVIMENTOS (preenchido por renderMovements no app.js) ════════ -->
-  <section id="tab-mov" class="tab-panel">
+  <section id="tab-mov" class="tab-panel hidden">
     <div class="toolbar">
       <div class="toolbar-left">
         <div class="seg" id="mov-period-mode">
