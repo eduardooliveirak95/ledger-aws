@@ -417,7 +417,7 @@ function renderMovements() {
     data: { labels: cat.map(c => c[0]), datasets: [barDataset('Gastos', cat.map(c => c[1]), SERIES[1], { maxBarThickness: 18, borderWidth: 0 })] },
     options: {
       indexAxis: 'y',
-      scales: { x: moneyAxis({ beginAtZero: true, ticks: { maxTicksLimit: 4, callback: v => compactEur(v) } }), y: { grid: { display: false }, border: { display: false }, ticks: { color: '#e8ecf4', font: { family: "'Syne', sans-serif", size: 11 } } } },
+      scales: { x: moneyAxis({ beginAtZero: true, ticks: { maxTicksLimit: 4, callback: v => compactEur(v) } }), y: { grid: { display: false }, border: { display: false }, ticks: { color: TEXT, font: { family: cssVar('--font'), size: 11 } } } },
       plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => ` ${eur(c.parsed.x)} · ${tot.out ? Math.round(c.parsed.x / tot.out * 100) : 0}%` } } },
     },
   }, 'Sem gastos neste período');
@@ -765,7 +765,7 @@ function renderInvestments() {
     data: { labels: s.months.map(monthShort), datasets: [lineDataset('Ganho / perda', gains, SERIES[0])] },
     options: {
       interaction: INDEX_HOVER,
-      scales: { x: catAxis(), y: moneyAxis({ grid: { color: c => (c.tick.value === 0 ? '#4a5470' : GRID), drawTicks: false } }) },
+      scales: { x: catAxis(), y: moneyAxis({ grid: { color: c => (c.tick.value === 0 ? ZERO_LINE : GRID), drawTicks: false } }) },
       plugins: { legend: { display: false }, tooltip: { callbacks: { title: i => monthLabel(s.months[i[0].dataIndex]), label: c => ` ${eurSigned(c.parsed.y)}` } } },
     },
   }, 'O ganho aparece quando registares o valor dos investimentos');

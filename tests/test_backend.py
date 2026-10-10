@@ -325,7 +325,7 @@ def test_daily_backup_emails_only_active_subscribers(table, monkeypatch, capsys)
     monkeypatch.setenv("USER_POOL_ID", pool)
     subs = {}
     for name in ("ativo", "vazio", "desativado", "desligado", "naoverificado", "emailnovo"):
-        verified = "false" if name == "emailnovo" else "true"   # como fica depois de a pessoa mudar o email
+        verified = "false" if name == "emailnovo" else "true"   # como fica depois de um administrador mudar o email pela AWS
         u = cognito.admin_create_user(UserPoolId=pool, Username=f"{name}@example.com",
                                       UserAttributes=[{"Name": "email", "Value": f"{name}@example.com"},
                                                       {"Name": "email_verified", "Value": verified}])["User"]
