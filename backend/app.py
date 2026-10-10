@@ -937,7 +937,20 @@ def daily_backup(event=None, context=None):
 
     Teste à mão (workflow "Test daily backup" no GitHub): o evento {"only_email": "..."} envia só para
     esse email, e só se for de alguém que ativou o backup. O agendamento não manda nada no evento.
+
+    Se falhar antes de chegar aos utilizadores (ex.: sem acesso à tabela ou ao Cognito), regista só o código
+    do erro e lança um erro sem a mensagem da AWS: essa mensagem pode ter ids (da user pool, de uma role) e
+    os logs desta função aparecem no workflow "Test daily backup", que é público.
     """
+    try:
+        return run_daily_backup(event)
+    except Exception as e:
+        print(json.dumps({"daily_backup_error": error_code(e)}))
+        raise RuntimeError(f"daily_backup falhou: {error_code(e)}") from None
+
+
+def run_daily_backup(event):
+    """O trabalho do backup diário (ver daily_backup, acima). Um erro num utilizador não impede os outros."""
     only = str(event.get("only_email") or "").strip().lower() if isinstance(event, dict) else ""
     subs, kwargs = [], {"KeyConditionExpression": Key("user_id").eq(DAILY_BACKUP_PK)}
     while True:

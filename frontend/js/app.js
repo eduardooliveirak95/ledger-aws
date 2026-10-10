@@ -1214,7 +1214,7 @@ function renderProperties() {
       <td class="date">${x.p.updated_at ? dateLabel(x.p.updated_at.slice(0, 10)) : '—'}</td>
       <td class="actions"><button class="icon-btn" data-edit-prop="${esc(x.p.id)}" aria-label="Editar">✎</button></td>
     </tr>`).join('')}</tbody></table>
-    <div class="empty" style="text-align:left">O valor atual conta para o património líquido no topo; o crédito associado já está em "Créditos em dívida".
+    <div class="empty" style="text-align:left">O valor atual conta para o património líquido da página inicial; o crédito associado já está em "Créditos".
       Quando o valor mudar (avaliação do banco, anúncios de casas parecidas…), carrega em ✎ e atualiza-o.</div>`
     : `<div class="empty">Ainda não tens imóveis registados.<br>Adiciona a tua casa com o valor que achas que vale hoje.<br><button class="btn primary" data-action="prop-new">+ Imóvel</button></div>`;
 }

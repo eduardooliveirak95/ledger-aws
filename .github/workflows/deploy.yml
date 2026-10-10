@@ -75,6 +75,7 @@ jobs:
       - uses: aws-actions/setup-sam@89ddb14d60e682855e3fea4be85b3c56485de310   # v3
         with:
           use-installer: true
+          version: 1.168.0          # SAM CLI com versão fixa (corre com a role de deploy): atualizar junto com as ações
 
       # O passo seguinte escreve nos logs "Authenticated as assumedRoleId <id da role>:GitHubActions",
       # e desse id (AROA...) dá para tirar o número da conta. O id fica no secret AWS_ROLE_ID e o

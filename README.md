@@ -53,7 +53,7 @@ As contas de administrador têm o selo **Admin** ao lado do email e um separador
 - em cada conta, **Reenviar convite** (enquanto a pessoa não escolheu a password), **Desativar** / **Reativar** e **Repor password** (mostra uma password temporária, só dessa vez, para lhe dares);
 - nas contas desativadas, **Apagar**: apaga de vez a conta e todos os dados dela (não se pode desfazer).
 
-As contas de administrador não têm estas ações, e ninguém passa a administrador (nem deixa de o ser) pela app. O administrador não vê os dados financeiros de ninguém. Renovar a sessão sem pedir a password não conta como login, e os logins anteriores a esta funcionalidade não aparecem.
+As contas de administrador não têm estas ações, e ninguém passa a administrador (nem deixa de o ser) pela app. Pela app, o administrador não vê os dados financeiros de ninguém. Renovar a sessão sem pedir a password não conta como login, e os logins anteriores a esta funcionalidade não aparecem.
 
 ## Importar e fazer backup
 

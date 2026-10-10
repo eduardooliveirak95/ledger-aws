@@ -364,6 +364,29 @@ def test_daily_backup_emails_only_active_subscribers(table, monkeypatch, capsys)
     assert "ledger-patrimonio-2026-10-04.csv" in raw
 
 
+def test_daily_backup_failure_hides_the_aws_message(table, monkeypatch, capsys):
+    """Se o backup falhar antes de chegar aos utilizadores (ex.: sem acesso ao Cognito), o log e o erro só têm o
+    código: a mensagem da AWS pode ter ids e os logs desta função aparecem no workflow público "Test daily backup"."""
+    assert call("POST /settings", user="u1", email="token@example.com", body={"daily_backup": True})[0] == 200
+    capsys.readouterr()
+    monkeypatch.setenv("SENDER_EMAIL", "ledger@example.com")
+    monkeypatch.setenv("USER_POOL_ID", "eu-west-1_Segredo1")
+
+    class DeniedCognito:
+        def list_users(self, **kw):
+            raise ClientError({"Error": {"Code": "AccessDeniedException",
+                                         "Message": "arn:aws:iam::111122223333:role/x is not authorized on eu-west-1_Segredo1"}},
+                              "ListUsers")
+    monkeypatch.setattr(app, "cognito", lambda: DeniedCognito())
+    with pytest.raises(RuntimeError) as err:
+        app.daily_backup({}, None)
+    assert str(err.value) == "daily_backup falhou: AccessDeniedException"
+    assert err.value.__suppress_context__ and err.value.__cause__ is None   # sem a mensagem original encadeada
+    out = capsys.readouterr().out
+    assert json.loads(out) == {"daily_backup_error": "AccessDeniedException"}
+    assert "Segredo" not in out and "111122223333" not in out
+
+
 def test_bank_formats_are_saved_and_validated(table):
     """As colunas escolhidas para os CSV de um banco ficam guardadas; colunas inválidas dão erro."""
     acc = save([{"kind": "account", "name": "Banco X", "opening_balance": 0, "opening_date": "2026-01-01"}])["saved"][0]["id"]
