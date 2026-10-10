@@ -40,9 +40,10 @@ Rotas:
     GET    /settings      definições do utilizador ({"daily_backup": true/false})
     POST   /settings      mudar as definições  {"daily_backup": true/false} (ao ligar, pode trazer um "warning")
     GET    /admin/users   (função admin, só para o grupo "admin") utilizadores, último login e logins recentes
-    POST   /admin/users/create | resend-invite | disable | enable | reset-password  {"email": ...}
+    POST   /admin/users/create | resend-invite | disable | enable | reset-password | delete  {"email": ...}
                           (função admin) criar uma conta normal com convite por email, reenviar o convite,
-                          desativar / reativar uma conta e repor a password (nunca em contas de administrador)
+                          desativar / reativar uma conta, repor a password e apagar uma conta desativada
+                          com todos os dados (nunca em contas de administrador)
 """
 
 import base64
@@ -54,6 +55,7 @@ import secrets
 import traceback
 import unicodedata
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from email.mime.application import MIMEApplication
@@ -1247,12 +1249,67 @@ def admin_reset_password(claims, email):
     return {"temporary_password": password}
 
 
+def user_keys(sub):
+    """As sort keys de todos os itens de um utilizador, e só elas.
+
+    A função admin só tem permissão para ler as chaves das partições dos utilizadores (template.yaml:
+    Select = SPECIFIC_ATTRIBUTES e só user_id / sk), por isso nunca vê os valores de ninguém.
+    """
+    keys = []
+    kwargs = {"KeyConditionExpression": Key("user_id").eq(sub), "Select": "SPECIFIC_ATTRIBUTES",
+              "ProjectionExpression": "sk"}
+    while True:
+        r = table().query(**kwargs)
+        keys.extend(i["sk"] for i in r["Items"])
+        if not r.get("LastEvaluatedKey"):
+            return keys
+        kwargs["ExclusiveStartKey"] = r["LastEvaluatedKey"]
+
+
+def delete_user_data(sub):
+    """Apaga todos os dados de um utilizador e os itens dele no backup diário e no último login.
+
+    Os logins dele ficam no registo até o TTL os apagar (90 dias). Os pedidos vão em paralelo para caberem
+    nos 30 s do API Gateway mesmo com milhares de registos; o cliente da tabela pode ser usado por várias threads.
+    """
+    keys = [(sub, sk) for sk in user_keys(sub)] + [(DAILY_BACKUP_PK, sub), (LAST_LOGIN_PK, sub)]
+    client, name = table().meta.client, os.environ["TABLE_NAME"]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda k: client.delete_item(TableName=name, Key={"user_id": k[0], "sk": k[1]}), keys))
+
+
+def admin_delete_user(claims, email):
+    """POST /admin/users/delete: apaga de vez uma conta desativada e todos os dados dela.
+
+    Só contas desativadas (primeiro desativar, depois apagar), para não se apagar nada por engano.
+    Também retira o email do SES (a verificação para o backup diário). A conta do Cognito é apagada no fim:
+    se alguma coisa falhar pelo caminho, a conta continua na lista (desativada) e apagar outra vez
+    continua onde parou.
+    """
+    username, sub, user = admin_target(claims, email)
+    if user.get("Enabled") is not False:
+        raise ApiError(409, "Desativa a conta primeiro")
+    delete_user_data(sub)
+    result = {"ok": True}
+    address = next((a["Value"] for a in user.get("Attributes", []) if a["Name"] == "email"), None)
+    try:
+        if address:
+            ses().delete_email_identity(EmailIdentity=address)
+    except Exception as e:
+        if error_code(e) != "NotFoundException":
+            print(json.dumps({"admin_ses_error": error_code(e)}))   # só o código: a mensagem pode ter o email
+            result["warning"] = "Conta apagada, mas o email ficou na lista do SES (Amazon SES → Identities)."
+    cognito().admin_delete_user(UserPoolId=os.environ["USER_POOL_ID"], Username=username)
+    log_admin_action("delete", claims, sub)
+    return result
+
+
 def admin(event, context=None):
     """Função Lambda do separador Utilizadores (configurada como "app.admin" no template.yaml).
 
     É uma função à parte da API normal: só ela mexe nas contas do Cognito, e só lê as partições
-    dos logins (as permissões no template.yaml não a deixam ler os dados de ninguém nem mudar o
-    grupo admin). Quem não estiver no grupo "admin" recebe 403.
+    dos logins (nas outras, só as chaves, para apagar uma conta: as permissões no template.yaml não a
+    deixam ler os dados de ninguém nem mudar o grupo admin). Quem não estiver no grupo "admin" recebe 403.
     """
     try:
         claims = event["requestContext"]["authorizer"]["jwt"]["claims"]
@@ -1276,6 +1333,8 @@ def admin(event, context=None):
             return response(200, admin_set_enabled(claims, admin_email(read_body(event)), True))
         if route == "POST /admin/users/reset-password":
             return response(200, admin_reset_password(claims, admin_email(read_body(event))))
+        if route == "POST /admin/users/delete":
+            return response(200, admin_delete_user(claims, admin_email(read_body(event))))
         return response(404, {"detail": f"Rota desconhecida: {route}"})
     except ApiError as e:
         return response(e.status, {"detail": e.detail})
