@@ -293,9 +293,10 @@ Resources:
       SourceArn: !GetAtt UserPool.Arn
 
   # Separador Utilizadores (função app.admin), só para o grupo "admin": lista as contas e os logins,
-  # cria contas normais (com convite por email), desativa / reativa contas e repõe passwords.
-  # Função à parte para a API normal não ter acesso ao Cognito. Não consegue ler os dados financeiros
-  # de ninguém (só as partições dos logins) nem mudar o grupo admin (isso só com o make-admin).
+  # cria contas normais (com convite por email), desativa / reativa contas, repõe passwords e apaga
+  # contas desativadas com todos os dados. Função à parte para a API normal não ter acesso ao Cognito.
+  # Não consegue ler os dados financeiros de ninguém (lê as partições dos logins e, nas outras, só as
+  # chaves, para apagar) nem mudar o grupo admin (isso só com o make-admin).
   AdminFunction:
     Type: AWS::Serverless::Function
     Properties:

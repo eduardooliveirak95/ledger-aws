@@ -2,9 +2,9 @@
 // É o último ficheiro a carregar: usa as funções de todos os outros e arranca a app (init, no fim).
 
 // Estado da interface (o que está escolhido no ecrã, não os dados):
-// separador ativo, período e filtros de Movimentos, investimento filtrado
+// página aberta ('home' = página inicial, ou um separador), período e filtros de Movimentos, investimento filtrado
 const S = {
-  tab: 'mov',
+  tab: 'home',
   movMode: 'month',
   movAnchor: thisMonth(),
   movAccount: '',
@@ -31,13 +31,13 @@ function hideLogin() {
   $('#user-email').textContent = store.get('email') || '';
   updateAdminUi();
 }
-// Selo "Admin" e separador Utilizadores: só para contas do grupo admin (ver isAdmin no auth.js).
-// Quem não é administrador e abriu o endereço #admin vai para Movimentos.
+// Selo "Admin" e separador Utilizadores (cartão na página inicial e opção do menu): só para contas do
+// grupo admin (ver isAdmin no auth.js). Quem não é administrador e abriu o endereço #admin vai para a página inicial.
 function updateAdminUi() {
   const on = isAdmin();
   $('#admin-badge').classList.toggle('hidden', !on);
-  $('.tab[data-tab="admin"]').classList.toggle('hidden', !on);
-  if (!on && S.tab === 'admin') setTab('mov', false);
+  $$('[data-admin-only]').forEach(el => el.classList.toggle('hidden', !on));
+  if (!on && S.tab === 'admin') goHomeNow();
 }
 // Bolinha de estado no topo: verde (ligado à API), vermelha (erro) ou neutra
 function setStatus(ok) {
@@ -52,6 +52,7 @@ function logout() {
   $('#daily-backup').checked = false;
   $('#daily-backup').disabled = true;
   clearAdmin();
+  goHomeNow();       // quem entrar a seguir começa na página inicial
   updateAdminUi();   // já sem sessão: esconde o selo e o separador Utilizadores
   modal.close();
   showLogin();
@@ -68,6 +69,7 @@ $('#login-form').addEventListener('submit', async e => {
   try {
     const challenge = await login($('#login-email').value.trim(), $('#login-password').value);
     if (challenge) return showNewPassword(challenge);   // primeiro login: escolher a password
+    goHomeNow();       // depois do login entra-se sempre na página inicial
     hideLogin();
     await loadData();
   } catch (err) {
@@ -99,6 +101,7 @@ $('#newpw-form').addEventListener('submit', async e => {
     await completeNewPassword(pendingChallenge.email, pendingChallenge.session, pw);
     pendingChallenge = null;
     $('#newpw-1').value = $('#newpw-2').value = '';
+    goHomeNow();
     hideLogin();
     toast('Password guardada. Bem-vindo!');
     await loadData();
@@ -198,25 +201,77 @@ async function removeItem(id, what) {
   toast(`${what} apagado${res.deleted.length > 1 ? ` (+${res.deleted.length - 1} registos associados)` : ''}`);
 }
 
-// ════════ SEPARADORES ════════
-// Mostra o separador escolhido e esconde os outros. O património líquido do topo não aparece no
-// separador Utilizadores (são dados teus, não de quem está na lista).
-function showTab(tab) {
-  $$('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
-  $$('.tab-panel').forEach(p => p.classList.toggle('hidden', p.id !== 'tab-' + tab));
-  $('.networth').classList.toggle('hidden', tab === 'admin');
+// ════════ PÁGINA INICIAL E SEPARADORES ════════
+// A página inicial ('home', endereço #inicio) tem um cartão por separador. Dentro de um separador, o topo tem
+// "← Início" e um menu com os outros separadores. O endereço guarda onde se está (#inicio, #mov, #inv, #loan,
+// #prop, #admin), e o "voltar" do browser / telemóvel leva de um separador à página inicial.
+const TABS = { mov: 'Movimentos', inv: 'Investimentos', loan: 'Créditos', prop: 'Património', admin: 'Utilizadores' };
+
+// A página que o endereço pede ('home' se não for um separador; #admin só para administradores)
+function tabFromHash() {
+  const tab = location.hash.slice(1);
+  return Object.hasOwn(TABS, tab) && (tab !== 'admin' || isAdmin()) ? tab : 'home';
 }
-// Muda de separador (Movimentos / Investimentos / Créditos / Património / Utilizadores), guarda-o no
-// endereço (#mov, #inv, #loan, #prop, #admin) e desenha-o (render = false: só muda, sem desenhar)
+// Mostra a página escolhida e esconde as outras; na página inicial não há "← Início" nem menu
+function showTab(tab) {
+  $$('.tab-panel').forEach(p => p.classList.toggle('hidden', p.id !== 'tab-' + tab));
+  $('#tab-nav').classList.toggle('hidden', tab === 'home');
+  $('#tab-menu-label').textContent = TABS[tab] || '';
+  $$('#tab-menu-list [data-go]').forEach(b => b.classList.toggle('active', b.dataset.go === tab));
+  closeTabMenu();
+}
+// Muda de página e desenha-a (render = false: só muda, sem desenhar). Não mexe no endereço: ver go().
 function setTab(tab, render = true) {
+  const changed = tab !== S.tab;
   S.tab = tab;
   showTab(tab);
-  if (location.hash !== '#' + tab) history.replaceState(null, '', '#' + tab);
+  if (changed) window.scrollTo(0, 0);
   if (render) renderAll();
 }
-$$('.tab').forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
+// Vai para a página inicial ou para um separador (cartões, "← Início", menu e o nome Ledger no topo).
+// Da página inicial para um separador junta-se uma entrada ao histórico do browser; entre separadores só se
+// troca a atual. Assim, "voltar" num separador leva sempre à página inicial, e na página inicial sai do site.
+function go(tab) {
+  if (tab === S.tab) return closeTabMenu();
+  if (tab === 'home') {
+    if (history.state?.ledgerTab) return history.back();   // a entrada de baixo é a página inicial (o popstate desenha-a)
+    history.replaceState(null, '', '#inicio');
+  } else if (S.tab === 'home') {
+    history.pushState({ ledgerTab: true }, '', '#' + tab);
+  } else {
+    history.replaceState({ ledgerTab: true }, '', '#' + tab);
+  }
+  setTab(tab);
+}
+// Volta já à página inicial, sem passar pelo histórico (login, logout, #admin de quem não é administrador)
+function goHomeNow() {
+  history.replaceState(null, '', '#inicio');
+  setTab('home', false);
+}
+// Botões "voltar" / "avançar" do browser (e o endereço mudado à mão): fecha a janela aberta, se houver,
+// e mostra a página do endereço
+addEventListener('popstate', () => {
+  if ($('#modal').classList.contains('open')) modal.close();
+  setTab(tabFromHash());
+});
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-go]');
+  if (b) go(b.dataset.go);
+});
 
-// Redesenha o património líquido e o separador visível (os outros são desenhados quando se abrem)
+// Menu dos separadores (o nome do separador atual no topo): abre e fecha ao carregar; fecha com Esc ou ao carregar fora
+function closeTabMenu() {
+  $('#tab-menu-list').classList.add('hidden');
+  $('#tab-menu-btn').setAttribute('aria-expanded', 'false');
+}
+$('#tab-menu-btn').addEventListener('click', () => {
+  const open = $('#tab-menu-list').classList.toggle('hidden') === false;
+  $('#tab-menu-btn').setAttribute('aria-expanded', String(open));
+});
+document.addEventListener('click', e => { if (!e.target.closest('.tab-menu')) closeTabMenu(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeTabMenu(); });
+
+// Redesenha os números da página inicial e o separador visível (os outros são desenhados quando se abrem)
 function renderAll() {
   renderNetWorth();
   if (S.tab === 'mov') renderMovements();
@@ -226,7 +281,7 @@ function renderAll() {
   if (S.tab === 'admin') renderAdmin();
 }
 
-// Os 5 números do topo: contas, investimentos, imóveis, dívidas e património líquido
+// Os 5 números da página inicial: contas, investimentos, imóveis, dívidas (nos cartões) e património líquido
 function renderNetWorth() {
   const nw = netWorth();
   $('#nw-accounts').textContent = eur(nw.accounts);
@@ -1235,11 +1290,21 @@ document.addEventListener('click', e => {
 });
 
 // ════════ ARRANQUE ════════
-// Corre uma vez ao abrir a página: escolhe o separador pelo endereço (#inv...),
+// Corre uma vez ao abrir a página: escolhe a página pelo endereço (recarregar num separador fica nele),
 // verifica se o config.js existe e, se já houver sessão guardada, entra sem pedir password.
 (function init() {
   const hashTab = location.hash.slice(1);
-  if (['mov', 'inv', 'loan', 'prop', 'admin'].includes(hashTab)) S.tab = hashTab;   // #admin: só se for admin (updateAdminUi)
+  if (Object.hasOwn(TABS, hashTab)) {
+    // a página inicial fica por baixo no histórico, para o "voltar" levar até ela (#admin: ver updateAdminUi).
+    // Ao recarregar um separador aberto pela app, ela já lá está.
+    S.tab = hashTab;
+    if (!history.state?.ledgerTab) {
+      history.replaceState(null, '', '#inicio');
+      history.pushState({ ledgerTab: true }, '', '#' + hashTab);
+    }
+  } else {
+    history.replaceState(null, '', '#inicio');
+  }
   showTab(S.tab);
 
   if (!API_BASE || !CFG.clientId) {
