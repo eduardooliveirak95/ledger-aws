@@ -76,6 +76,8 @@ Resources:
       TimeToLiveSpecification:
         AttributeName: expires
         Enabled: true
+      # Proteção contra apagar (grátis): nem na consola nem pela AWS CLI a tabela se apaga sem a desligar primeiro
+      DeletionProtectionEnabled: true
 
   # ── LOGIN ────────────────────────────────────────────────────────────────
   # User pool do Cognito: guarda os utilizadores e as passwords e emite os tokens JWT
@@ -86,6 +88,7 @@ Resources:
     Properties:
       UserPoolName: !Sub ${AWS::StackName}-users
       UserPoolTier: LITE            # tier mais simples, grátis até 10 000 utilizadores ativos/mês
+      DeletionProtection: ACTIVE    # tal como a tabela: não se apaga sem desligar a proteção primeiro (grátis)
       UsernameAttributes: [email]   # o login é o email
       AdminCreateUserConfig:
         AllowAdminCreateUserOnly: true   # ninguém se regista sozinho (só com o create-user.ps1)
@@ -128,6 +131,10 @@ Resources:
         - ALLOW_USER_PASSWORD_AUTH  # login com email + password (usado no auth.js)
         - ALLOW_REFRESH_TOKEN_AUTH  # renovar tokens sem voltar a pedir a password
       PreventUserExistenceErrors: ENABLED   # o erro não revela se um email existe ou não
+      # Atributos que cada pessoa pode mudar na própria conta, com o access token, diretamente no Cognito.
+      # Sem esta lista podia mudar o email (e deixava de receber o backup). A app não muda nenhum: fica só
+      # um inofensivo, porque uma lista vazia pode valer como "todos". Os administradores não dependem disto.
+      WriteAttributes: [locale]
       IdTokenValidity: 60
       AccessTokenValidity: 60
       RefreshTokenValidity: 30

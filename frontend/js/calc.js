@@ -364,7 +364,7 @@ function propertySummary(p) {
 }
 
 // ════════ PATRIMÓNIO LÍQUIDO ════════
-// O número do topo da app: dinheiro nas contas + investimentos + imóveis − dívidas
+// O número principal da página inicial: dinheiro nas contas + investimentos + imóveis − dívidas
 function netWorth() {
   const accounts = totalAccountsBalance(todayISO());
   const investments = portfolioSummary().value;

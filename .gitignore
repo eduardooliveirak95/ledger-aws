@@ -1,4 +1,4 @@
-# Fiicheiros e pastas que o Git ignora (nunca vão para o GitHub)
+# Ficheiros e pastas que o Git ignora (nunca vão para o GitHub)
 
 # Gerado pelo deploy.sh / deploy.ps1 (aponta para a tua API e o teu login)
 frontend/config.js

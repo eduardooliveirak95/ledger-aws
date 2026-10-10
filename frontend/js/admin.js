@@ -187,7 +187,7 @@ function renderAdmin() {
       <td class="date">${u.created ? dateTimeLabel(u.created).slice(0, 10) : '—'}</td>
       <td>${u.last_login ? `<span class="date">${dateTimeLabel(u.last_login)}</span><div class="li-sub">${sinceLabel(u.last_login)}</div>` : '<span class="muted">sem registo</span>'}</td>
       <td class="num">${u.logins}</td>
-      <td>${adminActions(u, me).map(a => `<button class="btn${a === 'delete' ? ' danger' : ''}" style="margin:2px" data-adm-action="${a}" data-email="${esc(u.email)}">${ADMIN_ACTION_LABEL[a]}</button>`).join('')
+      <td class="actions">${adminActions(u, me).map(a => `<button class="btn${a === 'delete' ? ' danger' : ''}" style="margin:2px" data-adm-action="${a}" data-email="${esc(u.email)}">${ADMIN_ACTION_LABEL[a]}</button>`).join('')
         || '<span class="muted" title="As contas de administrador só se mudam pela AWS">—</span>'}</td>
     </tr>`).join('')}</tbody></table>`;
 
