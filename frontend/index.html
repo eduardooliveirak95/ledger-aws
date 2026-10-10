@@ -10,7 +10,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ledger — Finanças pessoais</title>
-<meta name="theme-color" content="#f5f3fb">
+<!-- Cor da barra do browser no telemóvel (clara ou escura, como o tema) -->
+<meta name="theme-color" content="#f5f3fb" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#13111b" media="(prefers-color-scheme: dark)">
+<!-- Instalar no ecrã principal do telemóvel ("Adicionar ao ecrã principal"): nome, ícones e abrir sem a barra do browser -->
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-title" content="Ledger">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -149,6 +156,8 @@
         <!-- Filtros de categoria: entradas e saídas em separado, cada um com escolha múltipla (ver renderCatFilter) -->
         <details class="multi" id="mov-filter-in"></details>
         <details class="multi" id="mov-filter-out"></details>
+        <!-- Pesquisa na descrição, na categoria e no valor (ver matchesSearch no calc.js) -->
+        <input type="search" class="inline search" id="mov-search" placeholder="Pesquisar…" aria-label="Pesquisar nos movimentos" autocomplete="off">
       </div>
       <div class="toolbar-right">
         <button class="btn" data-action="mov-history">Histórico por mês</button>

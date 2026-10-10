@@ -14,6 +14,10 @@ Por segurança, a sessão só dura enquanto o separador estiver aberto: num sepa
 
 Cada login fica registado (quem entrou e quando) durante 90 dias. Só o administrador vê esse registo.
 
+**No telemóvel**, podes pôr o Ledger no ecrã principal, com ícone próprio e a abrir sem a barra do browser: no Android (Chrome), menu **⋮ → Adicionar ao ecrã principal** (ou **Instalar app**); no iPhone (Safari), **Partilhar → Adicionar ao ecrã principal**. A sessão segue as mesmas regras: ao reabrir a app depois de a fechares, pede outra vez a password.
+
+O aspeto (claro ou escuro) segue o modo do telemóvel ou do computador.
+
 Se te esqueceres da password, o administrador repõe-na: dá-te uma password temporária e no login seguinte escolhes uma nova. O administrador também pode desativar uma conta (deixa de conseguir entrar, mas os dados ficam guardados) e voltar a ativá-la, ou, depois de a desativar, apagá-la de vez com todos os dados.
 
 ## Separadores
@@ -27,7 +31,7 @@ Se te esqueceres da password, o administrador repõe-na: dá-te uma password tem
 
 Depois do login entras na **página inicial**: o património líquido (contas + investimentos + imóveis − créditos) e um cartão por separador, com o número principal de cada um. Carrega num cartão para abrir o separador. Lá dentro, **← Início** volta à página inicial e o nome do separador, no topo, abre um menu para saltar para outro. O botão de voltar do browser ou do telemóvel também te leva à página inicial.
 
-Em **Movimentos**, os filtros **Entradas** e **Saídas** deixam escolher várias categorias de cada vez. As transferências de e para outras pessoas ficam em **Transferências in** e **Transferências out**.
+Em **Movimentos**, a caixa **Pesquisar…** procura na descrição, na categoria e no valor (sem ligar a maiúsculas nem acentos: "agua" encontra "Água"); os totais e os gráficos passam a contar só os movimentos encontrados. Os filtros **Entradas** e **Saídas** deixam escolher várias categorias de cada vez. As transferências de e para outras pessoas ficam em **Transferências in** e **Transferências out**.
 
 Para mudar a categoria de vários movimentos de uma vez, marca-os na tabela (ou todos, no cabeçalho), escolhe a categoria na barra que aparece e carrega em **Mudar categoria**. Só dá para mudar entradas ou saídas de cada vez, porque têm categorias diferentes.
 

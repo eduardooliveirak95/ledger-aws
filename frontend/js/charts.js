@@ -1,32 +1,45 @@
 // ── charts.js: configuração do Chart.js partilhada por todos os gráficos ──
 // As cores e a letra vêm das variáveis CSS do :root (style.css), as mesmas do resto da página:
 // muda-se o tema num só sítio. As 4 cores das séries seguem uma ordem escolhida para se
-// distinguirem bem por daltónicos sobre o fundo da app.
+// distinguirem bem por daltónicos sobre o fundo da app (no tema claro e no escuro).
 
 const cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-const SERIES = ['--series-1', '--series-2', '--series-3', '--series-4'].map(cssVar);
-const GRID = cssVar('--border');
-const INK = cssVar('--muted');
-const TEXT = cssVar('--text');
-const SURFACE = cssVar('--surface');
-const ZERO_LINE = cssVar('--zero-line');
+// Cores do tema atual (claro ou escuro), lidas por applyChartTheme
+let SERIES, GRID, INK, TEXT, SURFACE, ZERO_LINE;
 // Gráficos já criados, por id do <canvas>, para serem atualizados em vez de recriados
 const charts = {};
 
-// Aspeto por omissão de todos os gráficos (letra, cores, tooltips, animação curta)
-Chart.defaults.color = INK;
-Chart.defaults.font.family = cssVar('--font-num');
+// Aspeto por omissão de todos os gráficos (letra, animação curta, legendas e tooltips)
 Chart.defaults.font.size = 11;
 Chart.defaults.animation.duration = 250;
 Chart.defaults.plugins.legend.labels.boxWidth = 10;
 Chart.defaults.plugins.legend.labels.boxHeight = 10;
-Chart.defaults.plugins.tooltip.backgroundColor = cssVar('--surface2');
-Chart.defaults.plugins.tooltip.borderColor = cssVar('--border2');
 Chart.defaults.plugins.tooltip.borderWidth = 1;
-Chart.defaults.plugins.tooltip.titleColor = TEXT;
-Chart.defaults.plugins.tooltip.bodyColor = TEXT;
 Chart.defaults.plugins.tooltip.padding = 10;
 Chart.defaults.plugins.tooltip.boxPadding = 4;
+
+// Lê as cores e a letra do tema atual. Corre ao carregar e outra vez quando o telemóvel ou o PC
+// passam de modo claro a escuro (ou ao contrário): ver o "matchMedia" no app.js.
+function applyChartTheme() {
+  SERIES = ['--series-1', '--series-2', '--series-3', '--series-4'].map(cssVar);
+  GRID = cssVar('--border');
+  INK = cssVar('--muted');
+  TEXT = cssVar('--text');
+  SURFACE = cssVar('--surface');
+  ZERO_LINE = cssVar('--zero-line');
+  Chart.defaults.color = INK;
+  Chart.defaults.font.family = cssVar('--font-num');
+  Chart.defaults.plugins.tooltip.backgroundColor = cssVar('--surface2');
+  Chart.defaults.plugins.tooltip.borderColor = cssVar('--border2');
+  Chart.defaults.plugins.tooltip.titleColor = TEXT;
+  Chart.defaults.plugins.tooltip.bodyColor = TEXT;
+}
+applyChartTheme();
+
+// Apaga todos os gráficos (voltam a ser criados, com as cores novas, no próximo desenho)
+function destroyCharts() {
+  for (const id of Object.keys(charts)) { charts[id].destroy(); delete charts[id]; }
+}
 
 // Eixo de valores em euros (com grelha e rótulos compactos: 1,2k €)
 function moneyAxis(extra = {}) {

@@ -27,7 +27,7 @@
 /* Tira margens por omissão e faz width/height incluírem o padding e a borda */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-/* Paleta de cores, tipos de letra e formas (tema claro, em lilás e violeta, com cantos redondos) */
+/* Paleta de cores, tipos de letra e formas (tema claro, em lilás e violeta, com cantos redondos; o escuro vem a seguir) */
 :root {
   color-scheme: light;     /* campos, calendários e barras de deslocamento do browser no tema claro */
   --bg: #f5f3fb;           /* fundo da página */
@@ -65,6 +65,37 @@
   --caps: none;            /* rótulos pequenos (títulos dos painéis, colunas, campos): uppercase para maiúsculas */
   --caps-spacing: 0;
   --label-size: 12px;
+}
+
+/* Tema escuro: as mesmas cores em versão noturna, quando o telemóvel ou o PC estão em modo escuro.
+   Só mudam as cores; o charts.js volta a ler estas variáveis quando o modo muda (ver applyChartTheme). */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #13111b;
+    --surface: #1d1a2a;
+    --surface2: #272338;
+    --field: #17151f;
+    --border: #2c2840;
+    --border2: #3b3655;
+    --text: #ece9f7;
+    --muted: #a39ec0;
+    --accent: #a68fff;
+    --accent2: #bba9ff;
+    --on-accent: #13111b;
+    --pos: #4fd69a;
+    --neg: #ff7d9a;
+    --info: #86acf7;
+    --extra: #4fc9b6;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --zero-line: #4f4970;
+    --overlay: rgba(5, 4, 10, .65);
+    --shadow: 0 1px 0 rgba(255, 255, 255, .03) inset, 0 2px 10px rgba(0, 0, 0, .25);
+    --shadow-pop: 0 16px 40px rgba(0, 0, 0, .55);
+  }
 }
 
 body {
@@ -197,6 +228,7 @@ select.inline, input.inline {
   padding: 7px 10px; font-size: 12px; outline: none; max-width: 200px;
 }
 select.inline:focus, input.inline:focus { border-color: var(--accent); }
+input.search { width: 170px; }
 
 /* Filtro de categorias com escolha múltipla (um <details> que abre uma lista de caixas) */
 details.multi { position: relative; }
