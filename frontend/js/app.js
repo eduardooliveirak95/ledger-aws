@@ -12,6 +12,7 @@ const S = {
   movCatOut: [],     // categorias de saída escolhidas no filtro (vazio = todas)
   movSel: new Set(), // ids dos movimentos selecionados na tabela (para mudar a categoria de vários)
   movBulkCat: '',    // categoria escolhida para os selecionados
+  movSearch: '',     // texto da caixa de pesquisa dos Movimentos
   invFilter: '',
   loanHistory: '',   // crédito mostrado no histórico de prestações
   adminUser: '',     // utilizador escolhido no filtro dos logins (separador Utilizadores)
@@ -304,6 +305,12 @@ $$('#mov-period-nav .nav-btn').forEach(b => b.addEventListener('click', () => {
 }));
 // Filtros por conta e por categoria
 $('#mov-filter-account').addEventListener('change', e => { S.movAccount = e.target.value; renderMovements(); });
+// Pesquisa: redesenha 200 ms depois de se parar de escrever (para não redesenhar a cada tecla)
+let movSearchTimer;
+$('#mov-search').addEventListener('input', e => {
+  clearTimeout(movSearchTimer);
+  movSearchTimer = setTimeout(() => { S.movSearch = e.target.value; renderMovements(); }, 200);
+});
 
 // Filtro de categorias com escolha múltipla (um para entradas, outro para saídas).
 // É um <details>: o resumo mostra o que está escolhido e, aberto, uma lista de caixas para marcar.
@@ -354,7 +361,7 @@ function renderMovements() {
   $('#mov-period-nav').classList.toggle('hidden', S.movMode === 'all');
   $('#mov-period-label').textContent = S.movMode === 'month' ? monthLabel(S.movAnchor) : S.movAnchor.slice(0, 4);
 
-  const filters = { from, to, account: S.movAccount, catIn: S.movCatIn, catOut: S.movCatOut };
+  const filters = { from, to, account: S.movAccount, catIn: S.movCatIn, catOut: S.movCatOut, text: S.movSearch };
   const txs = filterTx(filters);
   const tot = flowTotals(txs, S.movAccount);
   const nMonths = monthRange(from, to).length;
@@ -382,7 +389,7 @@ function renderMovements() {
   else if (S.movMode === 'year') months = monthRange(from, to);
   else months = monthRange(from, to);
   $('#mov-chart-flow-title').textContent = S.movMode === 'month' ? 'Entradas e saídas (12 meses até ao mês escolhido)' : 'Entradas e saídas por mês';
-  let flows = monthlyFlows(months, { account: S.movAccount, catIn: S.movCatIn, catOut: S.movCatOut });
+  let flows = monthlyFlows(months, { account: S.movAccount, catIn: S.movCatIn, catOut: S.movCatOut, text: S.movSearch });
   let labels = months.map(monthShort), titles = months.map(monthLabel);
   if (months.length > 36) {
     // meses a mais para as barras se lerem: agrupa por ano
@@ -472,6 +479,7 @@ function renderMovements() {
         <td class="actions"><button class="icon-btn" data-edit-tx="${esc(t.id)}" aria-label="Editar">✎</button><button class="icon-btn del" data-del-tx="${esc(t.id)}" aria-label="Apagar">✕</button></td>
       </tr>`;
     }).join('')}</tbody></table>${rows.length > shown.length ? `<div class="empty">A mostrar os 500 mais recentes. Usa os filtros para ver os restantes.</div>` : ''}`
+    : S.movSearch.trim() ? `<div class="empty">Nenhum movimento com esta pesquisa neste período.</div>`
     : `<div class="empty">Sem movimentos neste período.<br><button class="btn primary" data-action="tx-new">+ Movimento</button></div>`;
   renderBulk();
 }
@@ -1290,6 +1298,14 @@ document.addEventListener('click', e => {
 });
 
 // ════════ ARRANQUE ════════
+// Modo escuro: o CSS muda sozinho quando o telemóvel ou o PC mudam de modo; os gráficos têm de
+// voltar a ler as cores e ser desenhados de novo.
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  applyChartTheme();
+  destroyCharts();
+  renderAll();
+});
+
 // Corre uma vez ao abrir a página: escolhe a página pelo endereço (recarregar num separador fica nele),
 // verifica se o config.js existe e, se já houver sessão guardada, entra sem pedir password.
 (function init() {

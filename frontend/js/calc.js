@@ -91,16 +91,26 @@ function firstTxMonth() {
 // Movimentos entre os meses from e to, opcionalmente só de uma conta e/ou de algumas categorias.
 // catIn / catOut = categorias de entrada / de saída escolhidas (listas). Sem nenhuma escolhida,
 // não se filtra por categoria; com alguma, só ficam as entradas e saídas dessas categorias.
-function filterTx({ from, to, account = '', catIn = [], catOut = [] }) {
+// text = o que se escreveu na pesquisa (vazio = sem pesquisa; ver matchesSearch).
+function filterTx({ from, to, account = '', catIn = [], catOut = [], text = '' }) {
   const byCategory = catIn.length || catOut.length;
+  const words = norm(text).split(/\s+/).filter(Boolean);
   return D.transactions.filter(t => {
     const ym = ymOf(t.date);
     if (from && ym < from) return false;
     if (to && ym > to) return false;
     if (account && t.account_id !== account && t.to_account_id !== account) return false;
     if (byCategory && !(t.direction === 'in' ? catIn : t.direction === 'out' ? catOut : []).includes(t.category)) return false;
+    if (words.length && !matchesSearch(t, words)) return false;
     return true;
   });
+}
+
+/** Pesquisa nos movimentos: cada palavra tem de aparecer na descrição, na categoria ou no valor
+ *  (sem distinguir maiúsculas nem acentos; "agua" encontra "Água", "45,9" encontra 45,90 €). */
+function matchesSearch(t, words) {
+  const text = norm(`${t.description || ''} ${t.category || ''} ${String(t.amount).replace('.', ',')}`);
+  return words.every(w => text.includes(w));
 }
 
 /** Totais de entradas e saídas. As transferências só contam quando se olha para uma conta.
