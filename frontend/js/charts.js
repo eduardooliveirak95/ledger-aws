@@ -1,26 +1,30 @@
 // ── charts.js: configuração do Chart.js partilhada por todos os gráficos ──
-// As cores seguem uma ordem validada (azul, laranja, verde-água, amarelo),
-// escolhida para se distinguir bem por daltónicos sobre o fundo escuro da app.
+// As cores e a letra vêm das variáveis CSS do :root (style.css), as mesmas do resto da página:
+// muda-se o tema num só sítio. As 4 cores das séries seguem uma ordem escolhida para se
+// distinguirem bem por daltónicos sobre o fundo da app.
 
-const SERIES = ['#3987e5', '#d95926', '#199e70', '#c98500'];
-const GRID = '#252a36';
-const INK = '#8a93ad';
-const SURFACE = '#13161c';
+const cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const SERIES = ['--series-1', '--series-2', '--series-3', '--series-4'].map(cssVar);
+const GRID = cssVar('--border');
+const INK = cssVar('--muted');
+const TEXT = cssVar('--text');
+const SURFACE = cssVar('--surface');
+const ZERO_LINE = cssVar('--zero-line');
 // Gráficos já criados, por id do <canvas>, para serem atualizados em vez de recriados
 const charts = {};
 
 // Aspeto por omissão de todos os gráficos (letra, cores, tooltips, animação curta)
 Chart.defaults.color = INK;
-Chart.defaults.font.family = "'DM Mono', ui-monospace, monospace";
+Chart.defaults.font.family = cssVar('--font-num');
 Chart.defaults.font.size = 11;
 Chart.defaults.animation.duration = 250;
 Chart.defaults.plugins.legend.labels.boxWidth = 10;
 Chart.defaults.plugins.legend.labels.boxHeight = 10;
-Chart.defaults.plugins.tooltip.backgroundColor = '#1a1e27';
-Chart.defaults.plugins.tooltip.borderColor = '#2e3547';
+Chart.defaults.plugins.tooltip.backgroundColor = cssVar('--surface2');
+Chart.defaults.plugins.tooltip.borderColor = cssVar('--border2');
 Chart.defaults.plugins.tooltip.borderWidth = 1;
-Chart.defaults.plugins.tooltip.titleColor = '#e8ecf4';
-Chart.defaults.plugins.tooltip.bodyColor = '#e8ecf4';
+Chart.defaults.plugins.tooltip.titleColor = TEXT;
+Chart.defaults.plugins.tooltip.bodyColor = TEXT;
 Chart.defaults.plugins.tooltip.padding = 10;
 Chart.defaults.plugins.tooltip.boxPadding = 4;
 

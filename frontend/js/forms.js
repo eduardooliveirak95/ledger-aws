@@ -161,7 +161,7 @@ function formModal({ title, fields, values = {}, submitLabel = 'Guardar', onSubm
         // Dinheiro e números usam campo de texto (para aceitar vírgula decimal); datas e meses usam o seletor do browser
         input.type = { money: 'text', number: 'text', date: 'date', month: 'month', password: 'password' }[f.type] || 'text';
         if (f.autocomplete) input.autocomplete = f.autocomplete;   // ex.: 'new-password' (o browser sugere uma password forte)
-        if (f.type === 'money' || f.type === 'number') { input.inputMode = 'decimal'; input.style.fontFamily = 'var(--mono)'; }
+        if (f.type === 'money' || f.type === 'number') { input.inputMode = 'decimal'; input.style.fontFamily = 'var(--font-num)'; }
         input.value = val === null || val === undefined ? '' : (f.type === 'money' || f.type === 'number') && val !== '' ? String(val).replace('.', ',') : val;
         // "suggest": campo de texto com sugestões (datalist), ex.: categorias já usadas
         if (f.type === 'suggest') {

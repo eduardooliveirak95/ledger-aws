@@ -911,8 +911,9 @@ def send_backup(sender, email, day, files):
 def account_emails():
     """{sub: email} dos utilizadores ativos do Cognito com o email verificado (uma só listagem, de 60 em 60).
 
-    Só emails verificados: o create-user cria as contas já com email_verified=true, e se alguém mudar
-    o email da própria conta no Cognito, o novo fica por verificar e o backup deixa de ir para lá.
+    Só emails verificados: o create-user cria as contas já com email_verified=true; ninguém muda o próprio
+    email (WriteAttributes do app client) e, se um administrador o mudar pela AWS, o novo fica por verificar
+    e o backup deixa de ir para lá.
     """
     out = {}
     kwargs = {"UserPoolId": os.environ["USER_POOL_ID"], "AttributesToGet": ["sub", "email", "email_verified"]}
