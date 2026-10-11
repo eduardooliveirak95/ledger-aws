@@ -1298,9 +1298,20 @@ document.addEventListener('click', e => {
 });
 
 // ════════ ARRANQUE ════════
-// Modo escuro: o CSS muda sozinho quando o telemóvel ou o PC mudam de modo; os gráficos têm de
-// voltar a ler as cores e ser desenhados de novo.
-matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+// Tema claro ou escuro (ver theme.js). O botão do topo passa de automático a claro, a escuro e outra vez a
+// automático. Quando o tema muda (pelo botão ou, em automático, pelo telemóvel ou PC), o CSS muda sozinho;
+// os gráficos têm de voltar a ler as cores e ser desenhados de novo.
+function updateThemeButton() {
+  const btn = $('#theme-btn');
+  const [icon, text] = THEME_LABELS[themeChoice()];
+  btn.querySelector('.theme-icon').textContent = icon;
+  btn.querySelector('.theme-label').textContent = text;
+  btn.title = THEME_TITLES[themeChoice()];
+  btn.setAttribute('aria-label', THEME_TITLES[themeChoice()]);   // no telemóvel o botão só tem o ícone
+}
+$('#theme-btn').addEventListener('click', () => { setThemeChoice(nextThemeChoice(themeChoice())); updateThemeButton(); });
+updateThemeButton();
+document.addEventListener('ledger-theme', () => {
   applyChartTheme();
   destroyCharts();
   renderAll();
