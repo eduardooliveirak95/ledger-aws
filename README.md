@@ -16,7 +16,7 @@ Cada login fica registado (quem entrou e quando) durante 90 dias. Só o administ
 
 **No telemóvel**, podes pôr o Ledger no ecrã principal, com ícone próprio e a abrir sem a barra do browser: no Android (Chrome), menu **⋮ → Adicionar ao ecrã principal** (ou **Instalar app**); no iPhone (Safari), **Partilhar → Adicionar ao ecrã principal**. A sessão segue as mesmas regras: ao reabrir a app depois de a fechares, pede outra vez a password.
 
-O aspeto (claro ou escuro) segue o modo do telemóvel ou do computador.
+O botão do tema, no topo, escolhe o aspeto: **◐ Auto** (segue o modo do telemóvel ou do computador), **☀ Claro** ou **🌙 Escuro**. A escolha fica guardada nesse aparelho.
 
 Se te esqueceres da password, o administrador repõe-na: dá-te uma password temporária e no login seguinte escolhes uma nova. O administrador também pode desativar uma conta (deixa de conseguir entrar, mas os dados ficam guardados) e voltar a ativá-la, ou, depois de a desativar, apagá-la de vez com todos os dados.
 

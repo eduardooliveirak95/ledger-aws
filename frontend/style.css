@@ -1,7 +1,9 @@
 /*
   Estilos do Ledger.
-  As cores, os tipos de letra e as formas (cantos, sombras, rótulos) estão definidos uma vez como variáveis
-  CSS em :root e usados em todo o lado com var(--nome), também nos gráficos (charts.js): muda-se num só sítio.
+  As cores, os tipos de letra e as formas (cantos, sombras, rótulos) estão definidos como variáveis CSS e usados
+  em todo o lado com var(--nome), também nos gráficos (charts.js). Ficam em dois sítios: o :root (tema claro:
+  cores, letra e formas) e o :root[data-theme="dark"] (tema escuro: só as cores). O tema em uso é escolhido
+  pelo js/theme.js (automático, claro ou escuro).
 */
 
 /* Tipo de letra servido pelo próprio site (pasta fonts/; sem pedidos ao Google): Plus Jakarta Sans, no texto
@@ -67,35 +69,34 @@
   --label-size: 12px;
 }
 
-/* Tema escuro: as mesmas cores em versão noturna, quando o telemóvel ou o PC estão em modo escuro.
-   Só mudam as cores; o charts.js volta a ler estas variáveis quando o modo muda (ver applyChartTheme). */
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    --bg: #13111b;
-    --surface: #1d1a2a;
-    --surface2: #272338;
-    --field: #17151f;
-    --border: #2c2840;
-    --border2: #3b3655;
-    --text: #ece9f7;
-    --muted: #a39ec0;
-    --accent: #a68fff;
-    --accent2: #bba9ff;
-    --on-accent: #13111b;
-    --pos: #4fd69a;
-    --neg: #ff7d9a;
-    --info: #86acf7;
-    --extra: #4fc9b6;
-    --series-1: #3987e5;
-    --series-2: #d95926;
-    --series-3: #199e70;
-    --series-4: #c98500;
-    --zero-line: #4f4970;
-    --overlay: rgba(5, 4, 10, .65);
-    --shadow: 0 1px 0 rgba(255, 255, 255, .03) inset, 0 2px 10px rgba(0, 0, 0, .25);
-    --shadow-pop: 0 16px 40px rgba(0, 0, 0, .55);
-  }
+/* Tema escuro: as mesmas cores em versão noturna. Vale quando o js/theme.js põe data-theme="dark" no <html>
+   (escolha "Escuro", ou "Automático" com o telemóvel ou o PC em modo escuro). Só mudam as cores; o charts.js
+   volta a ler estas variáveis quando o tema muda (ver applyChartTheme). */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #13111b;
+  --surface: #1d1a2a;
+  --surface2: #272338;
+  --field: #17151f;
+  --border: #2c2840;
+  --border2: #3b3655;
+  --text: #ece9f7;
+  --muted: #a39ec0;
+  --accent: #a68fff;
+  --accent2: #bba9ff;
+  --on-accent: #13111b;
+  --pos: #4fd69a;
+  --neg: #ff7d9a;
+  --info: #86acf7;
+  --extra: #4fc9b6;
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --zero-line: #4f4970;
+  --overlay: rgba(5, 4, 10, .65);
+  --shadow: 0 1px 0 rgba(255, 255, 255, .03) inset, 0 2px 10px rgba(0, 0, 0, .25);
+  --shadow-pop: 0 16px 40px rgba(0, 0, 0, .55);
 }
 
 body {
@@ -443,4 +444,5 @@ table.grid-edit .num { font-family: var(--font-num); text-align: right; color: v
   .field-row, .map-grid { grid-template-columns: 1fr; }
   .user-box { gap: 6px; }
   .user-box .btn { padding-left: 10px; padding-right: 10px; }
+  .theme-label { display: none; }   /* botão do tema só com o ícone, para a barra do topo caber em duas linhas */
 }
