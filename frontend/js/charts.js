@@ -1,7 +1,7 @@
 // ── charts.js: configuração do Chart.js partilhada por todos os gráficos ──
-// As cores e a letra vêm das variáveis CSS do :root (style.css), as mesmas do resto da página:
-// muda-se o tema num só sítio. As 4 cores das séries seguem uma ordem escolhida para se
-// distinguirem bem por daltónicos sobre o fundo da app (no tema claro e no escuro).
+// As cores e a letra vêm das variáveis CSS do style.css, as mesmas do resto da página: as cores ficam
+// no :root (tema claro) e no :root[data-theme="dark"] (tema escuro). As 4 cores das séries seguem uma
+// ordem escolhida para se distinguirem bem por daltónicos sobre o fundo da app (no tema claro e no escuro).
 
 const cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 // Cores do tema atual (claro ou escuro), lidas por applyChartTheme
@@ -18,8 +18,9 @@ Chart.defaults.plugins.tooltip.borderWidth = 1;
 Chart.defaults.plugins.tooltip.padding = 10;
 Chart.defaults.plugins.tooltip.boxPadding = 4;
 
-// Lê as cores e a letra do tema atual. Corre ao carregar e outra vez quando o telemóvel ou o PC
-// passam de modo claro a escuro (ou ao contrário): ver o "matchMedia" no app.js.
+// Lê as cores e a letra do tema atual. Corre ao carregar e outra vez sempre que o tema muda, pelo
+// botão do topo ou, em automático, com o modo do telemóvel ou do PC (evento "ledger-theme" do
+// theme.js: ver o fim do app.js).
 function applyChartTheme() {
   SERIES = ['--series-1', '--series-2', '--series-3', '--series-4'].map(cssVar);
   GRID = cssVar('--border');
