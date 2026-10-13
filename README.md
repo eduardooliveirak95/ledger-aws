@@ -37,6 +37,10 @@ Para mudar a categoria de vários movimentos de uma vez, marca-os na tabela (ou 
 
 As saídas nas categorias **Investimentos** e **Amortizações** (ou outra começada por "Amortiza", como "Amortização casa") não contam como gasto: entram na taxa de poupança e aparecem à parte no gráfico.
 
+Por baixo dos cartões de **Entradas**, **Gastos**, **Saldo** e **Taxa de poupança** aparece a comparação com a média dos meses anteriores e com o mesmo mês do ano passado (num ano, com o mesmo período do ano anterior). No mês atual, os outros meses só contam até ao mesmo dia, para comparar o que é comparável. Passa o rato por cima para ver com que meses se compara.
+
+**◎ Orçamentos** deixa definir quanto queres gastar por mês, no máximo, em cada categoria (vês ao lado quanto gastaste em média). Os orçamentos aparecem por baixo dos cartões, para o período escolhido e em todas as contas, com uma barra que fica laranja a partir de 80% e vermelha quando passa do limite.
+
 **↻ Despesas fixas** mostra as saídas que se repetem todos os meses (renda, luz, telemóvel, ginásio, subscrições…), encontradas nos movimentos dos últimos 12 meses, com quanto somam por mês e por ano. As que mudam de valor (ex.: luz) aparecem com ≈ e contam pelo valor habitual. Carrega numa para ver esses movimentos na tabela.
 
 ### Créditos

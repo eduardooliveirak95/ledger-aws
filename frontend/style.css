@@ -47,6 +47,7 @@
   --neg: #c42b55;          /* dinheiro negativo, sempre acompanhado de um sinal − */
   --info: #2f5fc4;         /* selo "transferência" */
   --extra: #0e7268;        /* selo "amortização extra" */
+  --warn: #b45309;         /* orçamento perto do limite (laranja) */
   --series-1: #2a78d6;     /* série 1 dos gráficos (azul)       */
   --series-2: #e0602c;     /* série 2 dos gráficos (laranja)    */
   --series-3: #16936a;     /* série 3 dos gráficos (verde-água) */
@@ -89,6 +90,7 @@
   --neg: #ff7d9a;
   --info: #86acf7;
   --extra: #4fc9b6;
+  --warn: #f0a24b;
   --series-1: #3987e5;
   --series-2: #d95926;
   --series-3: #199e70;
@@ -271,6 +273,7 @@ table.data tr.selected td { background: color-mix(in srgb, var(--accent) 7%, tra
 .stat-label { font-size: var(--label-size); font-weight: 600; letter-spacing: var(--caps-spacing); text-transform: var(--caps); color: var(--muted); margin-bottom: 8px; }
 .stat-value { font-family: var(--font-num); font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
 .stat-sub { font-family: var(--font-num); font-size: 11px; color: var(--muted); margin-top: 6px; }
+.stat-cmp { font-family: var(--font-num); font-size: 11px; color: var(--muted); margin-top: 4px; line-height: 1.5; }
 .pos { color: var(--pos); }
 .neg { color: var(--neg); }
 
@@ -339,6 +342,14 @@ table.sim-table th.num { white-space: normal; }   /* "Reduzir a prestação" pod
 .progress { height: 8px; background: var(--field); border-radius: 4px; overflow: hidden; }
 .progress > div { height: 100%; background: var(--series-1); border-radius: 4px; }
 .progress-label { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); font-family: var(--font-num); }
+/* Orçamentos (Movimentos): barra verde, laranja a partir de 80% e vermelha quando passa do limite */
+.budget-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px 28px; padding: 16px 18px; }
+.budget { display: flex; flex-direction: column; gap: 6px; }
+.budget-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.budget-nums { font-family: var(--font-num); font-size: 12px; white-space: nowrap; }
+.budget-bar.ok > div { background: var(--pos); }
+.budget-bar.near > div { background: var(--warn); }
+.budget-bar.over > div { background: var(--neg); }
 
 /* ── FORMULÁRIOS / JANELAS ─────────────────── */
 .modal-overlay {

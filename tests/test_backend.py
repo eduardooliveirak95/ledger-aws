@@ -405,6 +405,26 @@ def test_bank_formats_are_saved_and_validated(table):
     assert not any("Banco Y" in content for _, content in app.backup_files("u1", "2026-10-04"))
 
 
+def test_budgets_are_saved_and_validated(table):
+    """Os orçamentos (limite por mês de uma categoria de saídas) ficam guardados, atualizam-se e apagam-se."""
+    b = save([{"kind": "budget", "category": "Restauração", "amount": "150.5"}])["saved"][0]
+    assert b["id"].startswith("BUD_") and b["category"] == "Restauração" and b["amount"] == 150.5
+    _, d = call("GET /data")
+    assert [(x["category"], x["amount"]) for x in d["budgets"]] == [("Restauração", 150.5)]
+    # atualizar mantém o id
+    assert save([dict(b, amount=200)])["saved"][0]["id"] == b["id"]
+    for bad in ({"category": "", "amount": 10}, {"category": "Lazer", "amount": 0}, {"category": "Lazer", "amount": -5},
+                {"category": "Lazer", "amount": "muito"}, {"category": "Lazer"}, {"id": "BUD_xyz", "category": "Lazer", "amount": 5}):
+        status, body = call("POST /items", body={"items": [{"kind": "budget", **bad}]})
+        assert status == 400 and body["detail"], bad
+    # o backup não inclui os orçamentos (tal como os formatos dos bancos)
+    assert not any("Restauração" in content for _, content in app.backup_files("u1", "2026-10-13"))
+    # apagar
+    save([], delete=[b["id"]])
+    _, d = call("GET /data")
+    assert d["budgets"] == []
+
+
 def test_request_size_limit(table):
     """Mais de 300 itens num pedido dá 400."""
     acc = save([{"kind": "account", "name": "A", "opening_balance": 0, "opening_date": "2026-01-01"}])["saved"][0]["id"]
