@@ -37,11 +37,14 @@ Para mudar a categoria de vários movimentos de uma vez, marca-os na tabela (ou 
 
 As saídas nas categorias **Investimentos** e **Amortizações** (ou outra começada por "Amortiza", como "Amortização casa") não contam como gasto: entram na taxa de poupança e aparecem à parte no gráfico.
 
+**↻ Despesas fixas** mostra as saídas que se repetem todos os meses (renda, luz, telemóvel, ginásio, subscrições…), encontradas nos movimentos dos últimos 12 meses, com quanto somam por mês e por ano. As que mudam de valor (ex.: luz) aparecem com ≈ e contam pelo valor habitual. Carrega numa para ver esses movimentos na tabela.
+
 ### Créditos
 
 - Os juros de cada mês são calculados a partir do saldo e da prestação que registas.
 - Para saber quando acabas de pagar, preenche o **Fim do contrato** na ficha do crédito (✎).
 - Para registar uma amortização antiga, abre "Atualizar mês", escolhe esse mês e preenche a **Amortização extra**.
+- **Simular amortização** (em cada crédito): escreve quanto queres amortizar (e a comissão, se houver) e vê quanto poupas em juros a reduzir a prestação ou a reduzir o prazo. Precisa da taxa e da prestação ou do fim do contrato. É só uma simulação: não grava nada.
 
 ### Património
 

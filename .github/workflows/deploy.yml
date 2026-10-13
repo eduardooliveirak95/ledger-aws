@@ -54,11 +54,11 @@ jobs:
       - name: Check the JavaScript syntax
         run: for f in frontend/js/*.js; do node --check "$f"; done
 
-      # Testes da importação dos extratos do banco, do separador Utilizadores, da renovação da sessão, da pesquisa nos Movimentos, do tema
-      # e da evolução do património líquido
+      # Testes da importação dos extratos do banco, do separador Utilizadores, da renovação da sessão, da pesquisa nos Movimentos, do tema,
+      # da evolução do património líquido, das despesas fixas e do simulador de amortização
       # (JavaScript do site, corrido no Node sem browser)
       - name: JavaScript tests
-        run: node --test tests/bank.test.js tests/admin.test.js tests/auth.test.js tests/movimentos.test.js tests/tema.test.js tests/patrimonio.test.js
+        run: node --test tests/bank.test.js tests/admin.test.js tests/auth.test.js tests/movimentos.test.js tests/tema.test.js tests/patrimonio.test.js tests/despesas-fixas.test.js tests/amortizacao.test.js
 
   # ── 2.º trabalho: deploy (só se os testes passarem, e só em push para main) ──
   deploy:

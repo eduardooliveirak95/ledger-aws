@@ -334,6 +334,8 @@ a.li-name:hover { color: var(--accent); }
 .loan-meta { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
 .loan-meta .k { font-size: var(--label-size); letter-spacing: var(--caps-spacing); text-transform: var(--caps); color: var(--muted); }
 .loan-meta .v { font-family: var(--font-num); font-size: 13px; margin-top: 3px; }
+.loan-actions { display: flex; justify-content: flex-end; }
+table.sim-table th.num { white-space: normal; }   /* "Reduzir a prestação" pode partir em duas linhas */
 .progress { height: 8px; background: var(--field); border-radius: 4px; overflow: hidden; }
 .progress > div { height: 100%; background: var(--series-1); border-radius: 4px; }
 .progress-label { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); font-family: var(--font-num); }
@@ -446,4 +448,5 @@ table.grid-edit .num { font-family: var(--font-num); text-align: right; color: v
   .user-box { gap: 6px; }
   .user-box .btn { padding-left: 10px; padding-right: 10px; }
   .theme-label { display: none; }   /* botão do tema só com o ícone, para a barra do topo caber em duas linhas */
+  table.sim-table th, table.sim-table td { padding: 8px 6px; font-size: 12px; }   /* simulador: as 4 colunas cabem no ecrã */
 }
