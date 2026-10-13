@@ -740,6 +740,49 @@ function historyGrid() {
   });
 }
 
+// ── despesas fixas e subscrições (botão "↻ Despesas fixas") ──
+// As saídas que se repetem todos os meses (recurringExpenses no calc.js), com o total por mês e por ano.
+// Carregar numa descrição mostra esses movimentos na tabela.
+function recurringModal() {
+  const list = recurringExpenses();
+  const perMonth = round2(list.reduce((s, x) => s + x.amount, 0));
+  const body = document.createElement('div');
+  body.style.cssText = 'display:flex;flex-direction:column;gap:14px';
+  body.innerHTML = `
+    <div class="modal-hint">Saídas que se repetem todos os meses (renda, luz, telemóvel, ginásio, subscrições…), encontradas nos
+      movimentos dos últimos 12 meses, em todas as contas. As que mudam de valor de mês para mês (ex.: luz) estão marcadas com
+      <span class="badge approx" style="margin-left:0">≈</span> e contam pelo valor habitual. Carrega numa descrição para ver esses movimentos.</div>
+    ${list.length ? `
+      <div class="preview-box">Por mês: <b class="neg">${eur(perMonth)}</b> · por ano: <b class="neg">${eur(perMonth * 12)}</b>
+        · ${list.length} ${list.length === 1 ? 'despesa' : 'despesas'}</div>
+      <div class="table-wrap grid-scroll"><table class="data">
+        <thead><tr><th>Descrição</th><th class="num">Por mês</th><th class="num">Por ano</th></tr></thead>
+        <tbody>${list.map(x => `<tr>
+          <td><button class="link-btn" style="text-align:left" data-recurring="${esc(x.key)}">${esc(x.description)}</button>
+            <div class="li-sub">${esc(x.category || '—')} · ${esc(accountName(x.account_id))} · última a ${dateLabel(x.last)}
+              · em ${x.months} meses</div></td>
+          <td class="num">${eur(x.amount)}${x.variable ? `<span class="badge approx" title="Varia entre ${eur(x.min)} e ${eur(x.max)}">≈</span>` : ''}</td>
+          <td class="num">${eurShort(x.amount * 12)}</td>
+        </tr>`).join('')}</tbody></table></div>`
+      : `<div class="empty">Ainda não há despesas que se repitam todos os meses.<br>
+          São precisos movimentos de pelo menos 3 meses (podes importar os extratos com "⬆ Importar").</div>`}`;
+  body.addEventListener('click', e => {
+    const b = e.target.closest('[data-recurring]');
+    if (b) showMovementsMatching(b.dataset.recurring);
+  });
+  modal.open({ title: 'Despesas fixas e subscrições', body, wide: true, footer: [{ label: 'Fechar', onClick: () => modal.close() }] });
+}
+
+// Mostra na tabela dos Movimentos os que têm este texto: pesquisa em "Sempre", sem filtros de conta nem de categoria
+function showMovementsMatching(text) {
+  Object.assign(S, { movMode: 'all', movAccount: '', movCatIn: [], movCatOut: [], movSearch: text });
+  $$('#mov-period-mode button').forEach(x => x.classList.toggle('active', x.dataset.mode === 'all'));
+  $('#mov-search').value = text;
+  modal.close();
+  renderMovements();
+  $('#mov-table').closest('.panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 // ════════ INVESTIMENTOS ════════
 // Filtro: carteira completa ou um investimento
 $('#inv-filter').addEventListener('change', e => { S.invFilter = e.target.value; renderInvestments(); });
@@ -1022,6 +1065,7 @@ function renderLoans() {
         <div><div class="k">Faltam</div><div class="v">${cur <= 0 ? 'pago ✓' : left === null ? '—' : `${Math.floor(left / 12)}a ${left % 12}m`}</div></div>
         <div><div class="k">${l.end_date ? 'Fim do contrato' : 'Fim previsto'}</div><div class="v">${cur <= 0 ? '—' : left === null ? '—' : monthShort(addMonths(thisMonth(), left))}</div></div>
       </div>
+      ${cur > 0 ? `<div class="loan-actions"><button class="btn" data-sim-loan="${esc(l.id)}">Simular amortização</button></div>` : ''}
     </div>`;
   }).join('') : `<div class="empty">Sem créditos registados. Boa!<br>Se tiveres algum, adiciona-o para acompanhar a amortização.<br><button class="btn primary" data-action="loan-new">+ Crédito</button></div>`;
 
@@ -1106,6 +1150,70 @@ function renderLoanHistory() {
     <div class="empty" style="text-align:left">Juros = prestação + amortização extra − quanto a dívida baixou no mês
       (se a prestação incluir seguros ou comissões, também contam aqui).${anyEstimated ? ' «≈» = sem prestação registada: estimado com a taxa do crédito.' : ''}</div>`
     : `<div class="empty">Ainda sem saldos registados para este crédito.<br><button class="btn primary" data-action="loan-month">Atualizar mês</button></div>`;
+}
+
+// ── simulador de amortização antecipada (botão "Simular amortização" de cada crédito) ──
+// Quanto se poupa em juros se se amortizar hoje parte do crédito, a reduzir a prestação ou o prazo
+// (simulateEarlyRepayment no calc.js). É só uma simulação: não grava nada.
+function earlyRepaymentModal(loan) {
+  const title = `Simular amortização · ${loan.name}`;
+  const base = simulateEarlyRepayment(loan, 0);
+  if (!base) {
+    return modal.open({ title, body: `<div class="modal-hint">Para simular, o crédito precisa da <b>taxa (TAN)</b> e da
+      <b>prestação</b> ou do <b>fim do contrato</b>. Edita o crédito e preenche esses campos.</div>`,
+      footer: [{ label: 'Fechar', onClick: () => modal.close() }, { label: 'Editar crédito', cls: 'primary', onClick: () => loanForm(loan) }] });
+  }
+  const term = n => `${Math.floor(n / 12)}a ${n % 12}m`;
+  const end = n => monthShort(addMonths(thisMonth(), n));
+  const signedShort = n => (n > 0 ? '+' : n < 0 ? '−' : '') + eurShort(Math.abs(n));   // valores grandes sem cêntimos
+  const body = document.createElement('div');
+  body.style.cssText = 'display:flex;flex-direction:column;gap:14px';
+  body.innerHTML = `
+    <div class="modal-hint">Quanto poupas em juros se amortizares hoje parte do crédito (em dívida: <b>${eur(base.balance)}</b>).
+      As contas usam a taxa atual (TAN ${esc(String(loan.rate).replace('.', ','))}%) e o prazo que falta (${term(base.now.months)}), só com capital e
+      juros: sem seguros nem outras despesas da prestação. Com taxa variável, os juros reais mudam a cada revisão da taxa.
+      É só uma simulação: não grava nada.</div>
+    <div class="field-row">
+      <div class="field"><label for="sim-amount">Valor a amortizar (€)</label><input id="sim-amount" inputmode="decimal" placeholder="ex.: 5000"></div>
+      <div class="field"><label for="sim-fee">Comissão (%)</label><input id="sim-fee" inputmode="decimal" placeholder="0">
+        <div class="hint">Vê no contrato. Nos créditos à habitação é no máximo 0,5% (taxa variável) ou 2% (taxa fixa).</div></div>
+    </div>
+    <div id="sim-result"></div>`;
+
+  // Tabela: hoje vs reduzir a prestação vs reduzir o prazo (sem valor escrito, as duas últimas colunas ficam com "—")
+  const table = s => {
+    const a = s?.byPayment, b = s?.byTerm, dash = '<td class="num">—</td>';
+    const row = (label, now, f, cls = () => '') => `<tr><td>${label}</td><td class="num">${now}</td>${
+      [a, b].map(c => (c ? `<td class="num ${cls(c)}">${f(c)}</td>` : dash)).join('')}</tr>`;
+    return `<div class="table-wrap"><table class="data sim-table">
+      <thead><tr><th></th><th class="num">Hoje</th><th class="num">Reduzir a prestação</th><th class="num">Reduzir o prazo</th></tr></thead>
+      <tbody>
+        ${row('Prestação', eur(base.now.payment), c => eur(c.payment))}
+        ${row('Prazo que falta', term(base.now.months), c => term(c.months))}
+        ${row('Fim previsto', end(base.now.months), c => end(c.months))}
+        ${row('Juros até ao fim', eurShort(base.now.interest), c => eurShort(c.interest))}
+        ${row('Poupança em juros', '—', c => eurShort(c.saved), () => 'pos')}
+        ${row('Comissão', '—', () => eurShort(s.fee))}
+        ${row('<b>Poupança líquida</b>', '—', c => `<b>${signedShort(c.net)}</b>`, c => signClass(c.net))}
+      </tbody></table></div>
+      <div class="chart-note">Prestação = capital + juros. Reduzir o prazo poupa mais juros; reduzir a prestação deixa mais dinheiro
+        livre todos os meses.</div>`;
+  };
+  const update = () => {
+    const amount = parseNum($('#sim-amount', body).value), fee = parseNum($('#sim-fee', body).value);
+    const out = $('#sim-result', body);
+    if ($('#sim-amount', body).value.trim() && !(amount > 0)) return (out.innerHTML = '<div class="form-error">Valor inválido</div>');
+    if ($('#sim-fee', body).value.trim() && !(fee >= 0 && fee <= 100)) return (out.innerHTML = '<div class="form-error">Comissão inválida (0 a 100%)</div>');
+    if (!(amount > 0)) return (out.innerHTML = table(null));
+    const s = simulateEarlyRepayment(loan, amount, fee || 0);
+    out.innerHTML = s.paidOff
+      ? `<div class="preview-box">Com ${eur(amount)} pagas o crédito todo (estão em dívida ${eur(s.balance)}) e poupas
+          <b class="pos">${eur(s.saved)}</b> de juros${s.fee ? `; com a comissão de ${eur(s.fee)}, a poupança líquida é <b>${eurSigned(s.net)}</b>` : ''}.</div>`
+      : table(s);
+  };
+  body.addEventListener('input', update);
+  update();
+  modal.open({ title, body, wide: true, footer: [{ label: 'Fechar', onClick: () => modal.close() }] });
 }
 
 // Formulário de crédito (criar / editar / apagar)
@@ -1298,7 +1406,7 @@ $('#adm-filter').addEventListener('change', e => { S.adminUser = e.target.value;
 // Um único "listener" para a página toda (delegação de eventos): funciona também para botões
 // criados depois, dentro das tabelas. O atributo diz o que fazer (ex.: data-edit-tx="<id>").
 document.addEventListener('click', e => {
-  const el = e.target.closest('[data-action],[data-edit-acc],[data-edit-tx],[data-del-tx],[data-edit-inv],[data-inv-focus],[data-edit-imv],[data-del-imv],[data-edit-loan],[data-edit-prop]');
+  const el = e.target.closest('[data-action],[data-edit-acc],[data-edit-tx],[data-del-tx],[data-edit-inv],[data-inv-focus],[data-edit-imv],[data-del-imv],[data-edit-loan],[data-sim-loan],[data-edit-prop]');
   if (!el) return;
   const d = el.dataset;
   if (d.invFocus) { e.preventDefault(); S.invFilter = d.invFocus; renderInvestments(); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
@@ -1309,11 +1417,13 @@ document.addEventListener('click', e => {
   if (d.editImv) return invMoveForm(findById('inv_moves', d.editImv));
   if (d.delImv) return deleteImv(d.delImv);
   if (d.editLoan) return loanForm(findById('loans', d.editLoan));
+  if (d.simLoan) return earlyRepaymentModal(findById('loans', d.simLoan));
   if (d.editProp) return propertyForm(findById('properties', d.editProp));
   switch (d.action) {
     case 'acc-new': return accountForm();
     case 'tx-new': return txForm();
     case 'mov-history': return historyGrid();
+    case 'mov-recurring': return recurringModal();
     case 'inv-new': return investmentForm();
     case 'imv-new': return invMoveForm();
     case 'inv-month': return investmentMonthGrid();

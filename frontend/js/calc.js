@@ -168,6 +168,52 @@ function balanceSeries(accountId = '') {
   return { months, values };
 }
 
+// ════════ DESPESAS FIXAS ════════
+
+// Chave para juntar os movimentos da mesma despesa: a descrição sem acentos, números nem pontuação
+// (nos extratos mudam de mês para mês: datas, referências) — "COMPRA 4512 NETFLIX.COM 05/09" -> "compra netflix com"
+function recurringKey(description) {
+  return norm(description).replace(/[^a-z]+/g, ' ').trim();
+}
+
+/**
+ * Despesas que se repetem todos os meses (renda, luz, telemóvel, ginásio, subscrições…), encontradas nas saídas
+ * dos últimos 12 meses e do mês atual, em todas as contas. Juntam-se pela descrição (recurringKey) e ficam as que:
+ *   - aparecem em pelo menos 3 meses diferentes, quase sempre uma vez por mês (no máximo 1,5 vezes por mês, em média;
+ *     o supermercado ou a gasolina, várias vezes por mês, ficam de fora);
+ *   - aparecem em pelo menos 60% dos meses entre a primeira e a última vez (regulares, não de vez em quando);
+ *   - ainda estão ativas: a última foi no mês atual ou no anterior.
+ * Os investimentos e as amortizações (dinheiro posto de lado) e as transferências entre contas não contam.
+ * Devolve [{ key, description, category, account_id, amount, min, max, variable, months, last }], do maior valor
+ * para o menor: amount = valor habitual (a mediana); variable = o valor muda mais de 10% (ex.: luz, água);
+ * description, category e account_id são os do movimento mais recente; months = em quantos meses apareceu.
+ */
+function recurringExpenses() {
+  const now = thisMonth(), from = addMonths(now, -12), recent = addMonths(now, -1);
+  const groups = {};
+  for (const t of D.transactions) {
+    const ym = ymOf(t.date);
+    if (t.direction !== 'out' || isSavingOut(t) || ym < from || ym > now) continue;
+    const key = recurringKey(t.description);
+    if (key.length >= 3) (groups[key] ||= []).push(t);
+  }
+  const out = [];
+  for (const [key, txs] of Object.entries(groups)) {
+    const months = [...new Set(txs.map(t => ymOf(t.date)))].sort();
+    const first = months[0], last = months[months.length - 1];
+    if (months.length < 3 || txs.length > months.length * 1.5 || last < recent) continue;
+    if (months.length < 0.6 * (monthsDiff(first, last) + 1)) continue;
+    const amounts = txs.map(t => t.amount).sort((a, b) => a - b);
+    const mid = amounts.length >> 1;
+    const amount = round2(amounts.length % 2 ? amounts[mid] : (amounts[mid - 1] + amounts[mid]) / 2);
+    const min = amounts[0], max = amounts[amounts.length - 1];
+    const latest = txs.reduce((a, b) => (b.date > a.date ? b : a));
+    out.push({ key, description: latest.description, category: latest.category, account_id: latest.account_id, amount, min, max,
+      variable: max - min > amount * 0.1, months: months.length, last: latest.date });
+  }
+  return out.sort((a, b) => b.amount - a.amount || a.description.localeCompare(b.description, 'pt'));
+}
+
 // ════════ INVESTIMENTOS ════════
 
 // Um investimento só (se filterId) ou todos
@@ -353,6 +399,53 @@ function loanTotals(rows, year = '') {
   const inYear = year ? rows.filter(r => r.month.startsWith(year)) : [];
   return { payments: sum('payment'), interest: sum('interest'), principal: sum('principal'), extra: sum('extra'),
            yearInterest: sum('interest', inYear), yearPayments: sum('payment', inYear) };
+}
+
+// ════════ SIMULADOR DE AMORTIZAÇÃO ANTECIPADA ════════
+
+// Prestação (capital + juros) que paga `balance` em n meses à taxa mensal r (amortização francesa)
+function annuityPayment(balance, r, n) {
+  if (n <= 0) return balance;
+  return r === 0 ? balance / n : balance * r / (1 - Math.pow(1 + r, -n));
+}
+// Paga `balance` com prestações `payment` à taxa mensal r, mês a mês (a última é só o que falta):
+// devolve quantos meses leva e quanto se paga de juros
+function payoff(balance, r, payment) {
+  let b = balance, months = 0, interest = 0;
+  while (b > 0.005 && months < 1200) {
+    const i = b * r;
+    interest += i;
+    b += i - Math.min(payment, b + i);
+    months++;
+  }
+  return { months, interest: round2(interest) };
+}
+
+/**
+ * O que acontece se hoje amortizares `amount` € de um crédito, com uma comissão de feePct % sobre o valor
+ * amortizado. Contas com a taxa atual (TAN) e o prazo que falta (loanMonthsLeft), só com capital e juros (sem
+ * seguros nem outras despesas que venham na prestação). Compara três casos, cada um com { payment, months, interest }:
+ *   now        sem amortizar: a prestação que paga o saldo atual no prazo que falta
+ *   byPayment  reduzir a prestação (o prazo fica igual)
+ *   byTerm     reduzir o prazo (a prestação fica igual)
+ * saved = juros que se poupam em relação a now; net = saved − comissão. Se o valor chegar para pagar tudo,
+ * paidOff = true (e só há saved e net). Devolve null sem taxa, sem prazo conhecido (sem prestação nem fim do
+ * contrato e sem saldos suficientes) ou com o crédito já pago.
+ */
+function simulateEarlyRepayment(loan, amount, feePct = 0) {
+  const balance = loanCurrent(loan), n = loanMonthsLeft(loan);
+  if (!(balance > 0) || !n || loan.rate === undefined || loan.rate === null) return null;
+  const r = loan.rate / 1200;
+  const P = annuityPayment(balance, r, n);
+  const now = { payment: round2(P), months: n, interest: payoff(balance, r, P).interest };
+  const fee = round2(Math.max(0, amount) * (feePct || 0) / 100);
+  const left = round2(balance - amount);
+  if (left <= 0) return { balance, now, fee, paidOff: true, saved: now.interest, net: round2(now.interest - fee) };
+  const Pa = annuityPayment(left, r, n);
+  const byPayment = { payment: round2(Pa), months: n, interest: payoff(left, r, Pa).interest };
+  const byTerm = { payment: round2(P), ...payoff(left, r, P) };
+  for (const c of [byPayment, byTerm]) { c.saved = round2(now.interest - c.interest); c.net = round2(c.saved - fee); }
+  return { balance, now, fee, paidOff: false, byPayment, byTerm };
 }
 
 // ════════ IMÓVEIS ════════
