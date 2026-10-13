@@ -43,10 +43,11 @@ function esc(s) {
 // Formatadores de euros no formato português (1 234,56 €); EUR0 sem casas decimais
 const EUR = new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' });
 const EUR0 = new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 });
-// eur: 1 234,56 € · eurShort: 1 235 € · eurSigned: +12,00 € / −12,00 € (com sinal)
+// eur: 1 234,56 € · eurShort: 1 235 € · eurSigned: +12,00 € / −12,00 € (com sinal) · eurSignedShort: +12 € / −12 €
 function eur(n) { return EUR.format(n || 0); }
 function eurShort(n) { return EUR0.format(n || 0); }
 function eurSigned(n) { return (n > 0 ? '+' : n < 0 ? '−' : '') + EUR.format(Math.abs(n || 0)); }
+function eurSignedShort(n) { return (n > 0 ? '+' : n < 0 ? '−' : '') + EUR0.format(Math.abs(n || 0)); }
 // Formata uma fração como percentagem com sinal (0.051 -> "+5,1%"); "—" se não for um número finito
 function pct(n, digits = 1) {
   if (!isFinite(n)) return '—';

@@ -1,17 +1,19 @@
 // ── calc.js: todos os números que a app mostra são calculados aqui, a partir dos dados em bruto ──
 // O backend só guarda e devolve os registos; saldos, ganhos e dívidas são calculados no browser.
-// D = { accounts, transactions, investments, inv_moves, valuations, loans, loan_balances, properties, bank_formats }
+// D = { accounts, transactions, investments, inv_moves, valuations, loans, loan_balances, properties, bank_formats, budgets }
 // é a cópia local de tudo o que veio de GET /data (uma lista por tipo de item).
 
 let D = emptyData();
 function emptyData() {
   return { accounts: [], transactions: [], investments: [], inv_moves: [], valuations: [], loans: [], loan_balances: [], properties: [],
-    bank_formats: [] };   // bank_formats: colunas escolhidas para os CSV de cada banco (ver bank.js)
+    bank_formats: [],   // bank_formats: colunas escolhidas para os CSV de cada banco (ver bank.js)
+    budgets: [] };      // budgets: orçamentos por categoria de saídas (limite por mês; ver budgetStatus)
 }
 // Tipo de item -> nome da lista em D (o mesmo mapa que existe no backend)
 const COLLECTION_OF = {
   account: 'accounts', transaction: 'transactions', investment: 'investments', inv_move: 'inv_moves',
   valuation: 'valuations', loan: 'loans', loan_balance: 'loan_balances', property: 'properties', bank_format: 'bank_formats',
+  budget: 'budgets',
 };
 
 /**
@@ -166,6 +168,80 @@ function balanceSeries(accountId = '') {
                     : D.accounts.reduce((s, a) => s + a.opening_balance, 0);
   const values = months.map(m => (b += perMonth[m] || 0, round2(b)));
   return { months, values };
+}
+
+// ════════ COMPARAÇÃO NOS CARTÕES DOS MOVIMENTOS ════════
+
+// Totais de vários meses, já com a taxa de poupança (saved / in), como nos cartões
+function totalsWithRate(txs, account) {
+  const t = flowTotals(txs, account);
+  return { ...t, rate: t.in > 0 ? t.saved / t.in : NaN };
+}
+
+/**
+ * Com que se comparam os cartões dos Movimentos (com os mesmos filtros de conta, categorias e pesquisa):
+ *   mês    -> avg: a média por mês dos 12 meses anteriores (só desde o primeiro movimento) e
+ *             lastYear: o mesmo mês do ano anterior (se já havia movimentos nesse mês)
+ *   ano    -> lastYear: o mesmo período do ano anterior (no ano atual, de janeiro até ao mesmo mês)
+ *   sempre -> nada
+ * No mês atual (ou no último mês do ano atual), os meses com que se compara só contam até ao mesmo dia do mês,
+ * para não comparar meio mês com meses inteiros. Cada comparação é { short, title, totals } (short = texto curto
+ * para o cartão, title = a explicação completa; na média, os totais são por mês) ou null.
+ */
+function movComparison(mode, anchor, filters) {
+  const first = firstTxMonth(), now = thisMonth(), out = { avg: null, lastYear: null };
+  if (!first || mode === 'all') return out;
+  const day = Number(todayISO().slice(8, 10));
+  const current = mode === 'month' ? anchor === now : anchor.slice(0, 4) === now.slice(0, 4);
+  const sum = (from, to, keep) => totalsWithRate(filterTx({ ...filters, from, to }).filter(keep), filters.account);
+  const upToDay = t => !current || Number(t.date.slice(8, 10)) <= day;
+  if (mode === 'month') {
+    const upTo = current ? ` (até ao dia ${day})` : '';
+    const from = [addMonths(anchor, -12), first].sort().pop(), to = addMonths(anchor, -1);
+    const months = monthRange(from, to).length;
+    if (months) {
+      const t = sum(from, to, upToDay);
+      out.avg = { short: 'à média', title: `${months === 1 ? 'O mês anterior' : `Média dos ${months} meses anteriores`}${upTo}`,
+        totals: { ...t, in: t.in / months, out: t.out / months, net: t.net / months } };
+    }
+    const ly = addMonths(anchor, -12);
+    if (ly >= first) out.lastYear = { short: `a ${monthShort(ly)}`, title: `${monthLabel(ly)}${upTo}`, totals: sum(ly, ly, upToDay) };
+  } else {
+    const y = Number(anchor.slice(0, 4)) - 1, end = current ? Number(now.slice(5)) : 12;
+    const from = `${y}-01`, to = `${y}-${String(end).padStart(2, '0')}`;
+    if (from >= first) {
+      out.lastYear = {
+        short: `a ${end === 12 ? y : `jan–${MONTHS_SHORT[end - 1]} ${y}`}`,
+        title: end === 12 ? String(y) : `De janeiro a ${MONTHS_PT[end - 1]} de ${y} (${MONTHS_PT[end - 1]} só até ao dia ${day})`,
+        totals: sum(from, to, t => ymOf(t.date) < to || upToDay(t)),
+      };
+    }
+  }
+  return out;
+}
+
+// ════════ ORÇAMENTOS ════════
+
+/**
+ * Como estão os orçamentos num período (meses from a to): para cada categoria com orçamento, quanto se gastou
+ * nesse período (saídas dessa categoria, em todas as contas) e o limite = orçamento por mês × número de meses
+ * (no ano atual ou em "Sempre", só até ao mês atual). state: 'ok', 'near' (80% ou mais) ou 'over' (passou).
+ * Se houver dois orçamentos da mesma categoria, conta o mais recente. Ordem: os mais gastos (em %) primeiro.
+ */
+function budgetStatus(from, to) {
+  const now = thisMonth();
+  const end = to <= now || from > now ? to : now;
+  const months = Math.max(1, monthRange(from, end).length);
+  const latest = {};
+  for (const b of D.budgets) if (!latest[b.category] || (b.updated_at || '') > (latest[b.category].updated_at || '')) latest[b.category] = b;
+  const spentBy = {};
+  for (const t of filterTx({ from, to })) if (t.direction === 'out') spentBy[t.category] = (spentBy[t.category] || 0) + t.amount;
+  return Object.values(latest).map(b => {
+    const limit = round2(b.amount * months), spent = round2(spentBy[b.category] || 0);
+    const ratio = spent / limit;
+    return { id: b.id, category: b.category, amount: b.amount, months, limit, spent, ratio, left: round2(limit - spent),
+      state: ratio > 1 ? 'over' : ratio >= 0.8 ? 'near' : 'ok' };
+  }).sort((a, b) => b.ratio - a.ratio || a.category.localeCompare(b.category, 'pt'));
 }
 
 // ════════ DESPESAS FIXAS ════════

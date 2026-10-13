@@ -411,6 +411,37 @@ function renderMovements() {
     + (putAside ? ` · sem ${putAside}` : '');
   $('#mov-net-sub').textContent = tot.net >= 0 ? 'ficou nas contas' : 'saiu mais das contas do que entrou';
 
+  // Comparação com a média dos meses anteriores e com o ano passado (movComparison; o título de cada linha diz com quê).
+  // Nos gastos, subir é mau (vermelho); nas entradas, no saldo e na taxa de poupança, subir é bom (verde).
+  const cmp = [movComparison(S.movMode, S.movAnchor, filters)].flatMap(c => [c.avg, c.lastYear]).filter(Boolean);
+  const change = (cur, base) => (base > 0 ? (cur - base) / base : NaN);
+  const cmpLines = f => cmp.map(c => {
+    const r = f(c.totals);
+    return r ? `<div title="${esc(c.title)}"><span class="${r.cls}">${r.text}</span> face ${esc(c.short)}</div>` : '';
+  }).join('');
+  $('#mov-in-cmp').innerHTML = cmpLines(b => { const x = change(tot.in, b.in); return isFinite(x) && { text: pct(x, 0), cls: signClass(x) }; });
+  $('#mov-out-cmp').innerHTML = cmpLines(b => { const x = change(tot.out, b.out); return isFinite(x) && { text: pct(x, 0), cls: signClass(-x) }; });
+  $('#mov-net-cmp').innerHTML = cmpLines(b => { const x = round2(tot.net - b.net); return { text: eurSignedShort(x), cls: signClass(x) }; });
+  $('#mov-rate-cmp').innerHTML = cmpLines(b => {
+    const x = tot.in > 0 && isFinite(b.rate) ? Math.round((tot.saved / tot.in - b.rate) * 100) : NaN;
+    return isFinite(x) && { text: `${x > 0 ? '+' : x < 0 ? '−' : ''}${Math.abs(x)} p.p.`, cls: signClass(x) };
+  });
+
+  // Orçamentos do período (budgetStatus): em todas as contas, sem os filtros de categoria nem a pesquisa
+  const budgets = budgetStatus(from, to);
+  $('#budget-panel').classList.toggle('hidden', !budgets.length);
+  if (budgets.length) {
+    const n = budgets[0].months;
+    $('#budget-sub').textContent = `todas as contas${n > 1 ? ` · limite por mês × ${n} meses` : ''}`;
+    $('#budget-list').innerHTML = budgets.map(b => `<div class="budget">
+      <div class="budget-top"><span class="li-name">${esc(b.category)}</span><span class="budget-nums">${eur(b.spent)} de ${eurShort(b.limit)}</span></div>
+      <div class="progress budget-bar ${b.state}" role="progressbar" aria-label="${esc(b.category)}" aria-valuenow="${Math.round(b.ratio * 100)}"
+        aria-valuemin="0" aria-valuemax="100"><div style="width:${Math.min(100, b.ratio * 100)}%"></div></div>
+      <div class="progress-label"><span>${Math.round(b.ratio * 100)}%</span>
+        <span class="${b.state === 'over' ? 'neg' : ''}">${b.left >= 0 ? `sobram ${eur(b.left)}` : `${eur(-b.left)} acima do limite`}</span></div>
+    </div>`).join('');
+  }
+
   // gráfico: entradas vs saídas por mês
   let months;
   if (S.movMode === 'month') months = monthRange(addMonths(S.movAnchor, -11), S.movAnchor);
@@ -734,6 +765,64 @@ function historyGrid() {
         } catch (err) {
           $('#hg-err', body).textContent = err.message;
           e.target.disabled = false; e.target.textContent = 'Adicionar ao histórico';
+        }
+      } },
+    ],
+  });
+}
+
+// ── orçamentos por categoria (botão "◎ Orçamentos" e "Editar" no painel dos orçamentos) ──
+// Uma linha por categoria de saídas (sem investimentos nem amortizações), com o que se gastou em média nos
+// 12 meses anteriores para ajudar a escolher. Vazio = sem orçamento (apaga o que houver).
+function budgetsModal() {
+  const latest = {}, dupes = [];
+  for (const b of [...D.budgets].sort((a, b2) => (a.updated_at || '').localeCompare(b2.updated_at || ''))) {
+    if (latest[b.category]) dupes.push(latest[b.category].id);   // orçamentos repetidos da mesma categoria: fica o mais recente
+    latest[b.category] = b;
+  }
+  // média por mês dos 12 meses anteriores (só desde o primeiro movimento)
+  const first = firstTxMonth(), to = addMonths(thisMonth(), -1);
+  const from = first ? [addMonths(thisMonth(), -12), first].sort().pop() : to;
+  const nMonths = first ? monthRange(from, to).length : 0;
+  const spent = {};
+  if (nMonths) for (const t of filterTx({ from, to })) if (t.direction === 'out') spent[t.category] = (spent[t.category] || 0) + t.amount;
+  // primeiro as categorias com orçamento ou com gastos (das mais gastas para as menos), depois as outras por ordem alfabética
+  const cats = [...new Set([...knownCategories('out').filter(c => !isSavingOut({ direction: 'out', category: c })), ...Object.keys(latest)])]
+    .sort((a, b) => (latest[b] || spent[b] ? 1 : 0) - (latest[a] || spent[a] ? 1 : 0) || (spent[b] || 0) - (spent[a] || 0) || a.localeCompare(b, 'pt'));
+  const body = document.createElement('div');
+  body.style.cssText = 'display:flex;flex-direction:column;gap:14px';
+  body.innerHTML = `
+    <div class="modal-hint">Quanto queres gastar por mês, no máximo, em cada categoria. Deixa vazio para não ter orçamento.
+      Nos Movimentos, cada orçamento tem uma barra que fica laranja a partir de 80% e vermelha quando passa do limite.
+      ${nMonths ? `Ao lado, quanto gastaste em média por mês nos últimos ${nMonths} ${nMonths === 1 ? 'mês' : 'meses'}.` : ''}</div>
+    <div class="grid-scroll"><table class="grid-edit"><thead><tr><th>Categoria</th><th class="num">Média/mês</th><th class="num">Limite por mês (€)</th></tr></thead>
+      <tbody>${cats.map(c => `<tr><td>${esc(c)}</td>
+        <td class="num">${spent[c] ? eurShort(spent[c] / nMonths) : '—'}</td>
+        <td style="width:150px"><input data-cat="${esc(c)}" inputmode="decimal" placeholder="—" value="${latest[c] ? numInput(latest[c].amount) : ''}"
+          aria-label="Limite por mês para ${esc(c)}"></td></tr>`).join('')}</tbody></table></div>
+    <div class="form-error" id="bud-err"></div>`;
+  modal.open({
+    title: 'Orçamentos por categoria', body, wide: true,
+    footer: [
+      { label: 'Cancelar', onClick: () => modal.close() },
+      { label: 'Guardar', cls: 'primary', onClick: async e => {
+        const items = [], deletes = [...dupes], bad = [];
+        for (const input of $$('input[data-cat]', body)) {
+          const cat = input.dataset.cat, cur = latest[cat], txt = input.value.trim(), n = parseNum(txt);
+          if (!txt) { if (cur) deletes.push(cur.id); continue; }
+          if (!(n > 0)) { bad.push(cat); continue; }
+          if (!cur || round2(n) !== cur.amount) items.push({ kind: 'budget', id: cur?.id, category: cat, amount: round2(n) });
+        }
+        if (bad.length) return ($('#bud-err', body).textContent = `Valor inválido em: ${bad.join(', ')}`);
+        if (!items.length && !deletes.length) return modal.close();
+        e.target.disabled = true;
+        try {
+          await saveItems(items, deletes);
+          modal.close();
+          toast('Orçamentos guardados');
+        } catch (err) {
+          $('#bud-err', body).textContent = err.message;
+          e.target.disabled = false;
         }
       } },
     ],
@@ -1165,7 +1254,6 @@ function earlyRepaymentModal(loan) {
   }
   const term = n => `${Math.floor(n / 12)}a ${n % 12}m`;
   const end = n => monthShort(addMonths(thisMonth(), n));
-  const signedShort = n => (n > 0 ? '+' : n < 0 ? '−' : '') + eurShort(Math.abs(n));   // valores grandes sem cêntimos
   const body = document.createElement('div');
   body.style.cssText = 'display:flex;flex-direction:column;gap:14px';
   body.innerHTML = `
@@ -1194,7 +1282,7 @@ function earlyRepaymentModal(loan) {
         ${row('Juros até ao fim', eurShort(base.now.interest), c => eurShort(c.interest))}
         ${row('Poupança em juros', '—', c => eurShort(c.saved), () => 'pos')}
         ${row('Comissão', '—', () => eurShort(s.fee))}
-        ${row('<b>Poupança líquida</b>', '—', c => `<b>${signedShort(c.net)}</b>`, c => signClass(c.net))}
+        ${row('<b>Poupança líquida</b>', '—', c => `<b>${eurSignedShort(c.net)}</b>`, c => signClass(c.net))}
       </tbody></table></div>
       <div class="chart-note">Prestação = capital + juros. Reduzir o prazo poupa mais juros; reduzir a prestação deixa mais dinheiro
         livre todos os meses.</div>`;
@@ -1424,6 +1512,7 @@ document.addEventListener('click', e => {
     case 'tx-new': return txForm();
     case 'mov-history': return historyGrid();
     case 'mov-recurring': return recurringModal();
+    case 'budgets': return budgetsModal();
     case 'inv-new': return investmentForm();
     case 'imv-new': return invMoveForm();
     case 'inv-month': return investmentMonthGrid();

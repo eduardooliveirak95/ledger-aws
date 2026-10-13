@@ -172,6 +172,7 @@
         <input type="search" class="inline search" id="mov-search" placeholder="Pesquisar…" aria-label="Pesquisar nos movimentos" autocomplete="off">
       </div>
       <div class="toolbar-right">
+        <button class="btn" data-action="budgets">◎ Orçamentos</button>
         <button class="btn" data-action="mov-recurring">↻ Despesas fixas</button>
         <button class="btn" data-action="mov-history">Histórico por mês</button>
         <button class="btn" data-action="import" data-format="mov">⬆ Importar</button>
@@ -181,10 +182,20 @@
     </div>
 
     <div class="stats" style="margin-top:16px">
-      <div class="stat"><div class="stat-label">Entradas</div><div class="stat-value pos" id="mov-in">—</div><div class="stat-sub" id="mov-in-sub"></div></div>
-      <div class="stat"><div class="stat-label">Gastos</div><div class="stat-value neg" id="mov-out">—</div><div class="stat-sub" id="mov-out-sub"></div></div>
-      <div class="stat"><div class="stat-label">Saldo do período</div><div class="stat-value" id="mov-net">—</div><div class="stat-sub" id="mov-net-sub"></div></div>
-      <div class="stat"><div class="stat-label">Taxa de poupança</div><div class="stat-value" id="mov-rate">—</div><div class="stat-sub" id="mov-rate-sub">do que entrou, quanto não foi gasto</div></div>
+      <!-- .stat-cmp: comparação com a média dos meses anteriores e com o ano passado (movComparison no calc.js) -->
+      <div class="stat"><div class="stat-label">Entradas</div><div class="stat-value pos" id="mov-in">—</div><div class="stat-sub" id="mov-in-sub"></div><div class="stat-cmp" id="mov-in-cmp"></div></div>
+      <div class="stat"><div class="stat-label">Gastos</div><div class="stat-value neg" id="mov-out">—</div><div class="stat-sub" id="mov-out-sub"></div><div class="stat-cmp" id="mov-out-cmp"></div></div>
+      <div class="stat"><div class="stat-label">Saldo do período</div><div class="stat-value" id="mov-net">—</div><div class="stat-sub" id="mov-net-sub"></div><div class="stat-cmp" id="mov-net-cmp"></div></div>
+      <div class="stat"><div class="stat-label">Taxa de poupança</div><div class="stat-value" id="mov-rate">—</div><div class="stat-sub" id="mov-rate-sub">do que entrou, quanto não foi gasto</div><div class="stat-cmp" id="mov-rate-cmp"></div></div>
+    </div>
+
+    <!-- Orçamentos por categoria no período escolhido (budgetStatus no calc.js); só aparece se houver orçamentos -->
+    <div class="panel hidden" id="budget-panel" style="margin-top:16px">
+      <div class="panel-header">
+        <div><div class="panel-title">Orçamentos</div><div class="li-sub" id="budget-sub"></div></div>
+        <button class="btn" data-action="budgets">Editar</button>
+      </div>
+      <div class="budget-list" id="budget-list"></div>
     </div>
 
     <div class="grid-3-1" style="margin-top:16px">

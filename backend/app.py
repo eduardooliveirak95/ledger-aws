@@ -97,6 +97,7 @@ KIND_PREFIX = {
     "loan_balance": "LBAL",
     "property": "PROP",
     "bank_format": "BFMT",
+    "budget": "BUD",
 }
 # O mesmo mapa ao contrário: prefixo -> tipo (para descobrir o tipo a partir da sk)
 PREFIX_KIND = {v: k for k, v in KIND_PREFIX.items()}
@@ -111,6 +112,7 @@ COLLECTION = {
     "loan_balance": "loan_balances",
     "property": "properties",
     "bank_format": "bank_formats",
+    "budget": "budgets",
 }
 
 # Expressões regulares que validam o formato de cada id (= sort key).
@@ -126,6 +128,7 @@ ID_RE = {
     "loan_balance": re.compile(rf"^LBAL_({HEX})_\d{{4}}-\d{{2}}$"),
     "property": re.compile(rf"^PROP_({HEX})$"),
     "bank_format": re.compile(rf"^BFMT_({HEX})$"),
+    "budget": re.compile(rf"^BUD_({HEX})$"),
 }
 # Formato das chaves da primeira versão da app ("AAAA-MM-DD_<16 hex>"), para as migrar
 LEGACY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_[0-9a-f]{16}$")
@@ -350,7 +353,7 @@ def build(user, raw):
         raise ValueError("id inválido")
     # Ao editar, reaproveita o hex do id existente; ao criar, gera um novo.
     # (valuation e loan_balance não têm hex próprio: a chave é o investimento/crédito + o mês)
-    h = hex_of(old_id, kind) if old_id and kind in ("account", "transaction", "investment", "inv_move", "loan", "property", "bank_format") else None
+    h = hex_of(old_id, kind) if old_id and kind in ("account", "transaction", "investment", "inv_move", "loan", "property", "bank_format", "budget") else None
     h = h or new_hex()
 
     item = {"user_id": user, "updated_at": now_iso()}
@@ -502,6 +505,16 @@ def build(user, raw):
         # Conta da app onde estes extratos foram importados da última vez (para a escolher sozinha)
         if str(raw.get("account_id") or "").strip():
             item["account_id"] = v_ref(raw.get("account_id"), "account", "account_id")
+
+    elif kind == "budget":
+        # Orçamento de uma categoria de saídas: quanto se quer gastar por mês, no máximo.
+        # O browser compara-o com o que se gastou nessa categoria (um orçamento por categoria: o browser
+        # atualiza o que já existe em vez de criar outro).
+        item.update(
+            sk=f"BUD_{h}",
+            category=v_text(raw.get("category"), "category", MAX_NAME, required=True),
+            amount=v_num(raw.get("amount"), "amount", positive=True),
+        )
 
     # Se o id mudou (ex.: nova data), o antigo tem de ser apagado
     stale = old_id if old_id and old_id != item["sk"] else None
