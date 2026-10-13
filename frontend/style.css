@@ -283,6 +283,7 @@ table.data tr.selected td { background: color-mix(in srgb, var(--accent) 7%, tra
 .panel-body { padding: 16px 18px; }
 .chart-box { position: relative; height: 260px; }
 .chart-box.tall { height: 320px; }
+.chart-note { margin-top: 12px; font-size: 12px; color: var(--muted); line-height: 1.5; }
 .chart-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 13px; text-align: center; padding: 20px; }
 
 /* ── TABELAS ───────────────────────────────── */

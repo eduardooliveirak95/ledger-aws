@@ -34,6 +34,7 @@ function applyChartTheme() {
   Chart.defaults.plugins.tooltip.borderColor = cssVar('--border2');
   Chart.defaults.plugins.tooltip.titleColor = TEXT;
   Chart.defaults.plugins.tooltip.bodyColor = TEXT;
+  Chart.defaults.plugins.tooltip.footerColor = TEXT;   // sem isto ficava branco (invisível no tema claro)
 }
 applyChartTheme();
 

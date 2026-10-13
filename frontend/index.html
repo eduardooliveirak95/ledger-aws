@@ -139,6 +139,15 @@
         <span class="home-card-desc">Contas, convites e logins (só administradores)</span>
       </button>
     </div>
+    <!-- evolução do património líquido mês a mês (netWorthSeries no calc.js, renderNetWorthChart no app.js) -->
+    <div class="panel" style="margin-top:16px">
+      <div class="panel-header"><div class="panel-title">Evolução do património líquido</div></div>
+      <div class="panel-body">
+        <div class="chart-box tall"><canvas id="chart-nw"></canvas></div>
+        <div class="chart-note hidden" id="nw-chart-note">Imóveis: a app só guarda o valor atual, por isso os meses anteriores
+          são estimados (em linha reta desde o preço de compra, se o tiveres registado).</div>
+      </div>
+    </div>
   </section>
 
   <!-- ════════ SEPARADOR: MOVIMENTOS (preenchido por renderMovements no app.js) ════════ -->
