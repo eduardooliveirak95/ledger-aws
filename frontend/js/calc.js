@@ -382,3 +382,47 @@ function netWorth() {
   const debt = round2(D.loans.reduce((s, l) => s + loanCurrent(l), 0));
   return { accounts, investments, properties, debt, total: round2(accounts + investments + properties - debt) };
 }
+
+/**
+ * Património líquido no fim de cada mês, para o gráfico da página inicial (e as partes: contas, investimentos,
+ * imóveis e créditos). Começa no primeiro mês com movimentos ou investimentos (antes disso não se sabe quanto
+ * havia nas contas) e acaba no mês atual, que dá os mesmos números que netWorth().
+ */
+function netWorthSeries() {
+  const now = thisMonth();
+  const first = [firstTxMonth(), firstInvestmentMonth(investmentIds(''))].filter(Boolean).sort()[0];
+  if (!first || first > now) return { months: [], accounts: [], investments: [], properties: [], debt: [], total: [] };
+  const months = monthRange(first, now);
+
+  // contas: saldos iniciais + movimentos de cada mês (os de datas futuras ainda não contam, como em netWorth)
+  const today = todayISO(), perMonth = {};
+  for (const t of D.transactions) {
+    if (t.date <= today) perMonth[ymOf(t.date)] = (perMonth[ymOf(t.date)] || 0) + txEffect(t, '');
+  }
+  let b = D.accounts.reduce((s, a) => s + a.opening_balance, 0);
+  const accounts = months.map(m => (b += perMonth[m] || 0, round2(b)));
+
+  // investimentos: o valor estimado por investmentSeries (0 antes do primeiro aporte ou valor registado)
+  const inv = investmentSeries('');
+  const invAt = Object.fromEntries(inv.months.map((m, i) => [m, inv.value[i]]));
+  const investments = months.map(m => invAt[m] ?? 0);
+
+  const properties = months.map(m => round2(D.properties.reduce((s, p) => s + propertyValueAt(p, m, now), 0)));
+  // créditos: no mês atual, o saldo de loanCurrent (como em netWorth)
+  const debt = months.map(m => round2(D.loans.reduce((s, l) => s + (m === now ? loanCurrent(l) : loanBalanceAt(l, m)), 0)));
+  const total = months.map((_, i) => round2(accounts[i] + investments[i] + properties[i] - debt[i]));
+  return { months, accounts, investments, properties, debt, total };
+}
+
+/**
+ * Valor de um imóvel no fim de um mês (now = mês atual). A app só guarda o valor atual, por isso os meses
+ * anteriores são estimados: desde a compra, em linha reta do preço de compra até ao valor atual.
+ * Sem data de compra conta sempre com o valor atual; sem preço de compra, com o valor atual desde a compra.
+ */
+function propertyValueAt(p, ym, now) {
+  if (ym >= now || !p.purchase_date) return p.value;
+  const bought = ymOf(p.purchase_date);
+  if (ym < bought) return 0;
+  if (p.purchase_price === undefined || p.purchase_price === null) return p.value;
+  return round2(p.purchase_price + (p.value - p.purchase_price) * monthsDiff(bought, ym) / monthsDiff(bought, now));
+}

@@ -29,7 +29,7 @@ Se te esqueceres da password, o administrador repõe-na: dá-te uma password tem
 | **Créditos** | Quanto deves, quanto já pagaste e quanto foi juro | "Atualizar mês": saldo em dívida, prestação e amortização extra, se houver |
 | **Património** | Casa, terreno, garagem… e quanto valem | Atualizar o valor quando mudar (✎ no imóvel) |
 
-Depois do login entras na **página inicial**: o património líquido (contas + investimentos + imóveis − créditos) e um cartão por separador, com o número principal de cada um. Carrega num cartão para abrir o separador. Lá dentro, **← Início** volta à página inicial e o nome do separador, no topo, abre um menu para saltar para outro. O botão de voltar do browser ou do telemóvel também te leva à página inicial.
+Depois do login entras na **página inicial**: o património líquido (contas + investimentos + imóveis − créditos), um cartão por separador, com o número principal de cada um, e um gráfico com a evolução do património líquido mês a mês (passa o rato ou o dedo para ver de que é feito). Carrega num cartão para abrir o separador. Lá dentro, **← Início** volta à página inicial e o nome do separador, no topo, abre um menu para saltar para outro. O botão de voltar do browser ou do telemóvel também te leva à página inicial.
 
 Em **Movimentos**, a caixa **Pesquisar…** procura na descrição, na categoria e no valor (sem ligar a maiúsculas nem acentos: "agua" encontra "Água"); os totais e os gráficos passam a contar só os movimentos encontrados. Os filtros **Entradas** e **Saídas** deixam escolher várias categorias de cada vez. As transferências de e para outras pessoas ficam em **Transferências in** e **Transferências out**.
 

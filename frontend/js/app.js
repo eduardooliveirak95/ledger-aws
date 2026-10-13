@@ -282,7 +282,8 @@ function renderAll() {
   if (S.tab === 'admin') renderAdmin();
 }
 
-// Os 5 números da página inicial: contas, investimentos, imóveis, dívidas (nos cartões) e património líquido
+// Os 5 números da página inicial: contas, investimentos, imóveis, dívidas (nos cartões) e património líquido.
+// O gráfico da evolução só é desenhado com a página inicial à vista (como os gráficos dos separadores).
 function renderNetWorth() {
   const nw = netWorth();
   $('#nw-accounts').textContent = eur(nw.accounts);
@@ -290,6 +291,33 @@ function renderNetWorth() {
   $('#nw-properties').textContent = eur(nw.properties);
   $('#nw-debt').textContent = nw.debt ? '−' + eur(nw.debt) : eur(0);
   $('#nw-total').textContent = eur(nw.total);
+  if (S.tab === 'home') renderNetWorthChart();
+}
+
+// Gráfico da página inicial: o património líquido no fim de cada mês; a tooltip mostra de que é feito
+// (por baixo do total, com a letra normal)
+function renderNetWorthChart() {
+  const s = netWorthSeries();
+  const enough = s.months.length > 1;   // com um só mês ainda não há evolução para mostrar
+  drawChart('chart-nw', {
+    type: 'line',
+    data: { labels: s.months.map(monthShort), datasets: [lineDataset('Património líquido', enough ? s.total : [], SERIES[0])] },
+    options: {
+      interaction: INDEX_HOVER,
+      scales: { x: catAxis(), y: moneyAxis({ grid: { color: c => (c.tick.value === 0 ? ZERO_LINE : GRID), drawTicks: false } }) },
+      plugins: { legend: { display: false }, tooltip: { callbacks: {
+        title: i => monthLabel(s.months[i[0].dataIndex]),
+        label: c => ` Património líquido: ${eur(c.parsed.y)}`,
+        afterBody: i => {
+          const k = i[0].dataIndex;
+          return [`Contas: ${eur(s.accounts[k])}`, `Investimentos: ${eur(s.investments[k])}`, `Imóveis: ${eur(s.properties[k])}`,
+            `Créditos: ${s.debt[k] ? '−' + eur(s.debt[k]) : eur(0)}`];
+        },
+      } } },
+    },
+  }, 'O gráfico aparece quando tiveres movimentos ou investimentos em mais de um mês.');
+  // os valores antigos dos imóveis são estimados (ver propertyValueAt): diz-se por baixo do gráfico
+  $('#nw-chart-note').classList.toggle('hidden', !enough || !D.properties.length);
 }
 
 // ════════ MOVIMENTOS ════════
