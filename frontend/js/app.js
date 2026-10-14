@@ -434,7 +434,7 @@ function renderMovements() {
     const n = budgets[0].months;
     $('#budget-sub').textContent = `todas as contas${n > 1 ? ` · limite por mês × ${n} meses` : ''}`;
     $('#budget-list').innerHTML = budgets.map(b => `<div class="budget">
-      <div class="budget-top"><span class="li-name">${esc(b.category)}</span><span class="budget-nums">${eur(b.spent)} de ${eurShort(b.limit)}</span></div>
+      <div class="budget-top"><span class="li-name">${esc(b.category)}</span><span class="budget-nums">${eur(b.spent)} de ${eur(b.limit)}</span></div>
       <div class="progress budget-bar ${b.state}" role="progressbar" aria-label="${esc(b.category)}" aria-valuenow="${Math.round(b.ratio * 100)}"
         aria-valuemin="0" aria-valuemax="100"><div style="width:${Math.min(100, b.ratio * 100)}%"></div></div>
       <div class="progress-label"><span>${Math.round(b.ratio * 100)}%</span>
@@ -775,7 +775,7 @@ function historyGrid() {
 // Uma linha por categoria de saídas (sem investimentos nem amortizações), com o que se gastou em média nos
 // 12 meses anteriores para ajudar a escolher. Vazio = sem orçamento (apaga o que houver).
 function budgetsModal() {
-  const latest = {}, dupes = [];
+  const latest = Object.create(null), dupes = [];   // sem protótipo: categorias como "constructor" contam como as outras
   for (const b of [...D.budgets].sort((a, b2) => (a.updated_at || '').localeCompare(b2.updated_at || ''))) {
     if (latest[b.category]) dupes.push(latest[b.category].id);   // orçamentos repetidos da mesma categoria: fica o mais recente
     latest[b.category] = b;
@@ -784,7 +784,7 @@ function budgetsModal() {
   const first = firstTxMonth(), to = addMonths(thisMonth(), -1);
   const from = first ? [addMonths(thisMonth(), -12), first].sort().pop() : to;
   const nMonths = first ? monthRange(from, to).length : 0;
-  const spent = {};
+  const spent = Object.create(null);
   if (nMonths) for (const t of filterTx({ from, to })) if (t.direction === 'out') spent[t.category] = (spent[t.category] || 0) + t.amount;
   // primeiro as categorias com orçamento ou com gastos (das mais gastas para as menos), depois as outras por ordem alfabética
   const cats = [...new Set([...knownCategories('out').filter(c => !isSavingOut({ direction: 'out', category: c })), ...Object.keys(latest)])]
@@ -795,10 +795,10 @@ function budgetsModal() {
     <div class="modal-hint">Quanto queres gastar por mês, no máximo, em cada categoria. Deixa vazio para não ter orçamento.
       Nos Movimentos, cada orçamento tem uma barra que fica laranja a partir de 80% e vermelha quando passa do limite.
       ${nMonths ? `Ao lado, quanto gastaste em média por mês nos últimos ${nMonths} ${nMonths === 1 ? 'mês' : 'meses'}.` : ''}</div>
-    <div class="grid-scroll"><table class="grid-edit"><thead><tr><th>Categoria</th><th class="num">Média/mês</th><th class="num">Limite por mês (€)</th></tr></thead>
+    <div class="grid-scroll"><table class="grid-edit budget-edit"><thead><tr><th>Categoria</th><th class="num">Média/mês</th><th class="num">Limite por mês (€)</th></tr></thead>
       <tbody>${cats.map(c => `<tr><td>${esc(c)}</td>
         <td class="num">${spent[c] ? eurShort(spent[c] / nMonths) : '—'}</td>
-        <td style="width:150px"><input data-cat="${esc(c)}" inputmode="decimal" placeholder="—" value="${latest[c] ? numInput(latest[c].amount) : ''}"
+        <td class="budget-limit"><input data-cat="${esc(c)}" inputmode="decimal" placeholder="—" value="${latest[c] ? numInput(latest[c].amount) : ''}"
           aria-label="Limite por mês para ${esc(c)}"></td></tr>`).join('')}</tbody></table></div>
     <div class="form-error" id="bud-err"></div>`;
   modal.open({
@@ -839,7 +839,7 @@ function recurringModal() {
   body.style.cssText = 'display:flex;flex-direction:column;gap:14px';
   body.innerHTML = `
     <div class="modal-hint">Saídas que se repetem todos os meses (renda, luz, telemóvel, ginásio, subscrições…), encontradas nos
-      movimentos dos últimos 12 meses, em todas as contas. As que mudam de valor de mês para mês (ex.: luz) estão marcadas com
+      movimentos deste mês e dos 12 anteriores, em todas as contas. As que mudam de valor de mês para mês (ex.: luz) estão marcadas com
       <span class="badge approx" style="margin-left:0">≈</span> e contam pelo valor habitual. Carrega numa descrição para ver esses movimentos.</div>
     ${list.length ? `
       <div class="preview-box">Por mês: <b class="neg">${eur(perMonth)}</b> · por ano: <b class="neg">${eur(perMonth * 12)}</b>

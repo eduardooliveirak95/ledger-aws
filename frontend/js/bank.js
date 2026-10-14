@@ -1,14 +1,14 @@
 // ── bank.js: importação de extratos bancários em CSV (Caixadirecta e outros bancos) ──
 // Em «Consultar saldos e movimentos» (à ordem ou poupança), o ícone do Excel da versão web da
 // Caixadirecta descarrega um CSV com ";" (em windows-1252) que começa com umas linhas sobre a conta:
-//   Consultar saldos e movimentos à ordem - 04-10-2026
+//   Consultar saldos e movimentos à ordem - <dd-mm-aaaa>
 //   Conta ;<número> - EUR - Conta à ordem
-//   Data de início ;27-09-2026
-//   Data de fim ;04-10-2026
+//   Data de início ;<dd-mm-aaaa>
+//   Data de fim ;<dd-mm-aaaa>
 //   Data mov. ;Data valor ;Descrição ;Débito ;Crédito ;Saldo contabilístico ;Saldo disponível ;Categoria ;
-//   04-10-2026;04-10-2026;<descrição> ;19,48;;1.329,52;1.324,92;Diversos ;
+//   <data>;<data valor>;<descrição> ;<débito>;<crédito>;<saldo contabilístico>;<saldo disponível>;<categoria> ;
 //   ...
-//    ; ; ; ;Saldo contabilístico ;1.329,52 EUR ; ; ;
+//    ; ; ; ;Saldo contabilístico ;<saldo> EUR ; ; ;
 // Os movimentos vêm do mais recente para o mais antigo e cada valor é conferido com o saldo ao lado.
 // Cada movimento passa a um movimento da app: data do movimento, descrição, entrada (Crédito) ou
 // saída (Débito) e uma categoria adivinhada (ver categorize); a conta escolhe-se na pré-visualização.
@@ -517,9 +517,9 @@ function bankPreviewHTML(plan) {
 
   const tx = plan.items;
   const transfers = tx.filter(t => t.direction === 'transfer').length + plan.updates.filter(u => u.kind === 'transaction').length;
-  const cats = {};
+  const cats = Object.create(null);   // sem protótipo: categorias e descrições como "constructor" contam como as outras
   for (const t of tx.filter(t => t.direction === 'out')) (cats[t.category] = cats[t.category] || { n: 0, v: 0 }, cats[t.category].n++, cats[t.category].v += t.amount);
-  const other = {};
+  const other = Object.create(null);
   for (const t of tx.filter(t => t.category === 'Outros')) other[t.description] = (other[t.description] || 0) + 1;
   const top = Object.entries(other).sort((a, b) => b[1] - a[1]).slice(0, 6);
   return `${accounts}
