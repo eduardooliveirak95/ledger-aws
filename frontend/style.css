@@ -338,8 +338,8 @@ a.li-name:hover { color: var(--accent); }
 .loan-meta .k { font-size: var(--label-size); letter-spacing: var(--caps-spacing); text-transform: var(--caps); color: var(--muted); }
 .loan-meta .v { font-family: var(--font-num); font-size: 13px; margin-top: 3px; }
 .loan-actions { display: flex; justify-content: flex-end; }
-table.sim-table th.num { white-space: normal; }
-table.budget-edit td.budget-limit { width: 140px; }   /* "Reduzir a prestação" pode partir em duas linhas */
+table.sim-table th.num { white-space: normal; }   /* "Reduzir a prestação" pode partir em duas linhas */
+table.budget-edit td.budget-limit { width: 140px; }   /* campo do limite na janela dos orçamentos (mais estreito no telemóvel) */
 .progress { height: 8px; background: var(--field); border-radius: 4px; overflow: hidden; }
 .progress > div { height: 100%; background: var(--series-1); border-radius: 4px; }
 .progress-label { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); font-family: var(--font-num); }
