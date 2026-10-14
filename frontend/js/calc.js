@@ -149,7 +149,7 @@ function monthlyFlows(months, filters) {
 
 /** Totais por categoria, do maior para o menor. As categorias de poupança ficam de fora das despesas. */
 function categoryTotals(txs, direction = 'out') {
-  const map = {};
+  const map = Object.create(null);   // sem protótipo: uma categoria chamada "constructor" ou "toString" conta como as outras
   for (const t of txs) if (t.direction === direction && !isSavingOut(t)) map[t.category] = (map[t.category] || 0) + t.amount;
   return Object.entries(map).map(([k, v]) => [k, round2(v)]).sort((a, b) => b[1] - a[1]);
 }
@@ -224,17 +224,16 @@ function movComparison(mode, anchor, filters) {
 
 /**
  * Como estão os orçamentos num período (meses from a to): para cada categoria com orçamento, quanto se gastou
- * nesse período (saídas dessa categoria, em todas as contas) e o limite = orçamento por mês × número de meses
- * (no ano atual ou em "Sempre", só até ao mês atual). state: 'ok', 'near' (80% ou mais) ou 'over' (passou).
+ * nesse período (saídas dessa categoria, em todas as contas) e o limite = orçamento por mês × número de meses do
+ * período (num ano, sempre × 12, mesmo no ano atual). state: 'ok', 'near' (80% ou mais) ou 'over' (passou).
  * Se houver dois orçamentos da mesma categoria, conta o mais recente. Ordem: os mais gastos (em %) primeiro.
  */
 function budgetStatus(from, to) {
-  const now = thisMonth();
-  const end = to <= now || from > now ? to : now;
-  const months = Math.max(1, monthRange(from, end).length);
-  const latest = {};
+  const months = Math.max(1, monthRange(from, to).length);
+  // dicionários sem protótipo: uma categoria chamada "constructor" ou "toString" conta como as outras
+  const latest = Object.create(null);
   for (const b of D.budgets) if (!latest[b.category] || (b.updated_at || '') > (latest[b.category].updated_at || '')) latest[b.category] = b;
-  const spentBy = {};
+  const spentBy = Object.create(null);
   for (const t of filterTx({ from, to })) if (t.direction === 'out') spentBy[t.category] = (spentBy[t.category] || 0) + t.amount;
   return Object.values(latest).map(b => {
     const limit = round2(b.amount * months), spent = round2(spentBy[b.category] || 0);
@@ -266,7 +265,7 @@ function recurringKey(description) {
  */
 function recurringExpenses() {
   const now = thisMonth(), from = addMonths(now, -12), recent = addMonths(now, -1);
-  const groups = {};
+  const groups = Object.create(null);   // sem protótipo: uma descrição como "constructor" é uma chave como as outras
   for (const t of D.transactions) {
     const ym = ymOf(t.date);
     if (t.direction !== 'out' || isSavingOut(t) || ym < from || ym > now) continue;

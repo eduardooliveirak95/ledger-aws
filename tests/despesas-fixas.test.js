@@ -91,6 +91,11 @@ test('não contam os investimentos, as amortizações, as transferências, as en
   assert.deepEqual(keys(), []);
 });
 
+test('descrições com nomes especiais do JavaScript ("constructor") não estragam a lista', () => {
+  load(monthly('2026-07', '2026-10', '04', 9.99, 'Constructor', 'Subscrições'));
+  assert.deepEqual(run('recurringExpenses().map(x => [x.key, x.amount])'), [['constructor', 9.99]]);
+});
+
 test('um mês sem a despesa não a tira da lista (60% dos meses chega)', () => {
   load(monthly('2026-04', '2026-10', '07', 25, 'Telemóvel', 'Telecomunicações').filter(t => !t.date.startsWith('2026-06')));
   assert.deepEqual(run('recurringExpenses().map(x => [x.key, x.months])'), [['telemovel', 6]]);

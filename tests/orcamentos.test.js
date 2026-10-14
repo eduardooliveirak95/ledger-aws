@@ -57,13 +57,21 @@ test('80% já é "perto"; exatamente o limite ainda não passou', () => {
   assert.deepEqual(status('2026-09', '2026-09').map(b => [b.category, b.state]), [['Supermercado', 'near'], ['Restauração', 'near']]);
 });
 
-test('vários meses: o limite multiplica pelos meses (no ano atual, só até ao mês atual)', () => {
+test('vários meses: o limite multiplica pelos meses do período (num ano, sempre × 12)', () => {
   load(TXS, BUDGETS);
   const year = status('2026-01', '2026-12');
-  assert.equal(year[0].months, 10);
-  assert.deepEqual(year.map(b => [b.category, b.spent, b.limit]), [['Lazer', 130, 500], ['Restauração', 130, 1500], ['Supermercado', 100, 3000]]);
+  assert.equal(year[0].months, 12);
+  assert.deepEqual(year.map(b => [b.category, b.spent, b.limit]), [['Lazer', 130, 600], ['Restauração', 130, 1800], ['Supermercado', 100, 3600]]);
   assert.equal(status('2025-01', '2025-12')[0].months, 12);
+  assert.equal(status('2026-08', '2026-10')[0].months, 3);
   assert.equal(status('2026-12', '2026-12')[0].months, 1);   // um mês futuro conta como um mês
+});
+
+test('categorias com nomes especiais do JavaScript ("constructor", "toString") contam como as outras', () => {
+  load([tx('2026-09-02', 'out', 30, 'constructor'), tx('2026-09-03', 'out', 10, 'toString')],
+    [budget(1, 'constructor', 100), budget(2, 'toString', 5)]);
+  assert.deepEqual(status('2026-09', '2026-09').map(b => [b.category, b.spent, b.state]), [['toString', 10, 'over'], ['constructor', 30, 'ok']]);
+  assert.deepEqual(run('categoryTotals(D.transactions)'), [['constructor', 30], ['toString', 10]]);
 });
 
 test('sem orçamentos, a lista fica vazia', () => {

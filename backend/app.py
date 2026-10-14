@@ -23,6 +23,7 @@ Todos os dados vivem numa ÚNICA tabela DynamoDB ("single-table design"):
                                  com a prestação paga e a amortização extraordinária desse mês
     PROP_<hex>                   imóvel (casa, terreno...) com o valor atual
     BFMT_<hex>                   colunas escolhidas para os CSV de um banco (importar extratos)
+    BUD_<hex>                    orçamento de uma categoria de saídas (limite por mês)
 
 Além das partições dos utilizadores há partições do sistema:
     user_id = "DAILY_BACKUP", sk = <sub>               um item por utilizador que ativou o backup diário por email
