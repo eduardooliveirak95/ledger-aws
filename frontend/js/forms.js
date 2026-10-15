@@ -162,7 +162,9 @@ function formModal({ title, fields, values = {}, submitLabel = 'Guardar', onSubm
         input.type = { money: 'text', number: 'text', date: 'date', month: 'month', password: 'password' }[f.type] || 'text';
         if (f.autocomplete) input.autocomplete = f.autocomplete;   // ex.: 'new-password' (o browser sugere uma password forte)
         if (f.type === 'money' || f.type === 'number') { input.inputMode = 'decimal'; input.style.fontFamily = 'var(--font-num)'; }
-        input.value = val === null || val === undefined ? '' : (f.type === 'money' || f.type === 'number') && val !== '' ? String(val).replace('.', ',') : val;
+        // Dinheiro com vírgula e, com cêntimos, sempre 2 casas (12.5 -> "12,50"; numInput, no util.js); a taxa só com vírgula
+        input.value = val === null || val === undefined ? '' : f.type === 'money' ? numInput(val)
+          : f.type === 'number' && val !== '' ? String(val).replace('.', ',') : val;
         // "suggest": campo de texto com sugestões (datalist), ex.: categorias já usadas
         if (f.type === 'suggest') {
           const dl = document.createElement('datalist');
