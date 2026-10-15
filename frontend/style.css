@@ -348,6 +348,8 @@ table.budget-edit td.budget-limit { width: 140px; }   /* campo do limite na jane
 .budget { display: flex; flex-direction: column; gap: 6px; }
 .budget-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
 .budget-nums { font-family: var(--font-num); font-size: 12px; white-space: nowrap; }
+/* Um nome comprido parte em várias linhas: a barra desce para o fundo, para ficar à altura das dos vizinhos na grelha */
+.budget-bar { margin-top: auto; }
 .budget-bar.ok > div { background: var(--pos); }
 .budget-bar.near > div { background: var(--warn); }
 .budget-bar.over > div { background: var(--neg); }
@@ -458,8 +460,15 @@ table.grid-edit .num { font-family: var(--font-num); text-align: right; color: v
   .stat-value { font-size: 18px; }
   .field-row, .map-grid { grid-template-columns: 1fr; }
   .user-box { gap: 6px; }
-  .user-box .btn { padding-left: 10px; padding-right: 10px; }
+  .user-box .btn { padding-left: 8px; padding-right: 8px; }   /* os botões de baixo cabem em 2 linhas a partir de 360 px */
   .theme-label { display: none; }   /* botão do tema só com o ícone, para a barra do topo caber em duas linhas */
+  /* Só "Ledger" no topo: o "← Início" e o menu cabem ao lado em todos os separadores (o topo fica sempre com a mesma
+     altura); num ecrã ainda mais estreito, o nome do separador encolhe com "…" em vez de passar para a linha de baixo */
+  .logo-btn span { display: none; }
+  .tab-nav { flex: 1 1 0; min-width: 0; }
+  .tab-menu { min-width: 0; }
+  .tab-menu-btn { max-width: 100%; }
+  #tab-menu-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   table.sim-table th, table.sim-table td { padding: 8px 6px; font-size: 12px; }   /* simulador: as 4 colunas cabem no ecrã */
   /* orçamentos: os títulos das colunas partem em duas linhas e o campo encolhe, para a tabela caber no ecrã */
   table.budget-edit th.num { white-space: normal; }

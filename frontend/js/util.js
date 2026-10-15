@@ -55,8 +55,12 @@ function pct(n, digits = 1) {
 }
 // Classe CSS para pintar valores: 'pos' (verde), 'neg' (vermelho) ou '' (praticamente zero)
 function signClass(n) { return n > 0.004 ? 'pos' : n < -0.004 ? 'neg' : ''; }
-// Número -> texto para meter num campo de formulário, com vírgula decimal (12.5 -> "12,5")
-function numInput(v) { return v === null || v === undefined || v === '' ? '' : String(v).replace('.', ','); }
+// Número -> texto para meter num campo de formulário, com vírgula decimal e, com cêntimos, sempre 2 casas (12.5 -> "12,50")
+function numInput(v) {
+  if (v === null || v === undefined || v === '') return '';
+  const s = String(v);
+  return (/\.\d$/.test(s) ? s + '0' : s).replace('.', ',');
+}
 // Arredonda a 2 casas decimais (EPSILON corrige casos como 1.005 que em binário é 1.00499...)
 function round2(n) { return Math.round((n + Number.EPSILON) * 100) / 100; }
 

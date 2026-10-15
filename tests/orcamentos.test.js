@@ -78,3 +78,15 @@ test('sem orçamentos, a lista fica vazia', () => {
   load(TXS, []);
   assert.deepEqual(status('2026-09', '2026-09'), []);
 });
+
+test('o limite aparece no campo da janela com vírgula e, com cêntimos, sempre com 2 casas (numInput)', () => {
+  assert.equal(run('numInput(80.1)'), '80,10');
+  assert.equal(run('numInput(300.55)'), '300,55');
+  assert.equal(run('numInput(100)'), '100');
+  assert.equal(run('numInput(0.5)'), '0,50');
+  assert.equal(run('numInput(1234.5)'), '1234,50');
+  assert.equal(run('numInput(12.345)'), '12,345');   // mais casas ficam como estão (não arredonda)
+  assert.equal(run('numInput(null)'), '');
+  assert.equal(run('numInput(undefined)'), '');
+  assert.equal(run('numInput("")'), '');
+});
