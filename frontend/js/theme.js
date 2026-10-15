@@ -7,8 +7,9 @@
 
 const THEME_KEY = 'ledger.theme';
 const THEME_CHOICES = ['auto', 'light', 'dark'];
-// Ícone, texto e explicação do botão do topo para cada escolha (no telemóvel só aparece o ícone)
-const THEME_LABELS = { auto: ['◐', 'Auto'], light: ['☀', 'Claro'], dark: ['🌙', 'Escuro'] };
+// Ícone, texto e explicação do botão do topo para cada escolha (no telemóvel só aparece o ícone). Em emoji, como os
+// outros botões do topo: o tipo de letra da app não tem símbolos como ◐ ou ☀ e o browser mostrava-os minúsculos
+const THEME_LABELS = { auto: ['🌓', 'Auto'], light: ['☀️', 'Claro'], dark: ['🌙', 'Escuro'] };
 const THEME_TITLES = {
   auto: 'Tema automático: segue o modo do telemóvel ou do PC. Carrega para mudar',
   light: 'Tema sempre claro. Carrega para mudar',
