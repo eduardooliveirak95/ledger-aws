@@ -1,82 +1,76 @@
 # Ledger
 
-App de finanças pessoais: contas, investimentos, créditos e imóveis num só sítio, com o património líquido logo na página inicial.
+App de finanças pessoais para ter num só sítio as contas, os investimentos, os créditos e os imóveis, com o património líquido logo na página inicial.
 
-Corre na AWS (site estático, login com Cognito, API em Lambda, dados em DynamoDB e backup diário por email com o SES). Cada utilizador só vê os seus próprios dados. O Cognito avisa uma Lambda a cada login, e o login fica registado para o administrador.
+Corre na AWS: o site é estático, o login é feito com o Cognito, a API corre em Lambda, os dados ficam no DynamoDB e o backup diário vai por email com o SES. Cada utilizador só vê os seus dados.
 
 ## Entrar
 
-O acesso é feito por convite: não há registo público. Recebes um email de convite com o endereço da app e uma password temporária, válida 7 dias (vê também no spam). Se expirar, pede ao administrador para reenviar o convite.
+Não há registo público, só convites. O convite chega por email com o endereço da app e uma password temporária que dura 7 dias (se não aparecer, vê no spam). Se expirar, pede ao administrador para o reenviar.
 
-No primeiro login a app pede-te para escolheres uma password tua (mínimo 10 caracteres, com maiúsculas, minúsculas e um número). Para a mudares mais tarde, usa o botão **🔑 Password** no topo.
+No primeiro login escolhes a tua password, com pelo menos 10 caracteres, maiúsculas, minúsculas e um número. Mais tarde podes mudá-la no botão Password, no topo.
 
-Por segurança, a sessão só dura enquanto o separador estiver aberto: num separador novo ou ao reabrir o browser (mesmo com os separadores restaurados) tens de entrar outra vez. Recarregar a página não te tira da conta.
+A sessão só dura enquanto o separador estiver aberto. Num separador novo, ou depois de fechares o browser, tens de entrar outra vez. Recarregar a página não te tira da conta.
 
-Cada login fica registado (quem entrou e quando) durante 90 dias. Só o administrador vê esse registo.
+Os logins (quem entrou e quando) ficam guardados 90 dias e só o administrador os vê.
 
-**No telemóvel**, podes pôr o Ledger no ecrã principal, com ícone próprio e a abrir sem a barra do browser: no Android (Chrome), menu **⋮ → Adicionar ao ecrã principal** (ou **Instalar app**); no iPhone (Safari), **Partilhar → Adicionar ao ecrã principal**. A sessão segue as mesmas regras: ao reabrir a app depois de a fechares, pede outra vez a password.
+No telemóvel dá para pôr o Ledger no ecrã principal, com ícone próprio e sem a barra do browser. No Android, no Chrome, é no menu ⋮ e "Adicionar ao ecrã principal" (ou "Instalar app"). No iPhone, no Safari, é em Partilhar e "Adicionar ao ecrã principal". Continua a pedir a password sempre que a voltas a abrir.
 
-O botão do tema, no topo, escolhe o aspeto: **🌓 Auto** (segue o modo do telemóvel ou do computador), **☀️ Claro** ou **🌙 Escuro**. A escolha fica guardada nesse aparelho.
+O botão do tema, no topo, passa de automático (segue o telemóvel ou o computador) a claro e a escuro. A escolha fica guardada só nesse aparelho.
 
-Se te esqueceres da password, o administrador repõe-na: dá-te uma password temporária e no login seguinte escolhes uma nova. O administrador também pode desativar uma conta (deixa de conseguir entrar, mas os dados ficam guardados) e voltar a ativá-la, ou, depois de a desativar, apagá-la de vez com todos os dados.
+Se te esqueceres da password, fala com o administrador, que te dá uma temporária. No login seguinte escolhes uma nova.
 
 ## Separadores
 
-| Separador | Para quê | O que fazer todos os meses |
-|---|---|---|
-| **Movimentos** | Entradas, saídas e transferências entre contas | Registar os movimentos (ou um total aproximado por categoria em "Histórico por mês") |
-| **Investimentos** | Quanto investiste, quanto vale e o ganho ou perda | "Atualizar mês": aporte do mês e valor de cada investimento |
-| **Créditos** | Quanto deves, quanto já pagaste e quanto foi juro | "Atualizar mês": saldo em dívida, prestação e amortização extra, se houver |
-| **Património** | Casa, terreno, garagem… e quanto valem | Atualizar o valor quando mudar (✎ no imóvel) |
+Depois de entrar aparece a página inicial com o património líquido (contas + investimentos + imóveis − créditos), um cartão por separador e um gráfico com a evolução mês a mês. Carrega num cartão para abrir o separador. Lá dentro, "← Início" volta à página inicial e o nome do separador, no topo, abre um menu para saltar para outro. O botão de voltar do browser ou do telemóvel também leva à página inicial.
 
-Depois do login entras na **página inicial**: o património líquido (contas + investimentos + imóveis − créditos), um cartão por separador, com o número principal de cada um, e um gráfico com a evolução do património líquido mês a mês (passa o rato ou o dedo para ver de que é feito). Carrega num cartão para abrir o separador. Lá dentro, **← Início** volta à página inicial e o nome do separador, no topo, abre um menu para saltar para outro. O botão de voltar do browser ou do telemóvel também te leva à página inicial.
+O que vai em cada um e o que fazer todos os meses:
 
-Em **Movimentos**, a caixa **Pesquisar…** procura na descrição, na categoria e no valor (sem ligar a maiúsculas nem acentos: "agua" encontra "Água"); os totais e os gráficos passam a contar só os movimentos encontrados. Os filtros **Entradas** e **Saídas** deixam escolher várias categorias de cada vez. As transferências de e para outras pessoas ficam em **Transferências in** e **Transferências out**.
+- Movimentos: entradas, saídas e transferências entre contas. Registas os movimentos, ou só um total aproximado por categoria em "Histórico por mês".
+- Investimentos: quanto investiste, quanto vale e quanto ganhaste ou perdeste. Em "Atualizar mês" pões o aporte e o valor de cada investimento.
+- Créditos: quanto deves, quanto já pagaste e quanto foi juro. Em "Atualizar mês" pões o saldo em dívida, a prestação e a amortização extra, se houver.
+- Património: casa, terreno, garagem e quanto valem. Atualizas o valor quando mudar, no ✎ do imóvel.
 
-Para mudar a categoria de vários movimentos de uma vez, marca-os na tabela (ou todos, no cabeçalho), escolhe a categoria na barra que aparece e carrega em **Mudar categoria**. Só dá para mudar entradas ou saídas de cada vez, porque têm categorias diferentes.
+### Movimentos
 
-As saídas nas categorias **Investimentos** e **Amortizações** (ou outra começada por "Amortiza", como "Amortização casa") não contam como gasto: entram na taxa de poupança e aparecem à parte no gráfico.
+A pesquisa procura na descrição, na categoria e no valor, sem ligar a maiúsculas nem acentos ("agua" encontra "Água"). Os totais e os gráficos passam a contar só o que foi encontrado. Nos filtros de entradas e de saídas podes escolher várias categorias. As transferências de e para outras pessoas vão para "Transferências in" e "Transferências out".
 
-Por baixo dos cartões de **Entradas**, **Gastos**, **Saldo** e **Taxa de poupança** aparece a comparação com a média dos meses anteriores e com o mesmo mês do ano passado (num ano, com o mesmo período do ano anterior). No mês atual, os outros meses só contam até ao mesmo dia, para comparar o que é comparável. Passa o rato por cima para ver com que meses se compara.
+Para mudar a categoria de vários movimentos de uma vez, marca-os na tabela, escolhe a categoria na barra que aparece e carrega em "Mudar categoria". Só dá com entradas ou com saídas de cada vez, porque as categorias são diferentes.
 
-**◎ Orçamentos** deixa definir quanto queres gastar por mês, no máximo, em cada categoria (vês ao lado quanto gastaste em média). Os orçamentos aparecem por baixo dos cartões, para o período escolhido e em todas as contas, com uma barra que fica laranja a partir de 80% e vermelha quando passa do limite.
+As saídas em "Investimentos" e "Amortizações" (ou noutra categoria começada por "Amortiza") não contam como gasto. Entram na taxa de poupança e aparecem à parte no gráfico.
 
-**↻ Despesas fixas** mostra as saídas que se repetem todos os meses (renda, luz, telemóvel, ginásio, subscrições…), encontradas nos movimentos dos últimos 12 meses, com quanto somam por mês e por ano. As que mudam de valor (ex.: luz) aparecem com ≈ e contam pelo valor habitual. Carrega numa para ver esses movimentos na tabela.
+Por baixo dos cartões das entradas, dos gastos, do saldo e da taxa de poupança aparece a comparação com a média dos meses anteriores e com o mesmo mês do ano passado (num ano, com o mesmo período do ano anterior). No mês atual só se comparam os dias que já passaram. Passando o rato por cima vês com que meses está a comparar.
+
+Em "Orçamentos" defines quanto queres gastar no máximo por mês em cada categoria, com a média do que gastaste ao lado. Os orçamentos aparecem por baixo dos cartões, para o período escolhido e em todas as contas, com uma barra que fica laranja aos 80% e vermelha quando passa do limite.
+
+"Despesas fixas" mostra as saídas que se repetem todos os meses (renda, luz, ginásio, subscrições...) nos últimos 12 meses, com quanto somam por mês e por ano. As que mudam de valor, como a luz, aparecem com ≈. Carregando numa vês esses movimentos na tabela.
 
 ### Créditos
 
-- Os juros de cada mês são calculados a partir do saldo e da prestação que registas.
-- Para saber quando acabas de pagar, preenche o **Fim do contrato** na ficha do crédito (✎).
-- Para registar uma amortização antiga, abre "Atualizar mês", escolhe esse mês e preenche a **Amortização extra**.
-- **Simular amortização** (em cada crédito): escreve quanto queres amortizar (e a comissão, se houver) e vê quanto poupas em juros a reduzir a prestação ou a reduzir o prazo. Precisa da taxa e da prestação ou do fim do contrato. É só uma simulação: não grava nada.
+Os juros de cada mês saem do saldo e da prestação que registas. Para saber quando acabas de pagar, preenche o fim do contrato na ficha do crédito. Para registar uma amortização antiga, abre "Atualizar mês", escolhe esse mês e preenche a amortização extra.
+
+Em "Simular amortização" escreves quanto queres amortizar (e a comissão, se houver) e vês quanto poupas em juros a reduzir a prestação ou a reduzir o prazo. Precisa da taxa e da prestação ou do fim do contrato. É só uma simulação, não grava nada.
 
 ### Património
 
-Em **+ Imóvel** basta o nome e o valor atual. O preço de compra e o crédito associado são opcionais e servem para ver a valorização e a parte da casa que já é tua.
+Para juntar um imóvel basta o nome e o valor atual. O preço de compra e o crédito associado são opcionais e servem para ver a valorização e quanto da casa já é teu.
 
-### Utilizadores (só administradores)
+### Utilizadores (só para administradores)
 
-As contas de administrador têm o selo **Admin** ao lado do email e um separador a mais, **Utilizadores** (um cartão a mais na página inicial e no menu):
+As contas de administrador têm o selo Admin ao lado do email e um separador a mais, Utilizadores. Lá aparecem todas as contas, com o estado, a data de criação, o último login e o número de logins, e os últimos 200 logins de toda a gente (hora de Portugal), com um filtro por utilizador.
 
-- todas as contas, com o estado (ativa, com password temporária ou desativada), a data em que foram criadas, o último login e quantos logins fizeram;
-- os últimos 200 logins de todos, com a data e a hora de Portugal, e um filtro por utilizador;
-- **+ Nova conta**: cria uma conta de utilizador normal e a pessoa recebe o convite por email;
-- em cada conta, **Reenviar convite** (enquanto a pessoa não escolheu a password), **Desativar** / **Reativar** e **Repor password** (mostra uma password temporária, só dessa vez, para lhe dares);
-- nas contas desativadas, **Apagar**: apaga de vez a conta e todos os dados dela (não se pode desfazer).
+Também é aí que se criam contas novas (a pessoa recebe o convite por email), se reenvia o convite enquanto a pessoa ainda não escolheu a password, se desativa ou reativa uma conta e se repõe a password, que aparece só uma vez para a dares à pessoa. Uma conta desativada deixa de conseguir entrar, mas os dados ficam guardados. Depois de desativada pode ser apagada de vez, com todos os dados, e isso não se desfaz.
 
-As contas de administrador não têm estas ações, e ninguém passa a administrador (nem deixa de o ser) pela app. Pela app, o administrador não vê os dados financeiros de ninguém. Renovar a sessão sem pedir a password não conta como login, e os logins anteriores a esta funcionalidade não aparecem.
+Estas ações não existem para contas de administrador, e pela app ninguém passa a administrador nem deixa de o ser. O administrador também não vê os dados financeiros de ninguém. Renovar a sessão sem pôr a password não conta como login.
 
-## Importar e fazer backup
+## Backup e importar
 
-- **⬇ Backup** (no topo) descarrega todos os teus dados em CSV: contas (com o tipo e o saldo inicial), movimentos, investimentos, créditos e património.
-- **✉ Backup diário** (no topo; em ecrãs médios aparece como **✉ Diário**): marca a caixa para receberes no email da tua conta, todos os dias à meia-noite (hora de Portugal), os mesmos CSV ("BACKUP Ledger dia DD/MM/AAAA", com os dados até ao fim desse dia). Vem desligado; desmarca quando quiseres deixar de receber. Se ao ligar a app avisar que o email ainda não está confirmado, carrega no link do email que a Amazon Web Services te enviou quando a tua conta foi criada (vê também no spam); se não o encontrares, pede ao administrador para o enviar outra vez.
-- **⬆ Importar** (em cada separador) recupera um backup ou traz dados de outros sítios:
-  - modelos CSV (descarregam-se na própria janela);
-  - CSV do Excel;
-  - exportações do DEGIRO;
-  - movimentos da Caixadirecta em CSV: em "Consultar saldos e movimentos" (à ordem ou poupança), descarrega o ficheiro no ícone do Excel;
-  - movimentos de outros bancos em CSV: a app reconhece as colunas (data, descrição, valor ou débito/crédito, saldo) e mostra-tas para confirmares ou corrigires; da próxima vez lembra-se das colunas e da conta.
+O botão Backup, no topo, descarrega todos os teus dados em CSV: contas (com o tipo e o saldo inicial), movimentos, investimentos, créditos e património.
 
-  Nos extratos podes importar vários ficheiros de uma vez, escolhes a conta da app e a categoria de cada movimento é adivinhada pela descrição (se mudares uma, os próximos iguais seguem-na).
-- Para recuperar um backup, importa os ficheiros um a um (a ordem não importa: o das contas acerta o tipo e o saldo inicial das contas criadas pelos movimentos).
-- Importar o mesmo ficheiro duas vezes não duplica nada.
+Se marcares "Backup diário" (em ecrãs médios aparece só "Diário"), recebes os mesmos CSV no email da tua conta todos os dias à meia-noite, hora de Portugal, com o assunto "BACKUP Ledger dia DD/MM/AAAA". Vem desligado e podes desmarcar quando quiseres. Se ao ligar a app disser que o email ainda não está confirmado, carrega no link do email que a Amazon Web Services te mandou quando a conta foi criada (vê também no spam). Se não o encontrares, pede ao administrador para o enviar outra vez.
+
+O botão Importar, em cada separador, serve para recuperar um backup ou trazer dados de outro lado: os modelos CSV (descarregam-se na própria janela), CSV do Excel, exportações do DEGIRO e movimentos da Caixadirecta ou de outros bancos em CSV. Na Caixadirecta, o ficheiro descarrega-se no ícone do Excel em "Consultar saldos e movimentos" (à ordem ou poupança). Com os outros bancos, a app reconhece as colunas (data, descrição, valor ou débito/crédito, saldo) e mostra-tas para confirmares ou corrigires. Da próxima vez já se lembra das colunas e da conta.
+
+Nos extratos podes importar vários ficheiros de uma vez e escolher a conta da app. A categoria de cada movimento é adivinhada pela descrição, e se mudares uma, os próximos iguais passam a seguir essa.
+
+Para recuperar um backup, importa os ficheiros um a um, por qualquer ordem. Importar o mesmo ficheiro duas vezes não duplica nada.
