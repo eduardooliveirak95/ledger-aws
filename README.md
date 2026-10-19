@@ -39,7 +39,7 @@ Não precisas de uma conta só para cada meta. Em "+ Reservar / tirar" pões de 
 
 Em vez de reservas, uma meta pode acompanhar o património líquido todo, por exemplo para chegar aos 100 mil.
 
-Cada meta mostra quanto já tens, quanto falta e o ritmo, que é quanto reservaste (ou quanto o património subiu) por mês, em média, nos últimos 12 meses. O mês atual e o primeiro mês da meta não contam, para o que reservaste ao criá-la não parecer ritmo. Com esse ritmo diz quando lá chegas. Se tiver prazo, diz também quanto precisas de juntar por mês, e a barra fica verde se o ritmo chega, laranja se não chega e vermelha se o prazo já passou.
+Cada meta mostra quanto já tens, quanto falta e o ritmo, que é quanto reservaste (ou quanto o património subiu) por mês, em média, nos últimos 12 meses. O mês atual não conta e, nas metas com reservas, o primeiro mês com reservas também não, para o que reservaste ao criá-la não parecer ritmo. Com esse ritmo diz quando lá chegas. Se tiver prazo, diz também quanto precisas de juntar por mês, e a barra fica verde se o ritmo chega, laranja se não chega e vermelha se o prazo já passou.
 
 As metas e as reservas, tal como os orçamentos, não entram no backup.
 
