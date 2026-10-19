@@ -286,15 +286,17 @@ def test_backup_csv_content(table):
     s = save([{"kind": "account", "name": "Ordem", "opening_balance": 0, "opening_date": "2026-01-01"},
               {"kind": "account", "name": "Poupança", "opening_balance": 0, "opening_date": "2026-01-01"},
               {"kind": "investment", "name": "ETF", "inv_type": "ETF"},
+              {"kind": "investment", "name": "Com ISIN", "inv_type": "ETF", "notes": "ISIN: IE0000000001"},
               {"kind": "investment", "name": "Sem registos", "inv_type": "PPR", "notes": "nota"},
               {"kind": "loan", "name": "Casa", "loan_type": "Habitação", "principal": 1000, "start_date": "2026-01-01",
                "rate": "3.125", "payment": 50, "lender": "Banco"}])["saved"]
-    acc, sav, etf, loan = s[0]["id"], s[1]["id"], s[2]["id"], s[4]["id"]
+    acc, sav, etf, isin, loan = s[0]["id"], s[1]["id"], s[2]["id"], s[3]["id"], s[5]["id"]
     save([{"kind": "transaction", "date": "2026-09-02", "account_id": acc, "direction": "out", "category": "Casa",
            "description": 'Renda; "set"', "amount": 1234.5},
           {"kind": "transaction", "date": "2026-09-01", "account_id": acc, "direction": "transfer", "to_account_id": sav, "amount": 10},
           {"kind": "inv_move", "date": "2026-09-05", "investment_id": etf, "move": "contribution", "amount": 200},
           {"kind": "valuation", "investment_id": etf, "month": "2026-09", "value": 204.5},
+          {"kind": "valuation", "investment_id": isin, "month": "2026-09", "value": 10},
           {"kind": "loan_balance", "loan_id": loan, "month": "2026-09", "balance": 950, "extra": 20},
           {"kind": "property", "name": "Apartamento", "value": 100000, "loan_id": loan}])
     files = dict(app.backup_files("u1", "2026-10-04"))
@@ -307,9 +309,13 @@ def test_backup_csv_content(table):
         "2026-09-01;Ordem;Transferência;Transferência;;10,00;Poupança;não",
         '2026-09-02;Ordem;Saída;Casa;"Renda; ""set""";1234,50;;não']
     assert files["ledger-investimentos-2026-10-04.csv"].split("\r\n")[1:] == [
-        ";Sem registos;PPR;;;nota", "2026-09;ETF;ETF;Valor;204,50;", "2026-09-05;ETF;ETF;Aporte;200,00;"]
+        # uma linha sem operação para os investimentos sem registos e para os que têm notas (as notas vão na descrição)
+        ";Com ISIN;ETF;;;ISIN: IE0000000001", ";Sem registos;PPR;;;nota", "2026-09;Com ISIN;ETF;Valor;10,00;",
+        "2026-09;ETF;ETF;Valor;204,50;", "2026-09-05;ETF;ETF;Aporte;200,00;"]
+    # cada crédito começa por uma linha sem mês, com a prestação dele; nos meses, só a prestação registada nesse mês
     assert files["ledger-creditos-2026-10-04.csv"].split("\r\n")[1:] == [
-        "2026-09;Casa;Habitação;950,00;50,00;1000,00;2026-01-01;3,125;Banco;20,00;"]
+        ";Casa;Habitação;;50,00;1000,00;2026-01-01;3,125;Banco;;",
+        "2026-09;Casa;Habitação;950,00;;1000,00;2026-01-01;3,125;Banco;20,00;"]
     assert files["ledger-patrimonio-2026-10-04.csv"].split("\r\n")[1:] == ["Apartamento;Habitação própria;100000,00;;;Casa;"]
     assert app.backup_files("u2", "2026-10-04") == []   # sem dados, sem ficheiros
 

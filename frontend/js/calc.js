@@ -358,6 +358,54 @@ function portfolioSummary() {
   return { invested, value, gain, gainPct: invested > 0 ? gain / invested : NaN };
 }
 
+/**
+ * Rentabilidade anual de um investimento (ou da carteira toda, sem id): a taxa por ano que, aplicada a cada aporte
+ * e resgate desde a data em que foi feito, dá o último valor registado (a TIR, como a função XIRR do Excel).
+ * Ao contrário do ganho em %, conta com o tempo que o dinheiro esteve investido: +10% num ano não é o mesmo que
+ * +10% em cinco. NaN sem valores registados, sem aportes, ou com menos de 1 ano entre o primeiro aporte e o último
+ * valor (com menos tempo, passar o ganho para "ao ano" dava números exagerados).
+ */
+function annualReturn(filterId = '') {
+  const ids = new Set(investmentIds(filterId));
+  // o último mês com um valor registado (na carteira, o mais recente de todos os investimentos)
+  const lastMonth = D.valuations.reduce((m, v) => (ids.has(v.investment_id) && v.month > m ? v.month : m), '');
+  if (!lastMonth) return NaN;
+  const s = investmentSeries(filterId);
+  const k = s.months.indexOf(lastMonth);
+  if (k < 0) return NaN;
+  const end = lastDayOf(lastMonth) < todayISO() ? lastDayOf(lastMonth) : todayISO();
+  // aportes saem do bolso (negativos), resgates e o valor no fim entram (positivos)
+  const flows = D.inv_moves.filter(x => ids.has(x.investment_id) && ymOf(x.date) <= lastMonth)
+    .map(x => ({ date: x.date, amount: x.move === 'contribution' ? -x.amount : x.amount }));
+  if (!flows.some(f => f.amount < 0)) return NaN;
+  flows.push({ date: end, amount: s.value[k] });
+  const start = flows.reduce((m, f) => (f.date < m ? f.date : m), end);
+  if (daysBetween(start, end) < 365) return NaN;
+  return xirr(flows);
+}
+
+// Dias entre duas datas AAAA-MM-DD (em UTC, para a mudança de hora não tirar nem pôr uma hora)
+function daysBetween(a, b) { return Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86400000); }
+
+/**
+ * A taxa anual r em que a soma de cada fluxo [{ date, amount }] a dividir por (1 + r)^(anos desde o primeiro fluxo) dá zero.
+ * Procura-a por bissecção entre −99% e +10 000% ao ano (mais lento do que outros métodos, mas converge sempre);
+ * NaN se não houver solução nesse intervalo.
+ */
+function xirr(flows) {
+  const t0 = flows.reduce((m, f) => (f.date < m ? f.date : m), flows[0].date);
+  const cf = flows.map(f => ({ t: daysBetween(t0, f.date) / 365, a: f.amount }));
+  const npv = r => cf.reduce((sum, f) => sum + f.a / Math.pow(1 + r, f.t), 0);
+  let lo = -0.99, hi = 100, fLo = npv(lo);
+  if (!(fLo * npv(hi) < 0)) return NaN;
+  for (let i = 0; i < 100; i++) {
+    const mid = (lo + hi) / 2, fMid = npv(mid);
+    if (fMid === 0) return mid;
+    if (fLo * fMid < 0) hi = mid; else { lo = mid; fLo = fMid; }
+  }
+  return (lo + hi) / 2;
+}
+
 // Aportes líquidos (aportes − resgates) em cada mês
 function netContributions(months, filterId = '') {
   const ids = new Set(investmentIds(filterId));

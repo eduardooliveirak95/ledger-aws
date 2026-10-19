@@ -863,21 +863,22 @@ def backup_rows(items):
             for m in by.get("inv_move", [])]
     invs += [[v["month"], inv(v.get("investment_id")), inv_type.get(v.get("investment_id"), ""), "Valor", v.get("value"), ""]
              for v in by.get("valuation", [])]
-    # investimentos sem nenhum registo também são exportados, para não se perder nada
+    # uma linha sem operação declara o investimento, com as notas na descrição: para os que não têm registos e para os
+    # que têm notas, para não se perder nada
     used = {r[1] for r in invs}
     invs += [["", i.get("name", ""), i.get("inv_type", ""), "", None, i.get("notes", "")]
-             for i in by.get("investment", []) if i.get("name", "") not in used]
+             for i in by_name(by.get("investment", [])) if i.get("notes") or i.get("name", "") not in used]
     invs.sort(key=lambda r: str(r[0]))
 
     loans = []
     for l in by_name(by.get("loan", [])):
         meta = [l.get("principal"), l.get("start_date", ""), rate_text(l.get("rate")), l.get("lender", "")]
         bs = sorted((b for b in by.get("loan_balance", []) if b.get("loan_id") == l["sk"]), key=lambda b: b["month"])
-        if not bs:
-            loans.append(["", l.get("name", ""), l.get("loan_type", ""), None, l.get("payment"), *meta, None, l.get("end_date", "")])
+        # a primeira linha (sem mês) cria o crédito ao importar, com a prestação dele; nos meses, só a que foi registada
+        loans.append(["", l.get("name", ""), l.get("loan_type", ""), None, l.get("payment"), *meta, None, l.get("end_date", "")])
         for b in bs:
             loans.append([b["month"], l.get("name", ""), l.get("loan_type", ""), b.get("balance"),
-                          b.get("payment", l.get("payment")), *meta, b.get("extra") or None, l.get("end_date", "")])
+                          b.get("payment"), *meta, b.get("extra") or None, l.get("end_date", "")])
 
     props = [[p.get("name", ""), p.get("prop_type", ""), p.get("value"), p.get("purchase_price"), p.get("purchase_date", ""),
               names["loan"].get(p["loan_id"], "(apagado)") if p.get("loan_id") else "", p.get("notes", "")]

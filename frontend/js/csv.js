@@ -109,8 +109,9 @@ function exportRows(format) {
     const rows = D.inv_moves.map(x => [x.date, investmentName(x.investment_id), typeOf(x.investment_id),
       x.move === 'contribution' ? 'Aporte' : 'Resgate', x.amount, x.description]);
     rows.push(...D.valuations.map(v => [v.month, investmentName(v.investment_id), typeOf(v.investment_id), 'Valor', v.value, '']));
-    // investimentos sem nenhum registo também são exportados, para não se perder nada
-    for (const i of D.investments) if (!rows.some(r => r[1] === i.name)) rows.push(['', i.name, i.inv_type, '', null, i.notes]);
+    // uma linha sem operação declara o investimento, com as notas na descrição (o ISIN do DEGIRO fica lá): para os que
+    // não têm registos e para os que têm notas, para não se perder nada
+    for (const i of sortByName(D.investments)) if (i.notes || !rows.some(r => r[1] === i.name)) rows.push(['', i.name, i.inv_type, '', null, i.notes]);
     return rows.sort((a, b) => String(a[0]).localeCompare(String(b[0])));
   }
   if (format === 'loan') {
@@ -119,8 +120,10 @@ function exportRows(format) {
       // a taxa vai como texto (3,125) para não perder a 3.ª casa decimal com o arredondamento a 2 casas
       const meta = [l.principal, l.start_date, l.rate != null ? String(l.rate).replace('.', ',') : '', l.lender];
       const bs = D.loan_balances.filter(b => b.loan_id === l.id).sort((a, b) => a.month.localeCompare(b.month));
-      if (!bs.length) rows.push(['', l.name, l.loan_type, null, l.payment ?? null, ...meta, null, l.end_date || '']);
-      for (const b of bs) rows.push([b.month, l.name, l.loan_type, b.balance, b.payment ?? l.payment ?? null, ...meta, b.extra || null, l.end_date || '']);
+      // a primeira linha (sem mês) cria o crédito ao importar, com a prestação dele; nos meses, a prestação só aparece
+      // se tiver sido registada nesse mês (vazio = a do crédito), para o backup voltar exatamente igual
+      rows.push(['', l.name, l.loan_type, null, l.payment ?? null, ...meta, null, l.end_date || '']);
+      for (const b of bs) rows.push([b.month, l.name, l.loan_type, b.balance, b.payment ?? null, ...meta, b.extra || null, l.end_date || '']);
     }
     return rows;
   }
@@ -274,7 +277,12 @@ function planImport(text) {
       if (!name) return err('falta o nome do investimento');
       if (!byIsin) needInvestment(name, get(r, 'Tipo de investimento'), isin);
       const op = norm(get(r, 'Opera'));
-      if (!op) return; // linha que só declara o investimento (sem operação)
+      if (!op) {
+        // linha que só declara o investimento (sem operação): a descrição são as notas dele, se for novo
+        const pending = plan.newInvestments.get(norm(name));
+        if (pending && get(r, 'Descri')) pending.notes = get(r, 'Descri');
+        return;
+      }
       const amount = parseNum(get(r, 'Valor'));
       if (op === 'valor') {
         const month = parseMonthFlexible(get(r, 'Data'));
@@ -590,7 +598,10 @@ function openImport(defaultFormat) {
       const isBank = kinds.some(k => !k.app);
       // nos extratos os repetidos são sempre ignorados (comparando data, conta e valor)
       $('#imp-skip', body).closest('label').classList.toggle('hidden', isBank);
-      if (!isBank) return showAppCsv(texts[0]);
+      if (!isBank) {
+        if (files.length > 1) throw new Error('Os ficheiros da app (backup e modelos) importam-se um de cada vez. Para recuperar um backup, importa os créditos antes do património.');
+        return showAppCsv(texts[0]);
+      }
       const other = files.find((f, i) => kinds[i].app);
       if (other) throw new Error(`«${other.name}» não é um extrato bancário: importa-o à parte`);
       showBank(kinds.filter(k => k.st).map(k => k.st), kinds.filter(k => k.layout));

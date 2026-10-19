@@ -45,6 +45,10 @@ Em "Orçamentos" defines quanto queres gastar no máximo por mês em cada catego
 
 "Despesas fixas" mostra as saídas que se repetem todos os meses (renda, luz, ginásio, subscrições...) nos últimos 12 meses, com quanto somam por mês e por ano. As que mudam de valor, como a luz, aparecem com ≈. Carregando numa vês esses movimentos na tabela.
 
+### Investimentos
+
+Ao lado do ganho em percentagem aparece a rentabilidade por ano, que conta com a data de cada aporte e resgate (ganhar 10% num ano não é o mesmo que ganhar 10% em cinco). Só aparece quando há um valor registado e já passou pelo menos um ano desde o primeiro aporte.
+
 ### Créditos
 
 Os juros de cada mês saem do saldo e da prestação que registas. Para saber quando acabas de pagar, preenche o fim do contrato na ficha do crédito. Para registar uma amortização antiga, abre "Atualizar mês", escolhe esse mês e preenche a amortização extra.
@@ -73,4 +77,4 @@ O botão Importar, em cada separador, serve para recuperar um backup ou trazer d
 
 Nos extratos podes importar vários ficheiros de uma vez e escolher a conta da app. A categoria de cada movimento é adivinhada pela descrição, e se mudares uma, os próximos iguais passam a seguir essa.
 
-Para recuperar um backup, importa os ficheiros um a um, por qualquer ordem. Importar o mesmo ficheiro duas vezes não duplica nada.
+Para recuperar um backup, importa os ficheiros um a um, com o dos créditos antes do do património (a casa fica ligada ao crédito). Importar o mesmo ficheiro duas vezes não duplica nada.

@@ -876,6 +876,10 @@ function showMovementsMatching(text) {
 // Filtro: carteira completa ou um investimento
 $('#inv-filter').addEventListener('change', e => { S.invFilter = e.target.value; renderInvestments(); });
 
+// Explicação da rentabilidade anual (no cartão do ganho e no título da coluna "Por ano")
+const ANNUAL_RETURN_TITLE = 'Rentabilidade anual: conta com a data de cada aporte e resgate (como a TIR). '
+  + 'Só aparece com o valor registado e pelo menos 1 ano desde o primeiro aporte.';
+
 // Desenha o separador Investimentos: resumo, 3 gráficos e 2 tabelas
 function renderInvestments() {
   S.invFilter = fillSelect($('#inv-filter'), sortByName(D.investments).map(i => ({ value: i.id, label: i.name })), S.invFilter, 'Carteira completa');
@@ -891,7 +895,10 @@ function renderInvestments() {
   $('#inv-value-sub').textContent = lastVal ? `último valor registado: ${monthLabel(lastVal)}` : 'sem valores registados — usa "Atualizar mês"';
   $('#inv-gain').textContent = eurSigned(sum.gain);
   $('#inv-gain').className = 'stat-value ' + signClass(sum.gain);
-  $('#inv-gain-sub').textContent = isFinite(sum.gainPct) ? `${pct(sum.gainPct)} sobre o investido` : '—';
+  // por baixo do ganho: a % sobre o investido e, com pelo menos 1 ano de histórico, a rentabilidade anual (annualReturn)
+  const annual = annualReturn(f);
+  $('#inv-gain-sub').textContent = isFinite(sum.gainPct) ? `${pct(sum.gainPct)} sobre o investido${isFinite(annual) ? ` · ${pct(annual)} ao ano` : ''}` : '—';
+  $('#inv-gain-sub').title = isFinite(annual) ? ANNUAL_RETURN_TITLE : '';
   $('#inv-year').textContent = eurSigned(round2(yearContrib));
   $('#inv-year-sub').textContent = `${year} · média ${eurShort(yearContrib / yearMonths.length)}/mês`;
 
@@ -939,16 +946,17 @@ function renderInvestments() {
   }, 'O ganho aparece quando registares o valor dos investimentos');
 
   // tabela de investimentos (clicar no nome filtra a página por esse investimento)
-  const invs = sortByName(D.investments).map(i => ({ i, ...investmentSummary(i.id) }));
+  const invs = sortByName(D.investments).map(i => ({ i, ...investmentSummary(i.id), annual: annualReturn(i.id) }));
   const totalValue = invs.reduce((s2, x) => s2 + x.value, 0);
   $('#inv-table').innerHTML = invs.length ? `<table class="data">
-    <thead><tr><th>Investimento</th><th class="num">Investido</th><th class="num">Valor</th><th class="num">Ganho / perda</th><th class="num">%</th><th class="num">Peso</th><th>Último valor</th><th></th></tr></thead>
+    <thead><tr><th>Investimento</th><th class="num">Investido</th><th class="num">Valor</th><th class="num">Ganho / perda</th><th class="num">%</th><th class="num" title="${ANNUAL_RETURN_TITLE}">Por ano</th><th class="num">Peso</th><th>Último valor</th><th></th></tr></thead>
     <tbody>${invs.map(x => `<tr>
       <td><a href="#" class="li-name" style="color:inherit" data-inv-focus="${esc(x.i.id)}">${esc(x.i.name)}</a><div class="li-sub">${esc(x.i.inv_type)}</div></td>
       <td class="num">${eur(x.invested)}</td>
       <td class="num">${eur(x.value)}</td>
       <td class="num ${signClass(x.gain)}">${eurSigned(x.gain)}</td>
       <td class="num ${signClass(x.gain)}">${pct(x.gainPct)}</td>
+      <td class="num ${isFinite(x.annual) ? signClass(x.annual) : 'muted'}">${pct(x.annual)}</td>
       <td class="num muted">${totalValue > 0 ? Math.round(x.value / totalValue * 100) + '%' : '—'}</td>
       <td class="date">${x.lastValMonth ? monthShort(x.lastValMonth) : '—'}</td>
       <td class="actions"><button class="icon-btn" data-edit-inv="${esc(x.i.id)}" aria-label="Editar">✎</button></td>
