@@ -575,7 +575,7 @@ function openImport(defaultFormat) {
 
   // Ficheiros escolhidos. Cada um é: um extrato da Caixadirecta, um CSV da app (backup, modelos, DEGIRO...)
   // ou um extrato de outro banco (CSV genérico). Os extratos (de um ou vários bancos) importam-se juntos;
-  // os CSV da app importam-se à parte (só o primeiro).
+  // os CSV da app importam-se à parte, um de cada vez (com mais de um, aparece um erro a dizê-lo).
   const readFiles = async list => {
     const files = [...(list || [])];
     if (!files.length) return;
