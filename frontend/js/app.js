@@ -320,20 +320,27 @@ function renderNetWorthChart() {
   $('#nw-chart-note').classList.toggle('hidden', !enough || !D.properties.length);
 }
 
-// ── metas de poupança (painel da página inicial; goalStatus no calc.js) ──
+// ── metas de poupança (painel da página inicial; goalStatus e reserveSources no calc.js) ──
 // Cada meta: quanto já há e quanto falta, com uma barra, e a que ritmo se lá chega. Com prazo, quanto é preciso por mês
-// e a barra fica verde se o ritmo chega, laranja se não chega e vermelha se o prazo passou.
+// e a barra fica verde se o ritmo chega, laranja se não chega e vermelha se o prazo passou. Por cima, quanto ainda está
+// livre nas contas e investimentos onde há reservas (e um aviso se se reservou mais do que lá há).
 function renderGoals() {
-  const goals = goalsStatus();
-  $('#goals').innerHTML = goals.length ? `<div class="goal-list">${goals.map(goalHtml).join('')}</div>`
+  const goals = goalsStatus(), sources = reserveSources();
+  $('#goals').innerHTML = goals.length ? `
+    ${sources.length ? `<div class="goal-free">Livre para reservar: ${sources.map(x =>
+      `${esc(x.name)} <b class="${x.free < 0 ? 'neg' : ''}">${x.free < 0 ? '−' + eur(-x.free) : eur(x.free)}</b>`).join(' · ')}</div>` : ''}
+    ${sources.filter(x => x.free < 0).map(x => `<div class="goal-free neg">Em ${esc(x.name)} reservaste ${eur(-x.free)} a mais do que
+      lá tens (${eur(x.value)}): tira esse valor de alguma meta.</div>`).join('')}
+    <div class="goal-list">${goals.map(goalHtml).join('')}</div>`
     : `<div class="empty">Ainda não tens metas de poupança.<br>Uma meta é um valor que queres juntar (fundo de emergência, entrada da casa,
-        férias…), com ou sem prazo, nas contas e investimentos que escolheres ou no património líquido todo.<br>
+        férias…), com ou sem prazo. Vais reservando para ela partes da tua poupança, sem precisares de uma conta só para isso.<br>
         <button class="btn primary" data-action="goal-new">+ Meta</button></div>`;
 }
 
 function goalHtml(g) {
-  const what = g.source === 'networth' ? 'Património líquido'
-    : g.parts.map(id => (id.startsWith('INV_') ? investmentName(id) : accountName(id))).join(', ') || 'Nenhuma conta (foram apagadas: carrega em ✎)';
+  const reserve = g.source === 'reserve';
+  const what = !reserve ? 'Património líquido'
+    : g.sources.length ? 'Reservado em ' + g.sources.map(x => `${x.name} (${eurShort(x.amount)})`).join(', ') : 'Ainda sem reservas';
   const months = `${g.rateMonths} ${g.rateMonths === 1 ? 'mês' : 'meses'}`;
   const rate = g.rate === null ? '' : `${eurSignedShort(g.rate)}/mês`;
   let plan = '', pace = '';
@@ -346,12 +353,13 @@ function goalHtml(g) {
         : `Precisas de juntar <b>${eurShort(g.perMonth)}/mês</b> até ${monthLabel(g.deadline)}.`;
     }
     const cls = { ok: 'pos', behind: 'warn', late: 'neg' }[g.state] || '';
-    pace = g.rate === null ? 'Ainda não há um mês completo para saber a que ritmo estás a juntar.'
-      : g.rate <= 0 ? `<span class="${g.deadline ? 'neg' : ''}">Nos últimos ${months} o valor não subiu (${rate}).</span>`
+    pace = g.rate === null ? (reserve && !g.sources.length ? 'Carrega em "+ Reservar" para pores dinheiro de parte para esta meta.'
+        : 'Ainda não há um mês completo para saber a que ritmo estás a juntar.')
+      : g.rate <= 0 ? `<span class="${g.deadline ? 'neg' : ''}">Nos últimos ${months} ${reserve ? 'não reservaste nada' : 'o valor não subiu'} (${rate}).</span>`
       : g.far ? `<span class="${cls}">Ao ritmo atual (${rate}) demoras mais de 50 anos.</span>`
       : `<span class="${cls}">Ao ritmo atual (${rate}) chegas lá em ${monthLabel(g.eta)}.</span>`;
   }
-  const title = g.rate === null ? '' : `Ritmo: quanto o valor subiu por mês, em média, nos últimos ${months} completos (o mês atual ainda não conta)`;
+  const title = g.rate === null ? '' : `Ritmo: quanto ${reserve ? 'reservaste' : 'o património líquido subiu'} por mês, em média, nos últimos ${months} completos (o mês atual ainda não conta)`;
   return `<div class="goal">
     <div class="goal-top"><span class="li-name">${esc(g.name)}</span>
       <button class="icon-btn" data-edit-goal="${esc(g.id)}" aria-label="Editar meta">✎</button></div>
@@ -362,43 +370,102 @@ function goalHtml(g) {
     <div class="progress-label"><span>${Math.round(g.ratio * 100)}%</span><span>${g.done ? '' : `faltam ${eur(g.left)}`}</span></div>
     ${plan ? `<div class="goal-text">${plan}</div>` : ''}
     ${pace ? `<div class="goal-text"${title ? ` title="${esc(title)}"` : ''}>${pace}</div>` : ''}
+    ${reserve ? `<div class="goal-actions"><button class="btn" data-goal-reserve="${esc(g.id)}">+ Reservar / tirar</button></div>` : ''}
   </div>`;
 }
 
-// Formulário de uma meta de poupança (criar / editar / apagar)
+// Formulário de uma meta de poupança (criar / editar / apagar). Uma meta que já tem reservas não pode passar para o
+// património líquido (as reservas ficavam a ocupar dinheiro sem se verem): primeiro tiram-se.
 function goalForm(goal = null) {
-  // contas e investimentos que se podem escolher: os que não estão arquivados e os que a meta já tem
-  const keep = x => !x.archived || goal?.parts?.includes(x.id);
-  const options = [
-    ...sortByName(D.accounts.filter(keep)).map(a => ({ value: a.id, label: a.name, group: 'Contas' })),
-    ...sortByName(D.investments.filter(keep)).map(i => ({ value: i.id, label: i.name, group: 'Investimentos' })),
-  ];
+  const hasReservations = !!goal && D.reservations.some(r => r.goal_id === goal.id);
   formModal({
     title: goal ? 'Editar meta' : 'Nova meta de poupança',
-    values: goal ? { ...goal, deadline: goal.deadline || '', parts: goal.parts || [] } : { source: 'selected', parts: [] },
+    values: goal ? { ...goal, deadline: goal.deadline || '', source: goal.source === 'networth' ? 'networth' : 'reserve' }
+      : { source: 'reserve' },
     fields: [
       { name: 'name', label: 'Nome', type: 'text', required: true, placeholder: 'ex.: Fundo de emergência, Entrada da casa' },
       { name: 'target', label: 'Valor a juntar (€)', type: 'money', required: true, positive: true, half: true },
       { name: 'deadline', label: 'Até', type: 'month', half: true, hint: 'O mês em que queres lá chegar.' },
-      { name: 'source', label: 'O que conta para a meta', type: 'seg', required: true, options: [
-        { value: 'selected', label: 'Contas e investimentos' }, { value: 'networth', label: 'Património líquido' }] },
-      { name: 'parts', label: 'Contas e investimentos', type: 'checks', options, required: true, showIf: v => v.source === 'selected',
-        empty: 'Ainda não tens contas nem investimentos.',
-        hint: 'A meta vale o saldo destas contas mais o valor destes investimentos. Podes usar a mesma conta em várias metas.' },
+      { name: 'source', label: 'Como se junta', type: 'seg', required: true, showIf: () => !hasReservations, options: [
+        { value: 'reserve', label: 'Com reservas' }, { value: 'networth', label: 'Património líquido' }] },
     ],
+    intro: hasReservations ? 'Esta meta já tem reservas. Para a passares a acompanhar o património líquido, tira-as primeiro.'
+      : goal ? '' : 'Com reservas, pões de parte para a meta partes do saldo das tuas contas ou investimentos (em "+ Reservar / tirar"),'
+      + ' sem precisares de uma conta só para ela. Com o património líquido, a meta acompanha o total da página inicial'
+      + ' (ex.: "chegar aos 100 mil").',
     onSubmit: async v => {
       if (v.deadline && !/^\d{4}-\d{2}$/.test(v.deadline)) throw new Error('"Até" tem de ser um mês (AAAA-MM)');
-      const item = { kind: 'goal', id: goal?.id, name: v.name, target: v.target, deadline: v.deadline || '', source: v.source };
-      if (v.source === 'selected') item.parts = v.parts;
-      await saveItems([item]);
+      await saveItems([{ kind: 'goal', id: goal?.id, name: v.name, target: v.target, deadline: v.deadline || '',
+        source: hasReservations ? 'reserve' : v.source }]);
       toast(goal ? 'Meta atualizada' : 'Meta criada');
     },
     danger: goal && { label: 'Apagar meta', onClick: async () => {
-      if (await confirmDialog(`Apagar a meta <b>${esc(goal.name)}</b>? As contas e os investimentos não mudam.`)) {
+      if (await confirmDialog(`Apagar a meta <b>${esc(goal.name)}</b>? As reservas dela também são apagadas e esse dinheiro fica livre.`
+        + ' As contas e os investimentos não mudam.')) {
         try { await removeItem(goal.id, 'Meta apagada'); } catch (e) { toast(e.message, true); }
       }
     } },
   });
+}
+
+// Reservar dinheiro para uma meta (de uma conta ou investimento, até ao que lá está livre) ou tirá-lo (até ao que a meta lá
+// tem). Por baixo, as últimas reservas da meta, com ✕ para apagar uma que esteja errada.
+function reserveModal(goal) {
+  const g = goalStatus(goal);
+  const all = reserveSources(true);
+  const reservedHere = id => reservedTotal({ goalId: goal.id, sourceId: id });
+  const optionsFor = move => (move === 'release' ? all.filter(x => reservedHere(x.id) > 0) : all).map(x => ({ value: x.id,
+    label: `${x.name} · ${move === 'release' ? `${eur(reservedHere(x.id))} reservados aqui` : `livre ${eur(x.free)}`}` }));
+  // por omissão, a conta onde a meta tem mais reservado; senão, a que tem mais dinheiro livre
+  const preferred = (g.sources[0] && all.find(x => x.id === g.sources[0].id)) || [...all].sort((a, b) => b.free - a.free)[0];
+  const history = D.reservations.filter(r => r.goal_id === goal.id).sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+  const list = history.length ? `<div class="res-list">${history.slice(0, 5).map(r => `<div class="res-row">
+      <span class="date">${dateLabel(r.date)}</span><span>${esc(sourceName(r.source_id))}</span>
+      <span class="num ${r.move === 'reserve' ? 'pos' : 'neg'}">${r.move === 'reserve' ? '+' : '−'}${eur(r.amount)}</span>
+      <button type="button" class="icon-btn del" data-del-gres="${esc(r.id)}" aria-label="Apagar esta reserva">✕</button></div>`).join('')}
+      ${history.length > 5 ? `<div class="li-sub">e mais ${history.length - 5} anteriores</div>` : ''}</div>` : '';
+  formModal({
+    title: `Reservas · ${goal.name}`,
+    intro: `Reservado: <b>${eur(g.current)}</b> de ${eur(g.target)}. O dinheiro fica na conta: só passa a ter destino.${list}`,
+    values: { move: 'reserve', date: todayISO(), source_id: preferred?.id || '' },
+    submitLabel: 'Guardar',
+    fields: [
+      { name: 'move', label: 'O que fazer', type: 'seg', required: true, options: [{ value: 'reserve', label: 'Reservar' }, { value: 'release', label: 'Tirar' }],
+        onChange: (move, state, api2) => api2.setOptions('source_id', optionsFor(move)) },
+      { name: 'amount', label: 'Valor (€)', type: 'money', required: true, positive: true, half: true },
+      { name: 'date', label: 'Data', type: 'date', required: true, half: true },
+      { name: 'source_id', label: 'Onde', type: 'select', required: true, options: optionsFor('reserve'),
+        hint: all.length ? 'Livre = saldo de hoje menos o que as metas já lá têm reservado.' : 'Ainda não tens contas nem investimentos.' },
+    ],
+    onSubmit: async v => {
+      const x = all.find(s2 => s2.id === v.source_id);
+      if (!x) throw new Error('Escolhe a conta ou o investimento');
+      if (v.move === 'reserve' && round2(v.amount) > x.free) throw new Error(`Em ${x.name} só tens ${eur(Math.max(0, x.free))} livres`);
+      if (v.move === 'release' && round2(v.amount) > reservedHere(x.id)) throw new Error(`Esta meta só tem ${eur(reservedHere(x.id))} reservados em ${x.name}`);
+      await saveItems([{ kind: 'reservation', goal_id: goal.id, source_id: x.id, move: v.move, amount: round2(v.amount), date: v.date }]);
+      toast(v.move === 'reserve' ? 'Reserva feita' : 'Dinheiro tirado da meta');
+    },
+  });
+}
+
+// Aviso ao apagar uma conta ou um investimento com dinheiro reservado para metas (as reservas feitas lá também são apagadas)
+function reservationsNote(sourceId) {
+  const reserved = reservedTotal({ sourceId, upTo: '9999-12-31' });
+  return reserved > 0 ? ` As metas perdem os <b>${eur(reserved)}</b> que lá tinham reservados.` : '';
+}
+
+// Apaga uma reserva (✕ na janela das reservas) e volta a abrir a janela da meta. Uma reserva de onde depois já se tirou
+// dinheiro só se apaga se a meta continuar com reservado ≥ 0 nessa conta (senão, primeiro apaga-se o que se tirou).
+async function deleteReservation(id) {
+  const r = findById('reservations', id), goal = r && findById('goals', r.goal_id);
+  if (!r) return;
+  const sign = r.move === 'reserve' ? '+' : '−', where = esc(sourceName(r.source_id));
+  if (r.move === 'reserve' && reservedTotal({ goalId: r.goal_id, sourceId: r.source_id, upTo: '9999-12-31' }) < r.amount) {
+    toast(`Primeiro apaga o que tiraste desta meta em ${sourceName(r.source_id)}`, true);
+  } else if (await confirmDialog(`Apagar <b>${sign}${eur(r.amount)}</b> em ${where} (${dateLabel(r.date)})?`)) {
+    try { await saveItems([], [id]); toast('Reserva apagada'); } catch (e) { toast(e.message, true); }
+  }
+  if (goal) reserveModal(goal);
 }
 
 // ════════ MOVIMENTOS ════════
@@ -719,7 +786,7 @@ function accountForm(acc = null, after) {
     },
     danger: acc && { label: 'Apagar conta', onClick: async () => {
       const n = D.transactions.filter(t => t.account_id === acc.id || t.to_account_id === acc.id).length;
-      if (await confirmDialog(`Apagar a conta <b>${esc(acc.name)}</b>${n ? ` e os <b>${n} movimentos</b> dela` : ''}? Não dá para desfazer.`)) {
+      if (await confirmDialog(`Apagar a conta <b>${esc(acc.name)}</b>${n ? ` e os <b>${n} movimentos</b> dela` : ''}?${reservationsNote(acc.id)} Não dá para desfazer.`)) {
         try { await removeItem(acc.id, 'Conta apagada'); } catch (e) { toast(e.message, true); }
       }
     } },
@@ -1075,7 +1142,7 @@ function investmentForm(inv = null, after) {
       if (after) setTimeout(() => after(res.saved[0]), 50);
     },
     danger: inv && { label: 'Apagar investimento', onClick: async () => {
-      if (await confirmDialog(`Apagar <b>${esc(inv.name)}</b> com todos os aportes, resgates e valores mensais? Não dá para desfazer.`)) {
+      if (await confirmDialog(`Apagar <b>${esc(inv.name)}</b> com todos os aportes, resgates e valores mensais?${reservationsNote(inv.id)} Não dá para desfazer.`)) {
         try { await removeItem(inv.id, 'Investimento apagado'); } catch (e) { toast(e.message, true); }
       }
     } },
@@ -1583,7 +1650,7 @@ $('#adm-filter').addEventListener('change', e => { S.adminUser = e.target.value;
 // Um único "listener" para a página toda (delegação de eventos): funciona também para botões
 // criados depois, dentro das tabelas. O atributo diz o que fazer (ex.: data-edit-tx="<id>").
 document.addEventListener('click', e => {
-  const el = e.target.closest('[data-action],[data-edit-acc],[data-edit-tx],[data-del-tx],[data-edit-inv],[data-inv-focus],[data-edit-imv],[data-del-imv],[data-edit-loan],[data-sim-loan],[data-edit-prop],[data-edit-goal]');
+  const el = e.target.closest('[data-action],[data-edit-acc],[data-edit-tx],[data-del-tx],[data-edit-inv],[data-inv-focus],[data-edit-imv],[data-del-imv],[data-edit-loan],[data-sim-loan],[data-edit-prop],[data-edit-goal],[data-goal-reserve],[data-del-gres]');
   if (!el) return;
   const d = el.dataset;
   if (d.invFocus) { e.preventDefault(); S.invFilter = d.invFocus; renderInvestments(); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
@@ -1597,6 +1664,8 @@ document.addEventListener('click', e => {
   if (d.simLoan) return earlyRepaymentModal(findById('loans', d.simLoan));
   if (d.editProp) return propertyForm(findById('properties', d.editProp));
   if (d.editGoal) return goalForm(findById('goals', d.editGoal));
+  if (d.goalReserve) return reserveModal(findById('goals', d.goalReserve));
+  if (d.delGres) return deleteReservation(d.delGres);
   switch (d.action) {
     case 'acc-new': return accountForm();
     case 'tx-new': return txForm();

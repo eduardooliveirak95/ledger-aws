@@ -257,16 +257,6 @@ details.multi[open] > summary { border-color: var(--accent); }
   display: flex; margin: 0; font-size: 13px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--text); cursor: pointer;
 }
 .field details.pick .multi-panel input.inline { max-width: none; width: 100%; }
-/* Várias caixas à vista num formulário (campo "checks", ex.: as contas e os investimentos de uma meta) */
-.check-list {
-  display: flex; flex-direction: column; gap: 8px; max-height: 240px; overflow-y: auto;
-  background: var(--field); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px;
-}
-.field .check-list label.check {   /* desfaz o estilo dos rótulos dos campos (.field label) */
-  display: flex; margin: 0; font-size: 13px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--text); cursor: pointer;
-}
-.check-group { font-size: var(--label-size); font-weight: 600; letter-spacing: var(--caps-spacing); text-transform: var(--caps); color: var(--muted); }
-.check-group:not(:first-child) { margin-top: 6px; }
 
 /* Seleção de movimentos e barra para mudar a categoria de vários */
 table.data .sel { width: 1%; padding-right: 0; }
@@ -370,6 +360,14 @@ table.budget-edit td.budget-limit { width: 140px; }   /* campo do limite na jane
 .goal-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: -4px; }
 .goal-nums { font-family: var(--font-num); font-size: 13px; font-weight: 600; margin-top: 2px; }
 .goal-text { font-size: 12px; line-height: 1.5; color: var(--text); }
+.goal-actions { margin-top: auto; padding-top: 4px; }
+.goal-free { padding: 12px 18px 0; font-size: 12px; color: var(--muted); line-height: 1.6; }
+.goal-free b { font-family: var(--font-num); color: var(--text); font-weight: 600; }
+.goal-free.neg, .goal-free b.neg { color: var(--neg); }
+/* Últimas reservas de uma meta (na janela "Reservas") */
+.res-list { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; }
+.res-row { display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 10px; font-size: 12px; color: var(--text); }
+.res-row .num { font-family: var(--font-num); white-space: nowrap; }
 .goal-bar.done > div, .goal-bar.ok > div { background: var(--pos); }
 .goal-bar.behind > div { background: var(--warn); }
 .goal-bar.late > div { background: var(--neg); }

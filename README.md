@@ -33,11 +33,15 @@ O que vai em cada um e o que fazer todos os meses:
 
 ### Metas de poupança
 
-Na página inicial, em "+ Meta", dizes quanto queres juntar (um fundo de emergência, a entrada da casa, umas férias) e, se quiseres, até que mês. Escolhes também o que conta para a meta: algumas contas e investimentos, ou o património líquido todo. A mesma conta pode estar em várias metas.
+Na página inicial, em "+ Meta", dizes quanto queres juntar (um fundo de emergência, a entrada da casa, umas férias) e, se quiseres, até que mês.
 
-Cada meta mostra quanto já tens, quanto falta e o ritmo, que é quanto o valor subiu por mês, em média, nos últimos 12 meses (o mês atual ainda não conta). Com esse ritmo diz quando lá chegas. Se tiver prazo, diz também quanto precisas de juntar por mês, e a barra fica verde se o ritmo chega, laranja se não chega e vermelha se o prazo já passou.
+Não precisas de uma conta só para cada meta. Em "+ Reservar / tirar" pões de parte para a meta uma parte do saldo de uma conta ou do valor de um investimento. O dinheiro não sai da conta, só passa a ter destino. Várias metas podem ter dinheiro reservado na mesma conta, e por cima das metas aparece quanto ainda está livre em cada uma. Se gastares dinheiro que estava reservado, aparece um aviso para o tirares de alguma meta. Apagar uma meta apaga as reservas dela e o dinheiro fica livre.
 
-As metas, tal como os orçamentos, não entram no backup.
+Em vez de reservas, uma meta pode acompanhar o património líquido todo, por exemplo para chegar aos 100 mil.
+
+Cada meta mostra quanto já tens, quanto falta e o ritmo, que é quanto reservaste (ou quanto o património subiu) por mês, em média, nos últimos 12 meses. O mês atual e o primeiro mês da meta não contam, para o que reservaste ao criá-la não parecer ritmo. Com esse ritmo diz quando lá chegas. Se tiver prazo, diz também quanto precisas de juntar por mês, e a barra fica verde se o ritmo chega, laranja se não chega e vermelha se o prazo já passou.
+
+As metas e as reservas, tal como os orçamentos, não entram no backup.
 
 ### Movimentos
 

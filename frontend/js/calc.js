@@ -1,6 +1,7 @@
 // ── calc.js: todos os números que a app mostra são calculados aqui, a partir dos dados em bruto ──
 // O backend só guarda e devolve os registos; saldos, ganhos e dívidas são calculados no browser.
-// D = { accounts, transactions, investments, inv_moves, valuations, loans, loan_balances, properties, bank_formats, budgets, goals }
+// D = { accounts, transactions, investments, inv_moves, valuations, loans, loan_balances, properties, bank_formats, budgets, goals,
+//       reservations }
 // é a cópia local de tudo o que veio de GET /data (uma lista por tipo de item).
 
 let D = emptyData();
@@ -8,13 +9,14 @@ function emptyData() {
   return { accounts: [], transactions: [], investments: [], inv_moves: [], valuations: [], loans: [], loan_balances: [], properties: [],
     bank_formats: [],   // bank_formats: colunas escolhidas para os CSV de cada banco (ver bank.js)
     budgets: [],        // budgets: orçamentos por categoria de saídas (limite por mês; ver budgetStatus)
-    goals: [] };        // goals: metas de poupança (ver goalStatus)
+    goals: [],          // goals: metas de poupança (ver goalStatus)
+    reservations: [] }; // reservations: dinheiro de contas e investimentos posto de lado para as metas (ver reservedTotal)
 }
 // Tipo de item -> nome da lista em D (o mesmo mapa que existe no backend)
 const COLLECTION_OF = {
   account: 'accounts', transaction: 'transactions', investment: 'investments', inv_move: 'inv_moves',
   valuation: 'valuations', loan: 'loans', loan_balance: 'loan_balances', property: 'properties', bank_format: 'bank_formats',
-  budget: 'budgets', goal: 'goals',
+  budget: 'budgets', goal: 'goals', reservation: 'reservations',
 };
 
 /**
@@ -645,19 +647,53 @@ function propertyValueAt(p, ym, now) {
 }
 
 // ════════ METAS DE POUPANÇA ════════
-// Uma meta é um valor que se quer juntar (fundo de emergência, entrada da casa…), com ou sem prazo (um mês).
-// Conta para ela o património líquido todo (source 'networth') ou só algumas contas e investimentos ('selected',
-// com os ids em parts). Várias metas podem usar a mesma conta: cada uma olha para o saldo todo.
+// Uma meta é um valor que se quer juntar (fundo de emergência, entrada da casa…), com ou sem prazo (um mês). Conta de uma
+// de duas formas (source):
+//   'reserve'  com reservas (D.reservations): partes do saldo de contas ou do valor de investimentos postas de lado para a
+//              meta ('reserve') ou tiradas dela ('release'). O dinheiro não sai da conta: só fica a saber-se que tem destino,
+//              e várias metas partilham a mesma conta sem contarem o mesmo dinheiro duas vezes.
+//   'networth' o património líquido todo (ex.: "chegar aos 100 mil").
+// As metas antigas com source 'selected' (contas inteiras, só no primeiro dia) contam como 'reserve'.
+
+/** Quanto está reservado (reservas − o que se tirou) para uma meta e/ou numa conta ou investimento, até uma data. */
+function reservedTotal({ goalId = '', sourceId = '', upTo = todayISO() } = {}) {
+  let s = 0;
+  for (const r of D.reservations) {
+    if ((goalId && r.goal_id !== goalId) || (sourceId && r.source_id !== sourceId) || r.date > upTo) continue;
+    s += r.move === 'reserve' ? r.amount : -r.amount;
+  }
+  return round2(s);
+}
+
+// Nome de uma conta ou de um investimento (as reservas podem ser feitas nos dois)
+function sourceName(id) { return id.startsWith('INV_') ? investmentName(id) : accountName(id); }
+
+/**
+ * Contas e investimentos para as reservas: os que já têm dinheiro reservado e, com all, também os outros que não estão
+ * arquivados. Cada um com value (saldo ou valor de hoje), reserved (o que as metas lá têm) e free (o que sobra para
+ * reservar; negativo se se reservou mais do que lá há, ex.: gastou-se dinheiro que estava reservado).
+ */
+function reserveSources(all = false) {
+  const used = new Set(D.reservations.map(r => r.source_id));
+  const keep = x => used.has(x.id) || (all && !x.archived);
+  return [
+    ...sortByName(D.accounts.filter(keep)).map(a => ({ id: a.id, name: a.name, value: accountBalance(a.id, todayISO()) })),
+    ...sortByName(D.investments.filter(keep)).map(i => ({ id: i.id, name: i.name, value: investmentSummary(i.id).value })),
+  ].map(x => {
+    const reserved = reservedTotal({ sourceId: x.id });
+    return { ...x, reserved, free: round2(x.value - reserved) };
+  });
+}
 
 /**
  * Como está uma meta hoje:
- *   current    quanto já há: o património líquido (o mesmo da página inicial) ou o saldo das contas mais o valor dos
- *              investimentos escolhidos (os que entretanto foram apagados deixam de contar; parts = os que ainda existem)
+ *   current    quanto já há: o que está reservado para ela (sem as reservas com data futura) ou o património líquido (o
+ *              mesmo da página inicial). sources = onde está reservado: [{ id, name, amount }] (só nas metas com reservas)
  *   left       quanto falta (0 se já lá chegou) · ratio = current / target, entre 0 e 1 (para a barra)
- *   rate       o ritmo: quanto o valor subiu (ou desceu) por mês, em média, nos 12 meses completos antes do atual (o mês
- *              atual ainda vai a meio); só desde que há dados (ver goalFirstMonth). Com várias contas e investimentos é a
- *              soma do ritmo de cada um, cada um com os meses que tem. null sem nenhum mês completo.
- *              rateMonths = de quantos meses é a média (o maior das partes)
+ *   rate       o ritmo: quanto se reservou (ou quanto o património subiu) por mês, em média, nos 12 meses completos antes do
+ *              atual (o mês atual ainda vai a meio). Começa no primeiro mês com dados se for depois: o que já havia nesse mês
+ *              (ex.: o que se reservou ao criar a meta) não conta como ritmo. null sem um mês completo depois desse.
+ *              rateMonths = de quantos meses é a média
  *   eta        mês em que lá chega a este ritmo (null se já lá chegou ou se o valor não está a subir; far = mais de 50 anos)
  *   monthsLeft meses até ao prazo, sem contar o atual (de out 2026 a dez 2027 são 14); negativo se o prazo já passou
  *   perMonth   quanto é preciso juntar por mês para chegar a tempo = o que falta / monthsLeft (no mês do prazo, o que falta)
@@ -666,32 +702,28 @@ function propertyValueAt(p, ym, now) {
  */
 function goalStatus(goal) {
   const now = thisMonth(), end = addMonths(now, -1);
-  // início da média: 12 meses antes do mês passado, ou o primeiro mês com dados se for depois; null se não houver um mês completo
-  const startOf = first => {
-    const start = first && [addMonths(end, -12), first].sort().pop();
-    return start && start < end ? start : null;
-  };
-  let current = 0, rate = null, rateMonths = 0, parts = [];
-  if (goal.source === 'networth') {
+  const networth = goal.source === 'networth';
+  let current, first, valueAt, sources = [];
+  if (networth) {
     current = netWorth().total;
-    const s = netWorthSeries(), start = startOf(s.months[0]);
-    if (start) {
-      rateMonths = monthsDiff(start, end);
-      rate = (s.total[s.months.indexOf(end)] - s.total[s.months.indexOf(start)]) / rateMonths;
-    }
+    const s = netWorthSeries();
+    first = s.months[0];
+    valueAt = m => s.total[s.months.indexOf(m)];
   } else {
-    parts = (goal.parts || []).filter(id => findById(id.startsWith('INV_') ? 'investments' : 'accounts', id));
-    for (const id of parts) {
-      current += id.startsWith('INV_') ? investmentSummary(id).value : accountBalance(id, todayISO());
-      const start = startOf(goalFirstMonth(id));
-      if (!start) continue;
-      const [a, b] = goalPartValues(id, [start, end]), n = monthsDiff(start, end);
-      rate = (rate || 0) + (b - a) / n;
-      rateMonths = Math.max(rateMonths, n);
-    }
+    current = reservedTotal({ goalId: goal.id });
+    const mine = D.reservations.filter(r => r.goal_id === goal.id);
+    first = mine.reduce((m, r) => (!m || ymOf(r.date) < m ? ymOf(r.date) : m), null);
+    valueAt = m => reservedTotal({ goalId: goal.id, upTo: lastDayOf(m) });
+    sources = [...new Set(mine.map(r => r.source_id))]
+      .map(id => ({ id, name: sourceName(id), amount: reservedTotal({ goalId: goal.id, sourceId: id }) }))
+      .filter(x => x.amount !== 0).sort((a, b) => b.amount - a.amount);
   }
-  current = round2(current);
-  if (rate !== null) rate = round2(rate);
+  let rate = null, rateMonths = 0;
+  const start = first && [addMonths(end, -12), first].sort().pop();
+  if (start && start < end) {
+    rateMonths = monthsDiff(start, end);
+    rate = round2((valueAt(end) - valueAt(start)) / rateMonths);
+  }
   const done = current >= goal.target, left = done ? 0 : round2(goal.target - current);
   let eta = null, far = false;
   if (!done && rate > 0) {
@@ -702,38 +734,13 @@ function goalStatus(goal) {
   const monthsLeft = deadline ? monthsDiff(now, deadline) : null;
   const perMonth = deadline && !done && monthsLeft >= 0 ? round2(left / Math.max(1, monthsLeft)) : null;
   const state = done ? 'done' : !deadline ? '' : monthsLeft < 0 ? 'late' : eta && eta <= deadline ? 'ok' : 'behind';
-  return { id: goal.id, name: goal.name, target: goal.target, deadline, source: goal.source, parts, current, left,
-    ratio: Math.min(1, Math.max(0, current / goal.target)), done, rate, rateMonths, eta, far, monthsLeft, perMonth, state };
+  return { id: goal.id, name: goal.name, target: goal.target, deadline, source: networth ? 'networth' : 'reserve', sources,
+    current, left, ratio: Math.min(1, Math.max(0, current / goal.target)), done, rate, rateMonths, eta, far, monthsLeft,
+    perMonth, state };
 }
 
 /** Todas as metas: primeiro as que faltam, das de prazo mais próximo para as sem prazo, e por fim as atingidas. */
 function goalsStatus() {
   return D.goals.map(goalStatus).sort((a, b) => a.done - b.done
     || (a.deadline || '9999-99').localeCompare(b.deadline || '9999-99') || a.name.localeCompare(b.name, 'pt'));
-}
-
-/**
- * Primeiro mês em que se sabe o valor de uma conta ou de um investimento de uma meta (null se ainda não houver nada):
- *   conta        o primeiro movimento dessa conta (de entrada, de saída ou de transferência) ou, se vier antes, o mês da
- *                data do saldo inicial (antes disso só se sabe o saldo inicial, e uma média com esses meses dava menos)
- *   investimento o primeiro aporte ou valor registado (antes disso valia 0)
- */
-function goalFirstMonth(id) {
-  if (id.startsWith('INV_')) return firstInvestmentMonth([id]);
-  const acc = findById('accounts', id);
-  let m = acc?.opening_date ? ymOf(acc.opening_date) : null;
-  for (const t of D.transactions) {
-    if ((t.account_id === id || t.to_account_id === id) && (!m || ymOf(t.date) < m)) m = ymOf(t.date);
-  }
-  return m;
-}
-
-// Valor de uma conta (saldo) ou de um investimento no fim de cada um dos meses pedidos (o mês atual só até hoje)
-function goalPartValues(id, months) {
-  if (id.startsWith('INV_')) {
-    const s = investmentSeries(id), at = Object.fromEntries(s.months.map((m, i) => [m, s.value[i]]));
-    return months.map(m => at[m] ?? 0);
-  }
-  const today = todayISO();
-  return months.map(m => accountBalance(id, lastDayOf(m) < today ? lastDayOf(m) : today));
 }

@@ -432,35 +432,56 @@ def test_budgets_are_saved_and_validated(table):
 
 
 def test_goals_are_saved_and_validated(table):
-    """As metas de poupança ficam guardadas (com contas e investimentos ou com o património líquido), atualizam-se e apagam-se."""
-    acc = save([{"kind": "account", "name": "Poupança", "opening_date": "2026-01-01"}])["saved"][0]
-    inv = save([{"kind": "investment", "name": "ETF"}])["saved"][0]
-    g = save([{"kind": "goal", "name": "Fundo de emergência", "target": "10000", "deadline": "2027-12", "source": "selected",
-               "parts": [acc["id"], inv["id"], acc["id"]]}])["saved"][0]
-    assert g["id"].startswith("GOAL_") and g["target"] == 10000 and g["deadline"] == "2027-12"
-    assert g["parts"] == [acc["id"], inv["id"]]   # repetidos contam uma vez
+    """As metas de poupança (com reservas ou com o património líquido) ficam guardadas, atualizam-se e apagam-se."""
+    g = save([{"kind": "goal", "name": "Fundo de emergência", "target": "10000", "deadline": "2027-12", "source": "reserve"}])["saved"][0]
+    assert g["id"].startswith("GOAL_") and g["target"] == 10000 and g["deadline"] == "2027-12" and g["source"] == "reserve"
     _, d = call("GET /data")
-    assert [(x["name"], x["source"]) for x in d["goals"]] == [("Fundo de emergência", "selected")]
-    # atualizar mantém o id; com o património líquido não se guardam contas, e sem prazo não há "deadline"
-    g2 = save([{"kind": "goal", "id": g["id"], "name": "Casa", "target": 30000, "source": "networth", "parts": [acc["id"]],
-                "deadline": ""}])["saved"][0]
-    assert g2["id"] == g["id"] and "parts" not in g2 and "deadline" not in g2
-    base = {"kind": "goal", "name": "Meta", "target": 100, "source": "selected", "parts": [acc["id"]]}
-    for bad in ({"name": ""}, {"target": 0}, {"target": -5}, {"target": "muito"}, {"source": "tudo"}, {"source": None},
-                {"parts": []}, {"parts": acc["id"]}, {"parts": ["LOAN_000000000001"]}, {"parts": [123]},
-                {"parts": [acc["id"]] * 51}, {"deadline": "2027-13"}, {"deadline": "dezembro"}, {"id": "GOAL_xyz"}):
+    assert [(x["name"], x["source"]) for x in d["goals"]] == [("Fundo de emergência", "reserve")]
+    # atualizar mantém o id; sem prazo não se guarda "deadline"
+    g2 = save([{"kind": "goal", "id": g["id"], "name": "Casa", "target": 30000, "source": "networth", "deadline": ""}])["saved"][0]
+    assert g2["id"] == g["id"] and g2["source"] == "networth" and "deadline" not in g2
+    base = {"kind": "goal", "name": "Meta", "target": 100, "source": "reserve"}
+    for bad in ({"name": ""}, {"target": 0}, {"target": -5}, {"target": "muito"}, {"source": "selected"}, {"source": None},
+                {"deadline": "2027-13"}, {"deadline": "dezembro"}, {"id": "GOAL_xyz"}):
         status, body = call("POST /items", body={"items": [{**base, **bad}]})
         assert status == 400 and body["detail"], bad
     # o backup não inclui as metas (tal como os orçamentos)
     assert not any("Casa" in content for _, content in app.backup_files("u1", "2026-10-19"))
-    # apagar a conta não mexe na meta (o browser deixa de a contar); apagar a meta
-    call("DELETE /items/{id}", path={"id": acc["id"]})
+
+
+def test_reservations_are_validated_and_deleted_with_their_goal_or_source(table):
+    """As reservas (dinheiro de uma conta ou investimento posto de lado para uma meta) validam-se e apagam-se em cascata."""
+    acc = save([{"kind": "account", "name": "Poupança", "opening_date": "2026-01-01"}])["saved"][0]
+    acc2 = save([{"kind": "account", "name": "Ordem", "opening_date": "2026-01-01"}])["saved"][0]
+    inv = save([{"kind": "investment", "name": "ETF"}])["saved"][0]
+    g1, g2 = save([{"kind": "goal", "name": "Férias", "target": 2000, "source": "reserve"},
+                   {"kind": "goal", "name": "Carro", "target": 9000, "source": "reserve"}])["saved"]
+    res = lambda goal, src, amount, move="reserve", date="2026-10-01": {
+        "kind": "reservation", "goal_id": goal["id"], "source_id": src["id"], "move": move, "amount": amount, "date": date}
+    r1, r2, r3, r4 = save([res(g1, acc, "500"), res(g1, acc, 100, "release", "2026-10-05"), res(g2, inv, 300), res(g2, acc2, 50)])["saved"]
+    assert r1["id"].startswith("GRES_2026-10-01_") and r1["amount"] == 500 and r1["move"] == "reserve" and r1["goal_id"] == g1["id"]
+    assert r2["move"] == "release" and r3["source_id"] == inv["id"]
+    # mudar a data muda a chave (mantém o hex) e apaga a antiga
+    moved = save([dict(r1, date="2026-09-15")])["saved"][0]
+    assert moved["id"].startswith("GRES_2026-09-15_") and moved["id"].endswith(r1["id"][-12:])
     _, d = call("GET /data")
-    assert [x["id"] for x in d["goals"]] == [g["id"]]
-    status, body = call("DELETE /items/{id}", path={"id": g["id"]})
-    assert status == 200 and body["deleted"] == [g["id"]]
+    assert sorted(x["id"] for x in d["reservations"]) == sorted([moved["id"], r2["id"], r3["id"], r4["id"]])
+    base = res(g1, acc, 10)
+    for bad in ({"goal_id": "ACC_000000000001"}, {"goal_id": ""}, {"source_id": "LOAN_000000000001"}, {"source_id": ["ACC_000000000001"]},
+                {"source_id": None}, {"move": "gastar"}, {"amount": 0}, {"amount": -3}, {"date": "2026-13-01"}, {"id": "GRES_xyz"}):
+        status, body = call("POST /items", body={"items": [{**base, **bad}]})
+        assert status == 400 and body["detail"], bad
+    # o backup não inclui as reservas
+    assert not any("reserve" in content for _, content in app.backup_files("u1", "2026-10-19"))
+    # apagar uma meta apaga as reservas dela; apagar uma conta ou um investimento apaga as reservas feitas lá
+    _, body = call("DELETE /items/{id}", path={"id": g1["id"]})
+    assert sorted(body["deleted"]) == sorted([g1["id"], moved["id"], r2["id"]])
+    _, body = call("DELETE /items/{id}", path={"id": inv["id"]})
+    assert body["deleted"] == sorted([inv["id"], r3["id"]])
+    _, body = call("DELETE /items/{id}", path={"id": acc2["id"]})
+    assert body["deleted"] == sorted([acc2["id"], r4["id"]])
     _, d = call("GET /data")
-    assert d["goals"] == []
+    assert d["reservations"] == [] and [x["id"] for x in d["goals"]] == [g2["id"]]
 
 
 def test_request_size_limit(table):
