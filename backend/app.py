@@ -868,7 +868,7 @@ def backup_rows(items):
     used = {r[1] for r in invs}
     invs += [["", i.get("name", ""), i.get("inv_type", ""), "", None, i.get("notes", "")]
              for i in by_name(by.get("investment", [])) if i.get("notes") or i.get("name", "") not in used]
-    invs.sort(key=lambda r: str(r[0]))
+    invs.sort(key=lambda r: (str(r[0]), _plain(r[1]), r[1]))   # por data e, no mesmo dia ou mês, por investimento
 
     loans = []
     for l in by_name(by.get("loan", [])):

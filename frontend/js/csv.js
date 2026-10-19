@@ -112,7 +112,8 @@ function exportRows(format) {
     // uma linha sem operação declara o investimento, com as notas na descrição (o ISIN do DEGIRO fica lá): para os que
     // não têm registos e para os que têm notas, para não se perder nada
     for (const i of sortByName(D.investments)) if (i.notes || !rows.some(r => r[1] === i.name)) rows.push(['', i.name, i.inv_type, '', null, i.notes]);
-    return rows.sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+    // por data e, no mesmo dia ou mês, por investimento (como o backup diário do backend)
+    return rows.sort((a, b) => String(a[0]).localeCompare(String(b[0])) || a[1].localeCompare(b[1], 'pt'));
   }
   if (format === 'loan') {
     const rows = [];
