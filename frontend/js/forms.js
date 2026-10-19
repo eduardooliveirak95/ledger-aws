@@ -47,8 +47,10 @@ let formSeq = 0;
 
 /**
  * Constrói um formulário a partir de uma lista de campos e mostra-o no modal:
- *   { name, label, type: text|password|money|number|date|month|select|suggest|pick|seg|check|textarea,
+ *   { name, label, type: text|password|money|number|date|month|select|suggest|pick|seg|check|checks|textarea,
  *     options, required, hint, showIf(valores), half (dois por linha), placeholder }
+ *
+ * - checks: várias caixas para escolher várias opções ({value, label, group}); o valor é a lista dos escolhidos
  *
  * - showIf: função que decide se o campo aparece (ex.: "conta de destino" só em transferências)
  * - onChange / init: reagem a mudanças e preparam valores iniciais
@@ -153,6 +155,17 @@ function formModal({ title, fields, values = {}, submitLabel = 'Guardar', onSubm
           el.classList.remove('pick-empty');
           el.querySelectorAll('input[type=checkbox]').forEach(c => { c.checked = false; });
         });
+      // Várias caixas, todas à vista (ex.: as contas e os investimentos de uma meta), com um título por grupo
+      } else if (f.type === 'checks') {
+        input = document.createElement('div');
+        input.className = 'check-list';
+        const chosen = new Set(Array.isArray(val) ? val : []);
+        state[f.name] = f.options.filter(o => chosen.has(o.value)).map(o => o.value);   // só os que ainda existem
+        input.innerHTML = f.options.length ? f.options.map((o, i) =>
+          `${o.group && o.group !== f.options[i - 1]?.group ? `<div class="check-group">${esc(o.group)}</div>` : ''}
+          <label class="check"><input type="checkbox" value="${esc(o.value)}" ${chosen.has(o.value) ? 'checked' : ''}> ${esc(o.label)}</label>`).join('')
+          : `<div class="hint">${esc(f.empty || 'Nada para escolher.')}</div>`;
+        input.addEventListener('change', () => { state[f.name] = $$('input:checked', input).map(c => c.value); refresh(); });
       } else if (f.type === 'textarea') {
         input = document.createElement('textarea');
         input.value = val;
@@ -176,7 +189,7 @@ function formModal({ title, fields, values = {}, submitLabel = 'Guardar', onSubm
       }
       input.id = id;
       if (f.placeholder) input.placeholder = f.placeholder;
-      if (f.type !== 'seg' && f.type !== 'pick') {
+      if (f.type !== 'seg' && f.type !== 'pick' && f.type !== 'checks') {
         input.addEventListener('input', e => { state[f.name] = e.target.value; if (f.onChange) f.onChange(e.target.value, state, api2); refresh(); });
         input.addEventListener('change', e => { state[f.name] = e.target.value; refresh(); });
       }
@@ -249,6 +262,8 @@ function formModal({ title, fields, values = {}, submitLabel = 'Guardar', onSubm
           if (f.min !== undefined && n < f.min) return fail(`"${f.label}" não pode ser negativo`);
           v = n;
         }
+      } else if (f.type === 'checks') {
+        if (f.required && !v.length) return fail(`Escolhe pelo menos uma opção em "${f.label}"`);
       } else if (f.required && (v === '' || v === null || v === undefined)) {
         return fail(`Preenche "${f.label}"`);
       }

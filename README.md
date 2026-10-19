@@ -22,7 +22,7 @@ Se te esqueceres da password, fala com o administrador, que te dá uma temporár
 
 ## Separadores
 
-Depois de entrar aparece a página inicial com o património líquido (contas + investimentos + imóveis − créditos), um cartão por separador e um gráfico com a evolução mês a mês. Carrega num cartão para abrir o separador. Lá dentro, "← Início" volta à página inicial e o nome do separador, no topo, abre um menu para saltar para outro. O botão de voltar do browser ou do telemóvel também leva à página inicial.
+Depois de entrar aparece a página inicial com o património líquido (contas + investimentos + imóveis − créditos), um cartão por separador, as metas de poupança e um gráfico com a evolução mês a mês. Carrega num cartão para abrir o separador. Lá dentro, "← Início" volta à página inicial e o nome do separador, no topo, abre um menu para saltar para outro. O botão de voltar do browser ou do telemóvel também leva à página inicial.
 
 O que vai em cada um e o que fazer todos os meses:
 
@@ -30,6 +30,14 @@ O que vai em cada um e o que fazer todos os meses:
 - Investimentos: quanto investiste, quanto vale e quanto ganhaste ou perdeste. Em "Atualizar mês" pões o aporte e o valor de cada investimento.
 - Créditos: quanto deves, quanto já pagaste e quanto foi juro. Em "Atualizar mês" pões o saldo em dívida, a prestação e a amortização extra, se houver.
 - Património: casa, terreno, garagem e quanto valem. Atualizas o valor quando mudar, no ✎ do imóvel.
+
+### Metas de poupança
+
+Na página inicial, em "+ Meta", dizes quanto queres juntar (um fundo de emergência, a entrada da casa, umas férias) e, se quiseres, até que mês. Escolhes também o que conta para a meta: algumas contas e investimentos, ou o património líquido todo. A mesma conta pode estar em várias metas.
+
+Cada meta mostra quanto já tens, quanto falta e o ritmo, que é quanto o valor subiu por mês, em média, nos últimos 12 meses (o mês atual ainda não conta). Com esse ritmo diz quando lá chegas. Se tiver prazo, diz também quanto precisas de juntar por mês, e a barra fica verde se o ritmo chega, laranja se não chega e vermelha se o prazo já passou.
+
+As metas, tal como os orçamentos, não entram no backup.
 
 ### Movimentos
 

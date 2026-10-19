@@ -1,19 +1,20 @@
 // ── calc.js: todos os números que a app mostra são calculados aqui, a partir dos dados em bruto ──
 // O backend só guarda e devolve os registos; saldos, ganhos e dívidas são calculados no browser.
-// D = { accounts, transactions, investments, inv_moves, valuations, loans, loan_balances, properties, bank_formats, budgets }
+// D = { accounts, transactions, investments, inv_moves, valuations, loans, loan_balances, properties, bank_formats, budgets, goals }
 // é a cópia local de tudo o que veio de GET /data (uma lista por tipo de item).
 
 let D = emptyData();
 function emptyData() {
   return { accounts: [], transactions: [], investments: [], inv_moves: [], valuations: [], loans: [], loan_balances: [], properties: [],
     bank_formats: [],   // bank_formats: colunas escolhidas para os CSV de cada banco (ver bank.js)
-    budgets: [] };      // budgets: orçamentos por categoria de saídas (limite por mês; ver budgetStatus)
+    budgets: [],        // budgets: orçamentos por categoria de saídas (limite por mês; ver budgetStatus)
+    goals: [] };        // goals: metas de poupança (ver goalStatus)
 }
 // Tipo de item -> nome da lista em D (o mesmo mapa que existe no backend)
 const COLLECTION_OF = {
   account: 'accounts', transaction: 'transactions', investment: 'investments', inv_move: 'inv_moves',
   valuation: 'valuations', loan: 'loans', loan_balance: 'loan_balances', property: 'properties', bank_format: 'bank_formats',
-  budget: 'budgets',
+  budget: 'budgets', goal: 'goals',
 };
 
 /**
@@ -641,4 +642,98 @@ function propertyValueAt(p, ym, now) {
   if (ym < bought) return 0;
   if (p.purchase_price === undefined || p.purchase_price === null) return p.value;
   return round2(p.purchase_price + (p.value - p.purchase_price) * monthsDiff(bought, ym) / monthsDiff(bought, now));
+}
+
+// ════════ METAS DE POUPANÇA ════════
+// Uma meta é um valor que se quer juntar (fundo de emergência, entrada da casa…), com ou sem prazo (um mês).
+// Conta para ela o património líquido todo (source 'networth') ou só algumas contas e investimentos ('selected',
+// com os ids em parts). Várias metas podem usar a mesma conta: cada uma olha para o saldo todo.
+
+/**
+ * Como está uma meta hoje:
+ *   current    quanto já há: o património líquido (o mesmo da página inicial) ou o saldo das contas mais o valor dos
+ *              investimentos escolhidos (os que entretanto foram apagados deixam de contar; parts = os que ainda existem)
+ *   left       quanto falta (0 se já lá chegou) · ratio = current / target, entre 0 e 1 (para a barra)
+ *   rate       o ritmo: quanto o valor subiu (ou desceu) por mês, em média, nos 12 meses completos antes do atual (o mês
+ *              atual ainda vai a meio); só desde que há dados (ver goalFirstMonth). Com várias contas e investimentos é a
+ *              soma do ritmo de cada um, cada um com os meses que tem. null sem nenhum mês completo.
+ *              rateMonths = de quantos meses é a média (o maior das partes)
+ *   eta        mês em que lá chega a este ritmo (null se já lá chegou ou se o valor não está a subir; far = mais de 50 anos)
+ *   monthsLeft meses até ao prazo, sem contar o atual (de out 2026 a dez 2027 são 14); negativo se o prazo já passou
+ *   perMonth   quanto é preciso juntar por mês para chegar a tempo = o que falta / monthsLeft (no mês do prazo, o que falta)
+ *   state      'done' (chegou), 'ok' (a este ritmo chega a tempo), 'behind' (não chega, ou ainda não se sabe o ritmo),
+ *              'late' (o prazo passou) ou '' (sem prazo)
+ */
+function goalStatus(goal) {
+  const now = thisMonth(), end = addMonths(now, -1);
+  // início da média: 12 meses antes do mês passado, ou o primeiro mês com dados se for depois; null se não houver um mês completo
+  const startOf = first => {
+    const start = first && [addMonths(end, -12), first].sort().pop();
+    return start && start < end ? start : null;
+  };
+  let current = 0, rate = null, rateMonths = 0, parts = [];
+  if (goal.source === 'networth') {
+    current = netWorth().total;
+    const s = netWorthSeries(), start = startOf(s.months[0]);
+    if (start) {
+      rateMonths = monthsDiff(start, end);
+      rate = (s.total[s.months.indexOf(end)] - s.total[s.months.indexOf(start)]) / rateMonths;
+    }
+  } else {
+    parts = (goal.parts || []).filter(id => findById(id.startsWith('INV_') ? 'investments' : 'accounts', id));
+    for (const id of parts) {
+      current += id.startsWith('INV_') ? investmentSummary(id).value : accountBalance(id, todayISO());
+      const start = startOf(goalFirstMonth(id));
+      if (!start) continue;
+      const [a, b] = goalPartValues(id, [start, end]), n = monthsDiff(start, end);
+      rate = (rate || 0) + (b - a) / n;
+      rateMonths = Math.max(rateMonths, n);
+    }
+  }
+  current = round2(current);
+  if (rate !== null) rate = round2(rate);
+  const done = current >= goal.target, left = done ? 0 : round2(goal.target - current);
+  let eta = null, far = false;
+  if (!done && rate > 0) {
+    const n = Math.ceil(left / rate);
+    if (n > 600) far = true; else eta = addMonths(now, n);
+  }
+  const deadline = goal.deadline || null;
+  const monthsLeft = deadline ? monthsDiff(now, deadline) : null;
+  const perMonth = deadline && !done && monthsLeft >= 0 ? round2(left / Math.max(1, monthsLeft)) : null;
+  const state = done ? 'done' : !deadline ? '' : monthsLeft < 0 ? 'late' : eta && eta <= deadline ? 'ok' : 'behind';
+  return { id: goal.id, name: goal.name, target: goal.target, deadline, source: goal.source, parts, current, left,
+    ratio: Math.min(1, Math.max(0, current / goal.target)), done, rate, rateMonths, eta, far, monthsLeft, perMonth, state };
+}
+
+/** Todas as metas: primeiro as que faltam, das de prazo mais próximo para as sem prazo, e por fim as atingidas. */
+function goalsStatus() {
+  return D.goals.map(goalStatus).sort((a, b) => a.done - b.done
+    || (a.deadline || '9999-99').localeCompare(b.deadline || '9999-99') || a.name.localeCompare(b.name, 'pt'));
+}
+
+/**
+ * Primeiro mês em que se sabe o valor de uma conta ou de um investimento de uma meta (null se ainda não houver nada):
+ *   conta        o primeiro movimento dessa conta (de entrada, de saída ou de transferência) ou, se vier antes, o mês da
+ *                data do saldo inicial (antes disso só se sabe o saldo inicial, e uma média com esses meses dava menos)
+ *   investimento o primeiro aporte ou valor registado (antes disso valia 0)
+ */
+function goalFirstMonth(id) {
+  if (id.startsWith('INV_')) return firstInvestmentMonth([id]);
+  const acc = findById('accounts', id);
+  let m = acc?.opening_date ? ymOf(acc.opening_date) : null;
+  for (const t of D.transactions) {
+    if ((t.account_id === id || t.to_account_id === id) && (!m || ymOf(t.date) < m)) m = ymOf(t.date);
+  }
+  return m;
+}
+
+// Valor de uma conta (saldo) ou de um investimento no fim de cada um dos meses pedidos (o mês atual só até hoje)
+function goalPartValues(id, months) {
+  if (id.startsWith('INV_')) {
+    const s = investmentSeries(id), at = Object.fromEntries(s.months.map((m, i) => [m, s.value[i]]));
+    return months.map(m => at[m] ?? 0);
+  }
+  const today = todayISO();
+  return months.map(m => accountBalance(id, lastDayOf(m) < today ? lastDayOf(m) : today));
 }

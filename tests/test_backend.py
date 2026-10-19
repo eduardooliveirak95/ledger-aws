@@ -431,6 +431,38 @@ def test_budgets_are_saved_and_validated(table):
     assert d["budgets"] == []
 
 
+def test_goals_are_saved_and_validated(table):
+    """As metas de poupança ficam guardadas (com contas e investimentos ou com o património líquido), atualizam-se e apagam-se."""
+    acc = save([{"kind": "account", "name": "Poupança", "opening_date": "2026-01-01"}])["saved"][0]
+    inv = save([{"kind": "investment", "name": "ETF"}])["saved"][0]
+    g = save([{"kind": "goal", "name": "Fundo de emergência", "target": "10000", "deadline": "2027-12", "source": "selected",
+               "parts": [acc["id"], inv["id"], acc["id"]]}])["saved"][0]
+    assert g["id"].startswith("GOAL_") and g["target"] == 10000 and g["deadline"] == "2027-12"
+    assert g["parts"] == [acc["id"], inv["id"]]   # repetidos contam uma vez
+    _, d = call("GET /data")
+    assert [(x["name"], x["source"]) for x in d["goals"]] == [("Fundo de emergência", "selected")]
+    # atualizar mantém o id; com o património líquido não se guardam contas, e sem prazo não há "deadline"
+    g2 = save([{"kind": "goal", "id": g["id"], "name": "Casa", "target": 30000, "source": "networth", "parts": [acc["id"]],
+                "deadline": ""}])["saved"][0]
+    assert g2["id"] == g["id"] and "parts" not in g2 and "deadline" not in g2
+    base = {"kind": "goal", "name": "Meta", "target": 100, "source": "selected", "parts": [acc["id"]]}
+    for bad in ({"name": ""}, {"target": 0}, {"target": -5}, {"target": "muito"}, {"source": "tudo"}, {"source": None},
+                {"parts": []}, {"parts": acc["id"]}, {"parts": ["LOAN_000000000001"]}, {"parts": [123]},
+                {"parts": [acc["id"]] * 51}, {"deadline": "2027-13"}, {"deadline": "dezembro"}, {"id": "GOAL_xyz"}):
+        status, body = call("POST /items", body={"items": [{**base, **bad}]})
+        assert status == 400 and body["detail"], bad
+    # o backup não inclui as metas (tal como os orçamentos)
+    assert not any("Casa" in content for _, content in app.backup_files("u1", "2026-10-19"))
+    # apagar a conta não mexe na meta (o browser deixa de a contar); apagar a meta
+    call("DELETE /items/{id}", path={"id": acc["id"]})
+    _, d = call("GET /data")
+    assert [x["id"] for x in d["goals"]] == [g["id"]]
+    status, body = call("DELETE /items/{id}", path={"id": g["id"]})
+    assert status == 200 and body["deleted"] == [g["id"]]
+    _, d = call("GET /data")
+    assert d["goals"] == []
+
+
 def test_request_size_limit(table):
     """Mais de 300 itens num pedido dá 400."""
     acc = save([{"kind": "account", "name": "A", "opening_balance": 0, "opening_date": "2026-01-01"}])["saved"][0]["id"]

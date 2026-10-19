@@ -195,11 +195,11 @@ async function saveItems(items, deletes = []) {
   return res;
 }
 // Apaga um item na API e mostra quantos registos associados também foram apagados (cascata)
-async function removeItem(id, what) {
+async function removeItem(id, done) {   // done: a mensagem, ex.: 'Conta apagada'
   const res = await api.remove(id);
   applyChanges(res);
   renderAll();
-  toast(`${what} apagado${res.deleted.length > 1 ? ` (+${res.deleted.length - 1} registos associados)` : ''}`);
+  toast(`${done}${res.deleted.length > 1 ? ` (+${res.deleted.length - 1} registos associados)` : ''}`);
 }
 
 // ════════ PÁGINA INICIAL E SEPARADORES ════════
@@ -283,7 +283,7 @@ function renderAll() {
 }
 
 // Os 5 números da página inicial: contas, investimentos, imóveis, dívidas (nos cartões) e património líquido.
-// O gráfico da evolução só é desenhado com a página inicial à vista (como os gráficos dos separadores).
+// O gráfico da evolução e as metas de poupança só são desenhados com a página inicial à vista (como os gráficos dos separadores).
 function renderNetWorth() {
   const nw = netWorth();
   $('#nw-accounts').textContent = eur(nw.accounts);
@@ -291,7 +291,7 @@ function renderNetWorth() {
   $('#nw-properties').textContent = eur(nw.properties);
   $('#nw-debt').textContent = nw.debt ? '−' + eur(nw.debt) : eur(0);
   $('#nw-total').textContent = eur(nw.total);
-  if (S.tab === 'home') renderNetWorthChart();
+  if (S.tab === 'home') { renderGoals(); renderNetWorthChart(); }
 }
 
 // Gráfico da página inicial: o património líquido no fim de cada mês; a tooltip mostra de que é feito
@@ -318,6 +318,87 @@ function renderNetWorthChart() {
   }, 'O gráfico aparece quando tiveres movimentos ou investimentos em mais de um mês.');
   // os valores antigos dos imóveis são estimados (ver propertyValueAt): diz-se por baixo do gráfico
   $('#nw-chart-note').classList.toggle('hidden', !enough || !D.properties.length);
+}
+
+// ── metas de poupança (painel da página inicial; goalStatus no calc.js) ──
+// Cada meta: quanto já há e quanto falta, com uma barra, e a que ritmo se lá chega. Com prazo, quanto é preciso por mês
+// e a barra fica verde se o ritmo chega, laranja se não chega e vermelha se o prazo passou.
+function renderGoals() {
+  const goals = goalsStatus();
+  $('#goals').innerHTML = goals.length ? `<div class="goal-list">${goals.map(goalHtml).join('')}</div>`
+    : `<div class="empty">Ainda não tens metas de poupança.<br>Uma meta é um valor que queres juntar (fundo de emergência, entrada da casa,
+        férias…), com ou sem prazo, nas contas e investimentos que escolheres ou no património líquido todo.<br>
+        <button class="btn primary" data-action="goal-new">+ Meta</button></div>`;
+}
+
+function goalHtml(g) {
+  const what = g.source === 'networth' ? 'Património líquido'
+    : g.parts.map(id => (id.startsWith('INV_') ? investmentName(id) : accountName(id))).join(', ') || 'Nenhuma conta (foram apagadas: carrega em ✎)';
+  const months = `${g.rateMonths} ${g.rateMonths === 1 ? 'mês' : 'meses'}`;
+  const rate = g.rate === null ? '' : `${eurSignedShort(g.rate)}/mês`;
+  let plan = '', pace = '';
+  if (g.done) {
+    plan = '<span class="pos">Meta atingida ✓</span>';
+  } else {
+    if (g.deadline) {
+      plan = g.monthsLeft < 0 ? `<span class="neg">O prazo acabou em ${monthLabel(g.deadline)}.</span>`
+        : g.monthsLeft === 0 ? `O prazo é este mês: faltam ${eurShort(g.left)}.`
+        : `Precisas de juntar <b>${eurShort(g.perMonth)}/mês</b> até ${monthLabel(g.deadline)}.`;
+    }
+    const cls = { ok: 'pos', behind: 'warn', late: 'neg' }[g.state] || '';
+    pace = g.rate === null ? 'Ainda não há um mês completo para saber a que ritmo estás a juntar.'
+      : g.rate <= 0 ? `<span class="${g.deadline ? 'neg' : ''}">Nos últimos ${months} o valor não subiu (${rate}).</span>`
+      : g.far ? `<span class="${cls}">Ao ritmo atual (${rate}) demoras mais de 50 anos.</span>`
+      : `<span class="${cls}">Ao ritmo atual (${rate}) chegas lá em ${monthLabel(g.eta)}.</span>`;
+  }
+  const title = g.rate === null ? '' : `Ritmo: quanto o valor subiu por mês, em média, nos últimos ${months} completos (o mês atual ainda não conta)`;
+  return `<div class="goal">
+    <div class="goal-top"><span class="li-name">${esc(g.name)}</span>
+      <button class="icon-btn" data-edit-goal="${esc(g.id)}" aria-label="Editar meta">✎</button></div>
+    <div class="li-sub">${esc(what)}${g.deadline ? ` · até ${monthLabel(g.deadline)}` : ''}</div>
+    <div class="goal-nums">${eur(g.current)} de ${eur(g.target)}</div>
+    <div class="progress goal-bar ${g.state}" role="progressbar" aria-label="${esc(g.name)}" aria-valuenow="${Math.round(g.ratio * 100)}"
+      aria-valuemin="0" aria-valuemax="100"><div style="width:${g.ratio * 100}%"></div></div>
+    <div class="progress-label"><span>${Math.round(g.ratio * 100)}%</span><span>${g.done ? '' : `faltam ${eur(g.left)}`}</span></div>
+    ${plan ? `<div class="goal-text">${plan}</div>` : ''}
+    ${pace ? `<div class="goal-text"${title ? ` title="${esc(title)}"` : ''}>${pace}</div>` : ''}
+  </div>`;
+}
+
+// Formulário de uma meta de poupança (criar / editar / apagar)
+function goalForm(goal = null) {
+  // contas e investimentos que se podem escolher: os que não estão arquivados e os que a meta já tem
+  const keep = x => !x.archived || goal?.parts?.includes(x.id);
+  const options = [
+    ...sortByName(D.accounts.filter(keep)).map(a => ({ value: a.id, label: a.name, group: 'Contas' })),
+    ...sortByName(D.investments.filter(keep)).map(i => ({ value: i.id, label: i.name, group: 'Investimentos' })),
+  ];
+  formModal({
+    title: goal ? 'Editar meta' : 'Nova meta de poupança',
+    values: goal ? { ...goal, deadline: goal.deadline || '', parts: goal.parts || [] } : { source: 'selected', parts: [] },
+    fields: [
+      { name: 'name', label: 'Nome', type: 'text', required: true, placeholder: 'ex.: Fundo de emergência, Entrada da casa' },
+      { name: 'target', label: 'Valor a juntar (€)', type: 'money', required: true, positive: true, half: true },
+      { name: 'deadline', label: 'Até', type: 'month', half: true, hint: 'O mês em que queres lá chegar.' },
+      { name: 'source', label: 'O que conta para a meta', type: 'seg', required: true, options: [
+        { value: 'selected', label: 'Contas e investimentos' }, { value: 'networth', label: 'Património líquido' }] },
+      { name: 'parts', label: 'Contas e investimentos', type: 'checks', options, required: true, showIf: v => v.source === 'selected',
+        empty: 'Ainda não tens contas nem investimentos.',
+        hint: 'A meta vale o saldo destas contas mais o valor destes investimentos. Podes usar a mesma conta em várias metas.' },
+    ],
+    onSubmit: async v => {
+      if (v.deadline && !/^\d{4}-\d{2}$/.test(v.deadline)) throw new Error('"Até" tem de ser um mês (AAAA-MM)');
+      const item = { kind: 'goal', id: goal?.id, name: v.name, target: v.target, deadline: v.deadline || '', source: v.source };
+      if (v.source === 'selected') item.parts = v.parts;
+      await saveItems([item]);
+      toast(goal ? 'Meta atualizada' : 'Meta criada');
+    },
+    danger: goal && { label: 'Apagar meta', onClick: async () => {
+      if (await confirmDialog(`Apagar a meta <b>${esc(goal.name)}</b>? As contas e os investimentos não mudam.`)) {
+        try { await removeItem(goal.id, 'Meta apagada'); } catch (e) { toast(e.message, true); }
+      }
+    } },
+  });
 }
 
 // ════════ MOVIMENTOS ════════
@@ -639,7 +720,7 @@ function accountForm(acc = null, after) {
     danger: acc && { label: 'Apagar conta', onClick: async () => {
       const n = D.transactions.filter(t => t.account_id === acc.id || t.to_account_id === acc.id).length;
       if (await confirmDialog(`Apagar a conta <b>${esc(acc.name)}</b>${n ? ` e os <b>${n} movimentos</b> dela` : ''}? Não dá para desfazer.`)) {
-        try { await removeItem(acc.id, 'Conta'); } catch (e) { toast(e.message, true); }
+        try { await removeItem(acc.id, 'Conta apagada'); } catch (e) { toast(e.message, true); }
       }
     } },
   });
@@ -683,7 +764,7 @@ async function deleteTx(id) {
   const t = findById('transactions', id);
   if (!t) return;
   if (await confirmDialog(`Apagar o movimento de <b>${eur(t.amount)}</b> (${esc(t.category)}, ${dateLabel(t.date)})?`)) {
-    try { await removeItem(id, 'Movimento'); } catch (e) { toast(e.message, true); }
+    try { await removeItem(id, 'Movimento apagado'); } catch (e) { toast(e.message, true); }
   }
 }
 
@@ -995,7 +1076,7 @@ function investmentForm(inv = null, after) {
     },
     danger: inv && { label: 'Apagar investimento', onClick: async () => {
       if (await confirmDialog(`Apagar <b>${esc(inv.name)}</b> com todos os aportes, resgates e valores mensais? Não dá para desfazer.`)) {
-        try { await removeItem(inv.id, 'Investimento'); } catch (e) { toast(e.message, true); }
+        try { await removeItem(inv.id, 'Investimento apagado'); } catch (e) { toast(e.message, true); }
       }
     } },
   });
@@ -1027,7 +1108,7 @@ function invMoveForm(mv = null) {
 async function deleteImv(id) {
   const x = findById('inv_moves', id);
   if (x && await confirmDialog(`Apagar ${x.move === 'contribution' ? 'o aporte' : 'o resgate'} de <b>${eur(x.amount)}</b> em ${esc(investmentName(x.investment_id))}?`)) {
-    try { await removeItem(id, 'Registo'); } catch (e) { toast(e.message, true); }
+    try { await removeItem(id, 'Registo apagado'); } catch (e) { toast(e.message, true); }
   }
 }
 
@@ -1337,7 +1418,7 @@ function loanForm(loan = null, after) {
     },
     danger: loan && { label: 'Apagar crédito', onClick: async () => {
       if (await confirmDialog(`Apagar <b>${esc(loan.name)}</b> e todo o histórico de saldos? Não dá para desfazer.`)) {
-        try { await removeItem(loan.id, 'Crédito'); } catch (e) { toast(e.message, true); }
+        try { await removeItem(loan.id, 'Crédito apagado'); } catch (e) { toast(e.message, true); }
       }
     } },
   });
@@ -1482,7 +1563,7 @@ function propertyForm(prop = null) {
     },
     danger: prop && { label: 'Apagar imóvel', onClick: async () => {
       if (await confirmDialog(`Apagar <b>${esc(prop.name)}</b>? Não dá para desfazer.`)) {
-        try { await removeItem(prop.id, 'Imóvel'); } catch (e) { toast(e.message, true); }
+        try { await removeItem(prop.id, 'Imóvel apagado'); } catch (e) { toast(e.message, true); }
       }
     } },
   });
@@ -1502,7 +1583,7 @@ $('#adm-filter').addEventListener('change', e => { S.adminUser = e.target.value;
 // Um único "listener" para a página toda (delegação de eventos): funciona também para botões
 // criados depois, dentro das tabelas. O atributo diz o que fazer (ex.: data-edit-tx="<id>").
 document.addEventListener('click', e => {
-  const el = e.target.closest('[data-action],[data-edit-acc],[data-edit-tx],[data-del-tx],[data-edit-inv],[data-inv-focus],[data-edit-imv],[data-del-imv],[data-edit-loan],[data-sim-loan],[data-edit-prop]');
+  const el = e.target.closest('[data-action],[data-edit-acc],[data-edit-tx],[data-del-tx],[data-edit-inv],[data-inv-focus],[data-edit-imv],[data-del-imv],[data-edit-loan],[data-sim-loan],[data-edit-prop],[data-edit-goal]');
   if (!el) return;
   const d = el.dataset;
   if (d.invFocus) { e.preventDefault(); S.invFilter = d.invFocus; renderInvestments(); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
@@ -1515,6 +1596,7 @@ document.addEventListener('click', e => {
   if (d.editLoan) return loanForm(findById('loans', d.editLoan));
   if (d.simLoan) return earlyRepaymentModal(findById('loans', d.simLoan));
   if (d.editProp) return propertyForm(findById('properties', d.editProp));
+  if (d.editGoal) return goalForm(findById('goals', d.editGoal));
   switch (d.action) {
     case 'acc-new': return accountForm();
     case 'tx-new': return txForm();
@@ -1527,6 +1609,7 @@ document.addEventListener('click', e => {
     case 'loan-new': return loanForm();
     case 'loan-month': return loanMonthGrid();
     case 'prop-new': return propertyForm();
+    case 'goal-new': return goalForm();
     case 'import': return openImport(d.format);
     case 'export': return exportCSV(d.format);
   }

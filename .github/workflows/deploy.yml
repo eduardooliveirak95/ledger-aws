@@ -56,10 +56,10 @@ jobs:
 
       # Testes da importação dos extratos do banco, do separador Utilizadores, da renovação da sessão, da pesquisa nos Movimentos, do tema,
       # da evolução do património líquido, das despesas fixas, do simulador de amortização, da comparação nos cartões, dos orçamentos,
-      # da rentabilidade anual dos investimentos e do backup (exportar e voltar a importar dá os mesmos dados)
+      # da rentabilidade anual dos investimentos, do backup (exportar e voltar a importar dá os mesmos dados) e das metas de poupança
       # (JavaScript do site, corrido no Node sem browser)
       - name: JavaScript tests
-        run: node --test tests/bank.test.js tests/admin.test.js tests/auth.test.js tests/movimentos.test.js tests/tema.test.js tests/patrimonio.test.js tests/despesas-fixas.test.js tests/amortizacao.test.js tests/comparacao.test.js tests/orcamentos.test.js tests/rentabilidade.test.js tests/backup.test.js
+        run: node --test tests/bank.test.js tests/admin.test.js tests/auth.test.js tests/movimentos.test.js tests/tema.test.js tests/patrimonio.test.js tests/despesas-fixas.test.js tests/amortizacao.test.js tests/comparacao.test.js tests/orcamentos.test.js tests/rentabilidade.test.js tests/backup.test.js tests/metas.test.js
 
   # ── 2.º trabalho: deploy (só se os testes passarem, e só em push para main) ──
   deploy:

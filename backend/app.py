@@ -24,6 +24,7 @@ Todos os dados vivem numa ÚNICA tabela DynamoDB ("single-table design"):
     PROP_<hex>                   imóvel (casa, terreno...) com o valor atual
     BFMT_<hex>                   colunas escolhidas para os CSV de um banco (importar extratos)
     BUD_<hex>                    orçamento de uma categoria de saídas (limite por mês)
+    GOAL_<hex>                   meta de poupança (quanto juntar, até quando e o que conta para ela)
 
 Além das partições dos utilizadores há partições do sistema:
     user_id = "DAILY_BACKUP", sk = <sub>               um item por utilizador que ativou o backup diário por email
@@ -72,6 +73,7 @@ MAX_ITEMS_PER_REQUEST = 300   # máximo de itens (gravar + apagar) num único PO
 MAX_NAME = 60                 # comprimento máximo de nomes (conta, investimento, categoria...)
 MAX_TEXT = 500                # comprimento máximo de descrições e notas
 MAX_BACKUP_BYTES = 6_000_000  # tamanho total dos CSV num email (o SES aceita até 10 MB com os anexos)
+MAX_GOAL_PARTS = 50           # máximo de contas e investimentos escolhidos numa meta de poupança
 
 # Partição do sistema com quem ativou o backup diário (sk = sub do utilizador; ver o início do ficheiro)
 DAILY_BACKUP_PK = "DAILY_BACKUP"
@@ -99,6 +101,7 @@ KIND_PREFIX = {
     "property": "PROP",
     "bank_format": "BFMT",
     "budget": "BUD",
+    "goal": "GOAL",
 }
 # O mesmo mapa ao contrário: prefixo -> tipo (para descobrir o tipo a partir da sk)
 PREFIX_KIND = {v: k for k, v in KIND_PREFIX.items()}
@@ -114,6 +117,7 @@ COLLECTION = {
     "property": "properties",
     "bank_format": "bank_formats",
     "budget": "budgets",
+    "goal": "goals",
 }
 
 # Expressões regulares que validam o formato de cada id (= sort key).
@@ -130,6 +134,7 @@ ID_RE = {
     "property": re.compile(rf"^PROP_({HEX})$"),
     "bank_format": re.compile(rf"^BFMT_({HEX})$"),
     "budget": re.compile(rf"^BUD_({HEX})$"),
+    "goal": re.compile(rf"^GOAL_({HEX})$"),
 }
 # Formato das chaves da primeira versão da app ("AAAA-MM-DD_<16 hex>"), para as migrar
 LEGACY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_[0-9a-f]{16}$")
@@ -354,7 +359,7 @@ def build(user, raw):
         raise ValueError("id inválido")
     # Ao editar, reaproveita o hex do id existente; ao criar, gera um novo.
     # (valuation e loan_balance não têm hex próprio: a chave é o investimento/crédito + o mês)
-    h = hex_of(old_id, kind) if old_id and kind in ("account", "transaction", "investment", "inv_move", "loan", "property", "bank_format", "budget") else None
+    h = hex_of(old_id, kind) if old_id and kind in ("account", "transaction", "investment", "inv_move", "loan", "property", "bank_format", "budget", "goal") else None
     h = h or new_hex()
 
     item = {"user_id": user, "updated_at": now_iso()}
@@ -516,6 +521,32 @@ def build(user, raw):
             category=v_text(raw.get("category"), "category", MAX_NAME, required=True),
             amount=v_num(raw.get("amount"), "amount", positive=True),
         )
+
+    elif kind == "goal":
+        # Meta de poupança: quanto se quer juntar e, opcionalmente, até que mês. O que conta para a meta é o
+        # património líquido todo ("networth") ou só algumas contas e investimentos ("selected", com os ids em
+        # "parts"). O browser calcula quanto já há, o que falta e a que ritmo lá se chega.
+        source = v_choice(raw.get("source"), "source", ("networth", "selected"))
+        item.update(
+            sk=f"GOAL_{h}",
+            name=v_text(raw.get("name"), "name", MAX_NAME, required=True),
+            target=v_num(raw.get("target"), "target", positive=True),
+            source=source,
+        )
+        if source == "selected":
+            raw_parts = raw.get("parts")
+            if not isinstance(raw_parts, list) or not 1 <= len(raw_parts) <= MAX_GOAL_PARTS:
+                raise ValueError(f"parts: escolhe entre 1 e {MAX_GOAL_PARTS} contas ou investimentos")
+            parts = []
+            for p in raw_parts:
+                p = str(p) if isinstance(p, str) else ""
+                if not (ID_RE["account"].match(p) or ID_RE["investment"].match(p)):
+                    raise ValueError("parts: referência inválida")
+                if p not in parts:   # repetidos contam uma vez
+                    parts.append(p)
+            item["parts"] = parts
+        if str(raw.get("deadline") or "").strip():
+            item["deadline"] = v_month(raw.get("deadline"), "deadline")
 
     # Se o id mudou (ex.: nova data), o antigo tem de ser apagado
     stale = old_id if old_id and old_id != item["sk"] else None
@@ -711,7 +742,8 @@ def delete_item(user, item_id):
     conta        -> também os movimentos dessa conta (como origem ou destino)
     investimento -> também os aportes/resgates e os valores mensais
     crédito      -> também os saldos mensais
-    (um imóvel não tem filhos; se o crédito associado for apagado, o imóvel fica sem crédito)
+    (um imóvel não tem filhos; se o crédito associado for apagado, o imóvel fica sem crédito; uma conta ou
+    investimento apagado deixa de contar para as metas de poupança onde estava, que ficam como estão)
     """
     kind = kind_of(item_id or "")
     if not kind or not ID_RE[kind].match(item_id):

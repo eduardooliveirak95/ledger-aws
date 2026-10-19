@@ -47,7 +47,7 @@
   --neg: #c42b55;          /* dinheiro negativo, sempre acompanhado de um sinal − */
   --info: #2f5fc4;         /* selo "transferência" */
   --extra: #0e7268;        /* selo "amortização extra" */
-  --warn: #b45309;         /* orçamento perto do limite (laranja) */
+  --warn: #b45309;         /* orçamento perto do limite, meta que não chega a tempo (laranja) */
   --series-1: #2a78d6;     /* série 1 dos gráficos (azul)       */
   --series-2: #e0602c;     /* série 2 dos gráficos (laranja)    */
   --series-3: #16936a;     /* série 3 dos gráficos (verde-água) */
@@ -257,6 +257,16 @@ details.multi[open] > summary { border-color: var(--accent); }
   display: flex; margin: 0; font-size: 13px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--text); cursor: pointer;
 }
 .field details.pick .multi-panel input.inline { max-width: none; width: 100%; }
+/* Várias caixas à vista num formulário (campo "checks", ex.: as contas e os investimentos de uma meta) */
+.check-list {
+  display: flex; flex-direction: column; gap: 8px; max-height: 240px; overflow-y: auto;
+  background: var(--field); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px;
+}
+.field .check-list label.check {   /* desfaz o estilo dos rótulos dos campos (.field label) */
+  display: flex; margin: 0; font-size: 13px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--text); cursor: pointer;
+}
+.check-group { font-size: var(--label-size); font-weight: 600; letter-spacing: var(--caps-spacing); text-transform: var(--caps); color: var(--muted); }
+.check-group:not(:first-child) { margin-top: 6px; }
 
 /* Seleção de movimentos e barra para mudar a categoria de vários */
 table.data .sel { width: 1%; padding-right: 0; }
@@ -353,6 +363,17 @@ table.budget-edit td.budget-limit { width: 140px; }   /* campo do limite na jane
 .budget-bar.ok > div { background: var(--pos); }
 .budget-bar.near > div { background: var(--warn); }
 .budget-bar.over > div { background: var(--neg); }
+/* Metas de poupança (página inicial): barra verde quando já se chegou ou o ritmo chega para o prazo, laranja quando não
+   chega, vermelha quando o prazo passou; sem prazo, a cor normal das barras */
+.goal-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 22px 28px; padding: 16px 18px; }
+.goal { display: flex; flex-direction: column; gap: 6px; }
+.goal-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: -4px; }
+.goal-nums { font-family: var(--font-num); font-size: 13px; font-weight: 600; margin-top: 2px; }
+.goal-text { font-size: 12px; line-height: 1.5; color: var(--text); }
+.goal-bar.done > div, .goal-bar.ok > div { background: var(--pos); }
+.goal-bar.behind > div { background: var(--warn); }
+.goal-bar.late > div { background: var(--neg); }
+.warn { color: var(--warn); }
 
 /* ── FORMULÁRIOS / JANELAS ─────────────────── */
 .modal-overlay {
