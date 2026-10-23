@@ -1,7 +1,7 @@
 // ── calc.js: todos os números que a app mostra são calculados aqui, a partir dos dados em bruto ──
 // O backend só guarda e devolve os registos; saldos, ganhos e dívidas são calculados no browser.
 // D = { accounts, transactions, investments, inv_moves, valuations, loans, loan_balances, properties, bank_formats, budgets, goals,
-//       reservations }
+//       reservations, alloc_targets }
 // é a cópia local de tudo o que veio de GET /data (uma lista por tipo de item).
 
 let D = emptyData();
@@ -10,13 +10,14 @@ function emptyData() {
     bank_formats: [],   // bank_formats: colunas escolhidas para os CSV de cada banco (ver bank.js)
     budgets: [],        // budgets: orçamentos por categoria de saídas (limite por mês; ver budgetStatus)
     goals: [],          // goals: metas de poupança (ver goalStatus)
-    reservations: [] }; // reservations: dinheiro de contas e investimentos posto de lado para as metas (ver reservedTotal)
+    reservations: [],   // reservations: dinheiro de contas e investimentos posto de lado para as metas (ver reservedTotal)
+    alloc_targets: [] };// alloc_targets: percentagem alvo de cada tipo de investimento (ver allocation)
 }
 // Tipo de item -> nome da lista em D (o mesmo mapa que existe no backend)
 const COLLECTION_OF = {
   account: 'accounts', transaction: 'transactions', investment: 'investments', inv_move: 'inv_moves',
   valuation: 'valuations', loan: 'loans', loan_balance: 'loan_balances', property: 'properties', bank_format: 'bank_formats',
-  budget: 'budgets', goal: 'goals', reservation: 'reservations',
+  budget: 'budgets', goal: 'goals', reservation: 'reservations', alloc_target: 'alloc_targets',
 };
 
 /**
@@ -268,28 +269,36 @@ function recurringKey(description) {
  * amounts = os valores por ordem de data (ver priceRises).
  */
 function recurringExpenses() {
-  const now = thisMonth(), from = addMonths(now, -12), recent = addMonths(now, -1);
-  const groups = Object.create(null);   // sem protótipo: uma descrição como "constructor" é uma chave como as outras
+  const now = thisMonth(), from = addMonths(now, -12), entries = [];
   for (const t of D.transactions) {
     const ym = ymOf(t.date);
     if (t.direction !== 'out' || isSavingOut(t) || ym < from || ym > now) continue;
     const key = recurringKey(t.description);
-    if (key.length >= 3) (groups[key] ||= []).push(t);
+    if (key.length >= 3) entries.push({ t, key, value: t.amount });
   }
+  return recurringGroups(entries);
+}
+
+// Junta os movimentos que se repetem todos os meses, com as regras do recurringExpenses. entries = [{ t, key, value }]: o
+// movimento, a chave do grupo e o valor que conta (positivo). Devolve um elemento por grupo, como o recurringExpenses.
+function recurringGroups(entries) {
+  const recent = addMonths(thisMonth(), -1);
+  const groups = Object.create(null);   // sem protótipo: uma descrição como "constructor" é uma chave como as outras
+  for (const e of entries) (groups[e.key] ||= []).push(e);
   const out = [];
-  for (const [key, txs] of Object.entries(groups)) {
-    const months = [...new Set(txs.map(t => ymOf(t.date)))].sort();
+  for (const [key, list] of Object.entries(groups)) {
+    const months = [...new Set(list.map(e => ymOf(e.t.date)))].sort();
     const first = months[0], last = months[months.length - 1];
-    if (months.length < 3 || txs.length > months.length * 1.5 || last < recent) continue;
+    if (months.length < 3 || list.length > months.length * 1.5 || last < recent) continue;
     if (months.length < 0.6 * (monthsDiff(first, last) + 1)) continue;
-    const amounts = txs.map(t => t.amount).sort((a, b) => a - b);
+    const amounts = list.map(e => e.value).sort((a, b) => a - b);
     const mid = amounts.length >> 1;
     const amount = round2(amounts.length % 2 ? amounts[mid] : (amounts[mid - 1] + amounts[mid]) / 2);
     const min = amounts[0], max = amounts[amounts.length - 1];
-    const latest = txs.reduce((a, b) => (b.date > a.date ? b : a));
+    const latest = list.reduce((a, b) => (b.t.date > a.t.date ? b : a)).t;
     out.push({ key, description: latest.description, category: latest.category, account_id: latest.account_id, amount, min, max,
       variable: max - min > amount * 0.1, months: months.length, last: latest.date,
-      amounts: [...txs].sort((a, b) => a.date.localeCompare(b.date)).map(t => t.amount) });
+      amounts: [...list].sort((a, b) => a.t.date.localeCompare(b.t.date)).map(e => e.value) });
   }
   return out.sort((a, b) => b.amount - a.amount || a.description.localeCompare(b.description, 'pt'));
 }
@@ -307,6 +316,80 @@ function priceRises(list = recurringExpenses()) {
     if (from - lo > from * 0.01 || to <= from * 1.02) return [];
     return [{ key: x.key, description: x.description, from, to, date: x.last }];
   });
+}
+
+// ════════ SALDO PREVISTO E FUNDO DE EMERGÊNCIA ════════
+
+/**
+ * Entradas e saídas que se repetem todos os meses numa conta (ou em todas, sem account; aí as transferências entre contas
+ * próprias não contam), com as regras das despesas fixas, mas a contar tudo o que mexe no saldo: também os aportes, as
+ * amortizações e as transferências. Cada uma com sign (+1 entra, −1 sai) e pending = ainda não apareceu este mês e o dia do
+ * mês em que apareceu da última vez ainda não chegou (ex.: a internet a 28, vista a 19). As saídas atrasadas (o dia já passou)
+ * também contam, por prudência; as entradas atrasadas não (um ordenado pago uns dias antes, no fim do mês anterior, não conta
+ * a dobrar).
+ */
+function recurringFlows(account = '') {
+  const now = thisMonth(), from = addMonths(now, -12), today = todayISO(), entries = [];
+  for (const t of D.transactions) {
+    const ym = ymOf(t.date);
+    if (ym < from || ym > now) continue;
+    const e = txEffect(t, account), key = recurringKey(t.description);
+    if (e && key.length >= 3) entries.push({ t, key: (e > 0 ? '+' : '−') + key, value: Math.abs(e) });
+  }
+  const day = Number(today.slice(8, 10));
+  return recurringGroups(entries).map(x => {
+    const sign = x.key[0] === '+' ? 1 : -1;
+    return { ...x, sign, pending: ymOf(x.last) !== now && (Number(x.last.slice(8, 10)) > day || sign < 0) };
+  });
+}
+
+/**
+ * Saldo previsto no fim do mês atual, numa conta ou em todas: o saldo de hoje
+ *   + os movimentos já registados com data entre amanhã e o fim do mês (scheduled)
+ *   + as entradas habituais que ainda não chegaram este mês (incoming) − as saídas habituais que ainda não saíram (outgoing),
+ *     cada uma com o último valor (amount; se o preço mudou, já conta o novo)
+ *   − os gastos do dia a dia que ainda faltam (daily): o que costuma sair por mês em saídas que não se repetem (média dos
+ *     3 meses completos antes deste, só desde o primeiro movimento) menos o que já saiu este mês; nunca negativo.
+ * É uma estimativa. { balance, scheduled, incoming, outgoing, daily, total, end } (incoming e outgoing são do recurringFlows)
+ */
+function monthForecast(account = '') {
+  const today = todayISO(), now = thisMonth(), end = lastDayOf(now);
+  const balance = account ? accountBalance(account, today) : totalAccountsBalance(today);
+  let scheduled = 0;
+  for (const t of D.transactions) if (t.date > today && t.date <= end) scheduled += txEffect(t, account);
+  const flows = recurringFlows(account);
+  const pending = flows.filter(x => x.pending).map(x => ({ ...x, amount: x.amounts[x.amounts.length - 1] }));
+  const incoming = pending.filter(x => x.sign > 0), outgoing = pending.filter(x => x.sign < 0);
+  // gastos do dia a dia: saídas que não pertencem a nenhum grupo habitual
+  const habitual = new Set(flows.map(x => x.key));
+  const dailyOut = t => { const e = txEffect(t, account); return e < 0 && !habitual.has('−' + recurringKey(t.description)) ? -e : 0; };
+  const first = firstTxMonth(), from = first && [addMonths(now, -3), first].sort().pop(), to = addMonths(now, -1);
+  const n = from && from <= to ? monthRange(from, to).length : 0;
+  let before = 0, sofar = 0;
+  for (const t of D.transactions) {
+    const ym = ymOf(t.date);
+    if (n && ym >= from && ym <= to) before += dailyOut(t);
+    else if (ym === now && t.date <= today) sofar += dailyOut(t);
+  }
+  const daily = n ? round2(Math.max(0, before / n - sofar)) : 0;
+  const sum = list => list.reduce((s2, x) => s2 + x.amount, 0);
+  return { balance, scheduled: round2(scheduled), incoming, outgoing, daily, end,
+    total: round2(balance + scheduled + sum(incoming) - sum(outgoing) - daily) };
+}
+
+/**
+ * Para quantos meses de gastos dá o dinheiro nas contas (o "fundo de emergência"): o saldo de hoje em todas as contas a
+ * dividir pela média dos gastos por mês (flowTotals: sem investimentos nem amortizações) dos 12 meses completos antes do atual,
+ * só desde o primeiro movimento. null sem um mês completo ou sem gastos. { months, avg, cash, n }
+ */
+function emergencyMonths() {
+  const first = firstTxMonth(), now = thisMonth(), to = addMonths(now, -1);
+  if (!first || first > to) return null;
+  const from = [addMonths(now, -12), first].sort().pop(), n = monthRange(from, to).length;
+  const avg = round2(flowTotals(filterTx({ from, to })).out / n);
+  if (!(avg > 0)) return null;
+  const cash = totalAccountsBalance(todayISO());
+  return { months: Math.max(0, cash) / avg, avg, cash, n };
 }
 
 // ════════ INVESTIMENTOS ════════
@@ -424,6 +507,28 @@ function xirr(flows) {
     if (fLo * fMid < 0) hi = mid; else { lo = mid; fLo = fMid; }
   }
   return (lo + hi) / 2;
+}
+
+/**
+ * Alocação da carteira por tipo de investimento (ETF, PPR, Cripto…): o valor de cada tipo hoje e o peso (share, de 0 a 1) e,
+ * se houver alvos (D.alloc_targets: percentagem por tipo; com dois do mesmo tipo, conta o mais recente), o alvo (target, em %)
+ * e quanto falta (+) ou sobra (−) nesse tipo para chegar ao alvo com o valor de hoje (diff). Os tipos com alvo e sem
+ * investimentos aparecem com valor 0. [{ type, value, share, target, diff }], do maior valor para o menor.
+ */
+function allocation() {
+  const by = Object.create(null), targets = Object.create(null);
+  for (const i of D.investments) {
+    const v = investmentSummary(i.id).value;
+    if (v > 0) by[i.inv_type || 'Outro'] = (by[i.inv_type || 'Outro'] || 0) + v;
+  }
+  for (const t of D.alloc_targets) if (!targets[t.inv_type] || (t.updated_at || '') > (targets[t.inv_type].updated_at || '')) targets[t.inv_type] = t;
+  for (const type of Object.keys(targets)) by[type] ||= 0;
+  const total = Object.values(by).reduce((s2, v) => s2 + v, 0);
+  return Object.entries(by).map(([type, value]) => {
+    const target = targets[type] ? targets[type].pct : null;
+    return { type, value: round2(value), share: total > 0 ? value / total : 0, target,
+      diff: target === null ? null : round2(total * target / 100 - value) };
+  }).sort((a, b) => b.value - a.value || a.type.localeCompare(b.type, 'pt'));
 }
 
 // Aportes líquidos (aportes − resgates) em cada mês
@@ -778,7 +883,8 @@ function goalsStatus() {
  *   - reservou-se numa conta mais do que lá há; uma meta cujo prazo passou ou a que o ritmo já não chega a tempo
  *   - orçamentos deste mês a 80% ou mais
  *   - investimentos ainda com valor e créditos ainda por pagar sem o valor / saldo do mês passado
- *   - reservas mensais das metas por fazer este mês; despesas fixas que subiram de preço (priceRises)
+ *   - reservas mensais das metas por fazer este mês; despesas fixas que subiram de preço (priceRises); tipos de investimento
+ *     a mais de 5 pontos percentuais do alvo da alocação (allocation)
  * Cada aviso: { id, level ('bad' | 'warn' | 'info'), text (texto simples, sem HTML), action: { label, type, arg } }.
  * O id muda quando o aviso muda (ex.: inclui o mês), para um aviso dispensado voltar a aparecer quando houver outro igual.
  */
@@ -830,6 +936,11 @@ function homeAlerts() {
       `${x.l.name} (${x.last ? `último: ${monthLabel(x.last)}` : 'nenhum saldo'})`).join(', ')}.`, 'Atualizar mês', 'loan-month');
   }
 
+  const drift = allocation().filter(a => a.target !== null && Math.abs(a.share * 100 - a.target) > 5);
+  if (drift.length) {
+    add(`alloc:${now}:${drift.map(a => a.type).join('|')}`, 'info', `Alocação dos investimentos fora do alvo: ${drift.map(a =>
+      `${a.type} ${Math.round(a.share * 100)}% (alvo ${a.target}%)`).join(', ')}.`, 'Ver investimentos', 'inv');
+  }
   for (const r of priceRises()) {
     add(`rise:${r.key}:${r.date}`, 'info', `${r.description}: passou de ${eur(r.from)} para ${eur(r.to)} (${eurSigned(round2(r.to - r.from))}/mês).`,
       'Ver despesas fixas', 'recurring');

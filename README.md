@@ -49,7 +49,9 @@ Em vez de reservas, uma meta pode acompanhar o património líquido todo, por ex
 
 Cada meta mostra quanto já tens, quanto falta e o ritmo, que é quanto reservaste (ou quanto o património subiu) por mês, em média, nos últimos 12 meses. O mês atual não conta e, nas metas com reservas, o primeiro mês com reservas também não, para o que reservaste ao criá-la não parecer ritmo. Com esse ritmo diz quando lá chegas. Se tiver prazo, diz também quanto precisas de juntar por mês, e a barra fica verde se o ritmo chega, laranja se não chega e vermelha se o prazo já passou.
 
-As metas e as reservas, tal como os orçamentos, não entram no backup.
+Ao criar uma meta, a app sugere quanto juntar para um fundo de emergência: 3 a 6 meses dos teus gastos.
+
+As metas e as reservas, tal como os orçamentos e os alvos da alocação, não entram no backup.
 
 ### Movimentos
 
@@ -63,9 +65,13 @@ Por baixo dos cartões das entradas, dos gastos, do saldo e da taxa de poupança
 
 Em "Orçamentos" defines quanto queres gastar no máximo por mês em cada categoria, com a média do que gastaste ao lado. Os orçamentos aparecem por baixo dos cartões, para o período escolhido e em todas as contas, com uma barra que fica laranja aos 80% e vermelha quando passa do limite.
 
+No mês atual aparece também a previsão para o fim do mês: o saldo de hoje, mais o que já registaste para os próximos dias, mais as entradas habituais que ainda não chegaram (o ordenado, por exemplo), menos as saídas habituais que ainda não saíram (a renda, as subscrições, os aportes), menos o que costumas gastar no dia a dia e ainda não gastaste este mês. É uma estimativa, para a conta escolhida no filtro ou para todas. No cartão dos Movimentos da página inicial aparece esse valor e para quantos meses dos teus gastos dá o dinheiro nas contas.
+
 "Despesas fixas" mostra as saídas que se repetem todos os meses (renda, luz, ginásio, subscrições...) nos últimos 12 meses, com quanto somam por mês e por ano. As que mudam de valor, como a luz, aparecem com ≈. Carregando numa vês esses movimentos na tabela.
 
 ### Investimentos
+
+Na carteira completa, "Alocação por tipo" mostra quanto pesa cada tipo de investimento (ETF, PPR, cripto...). Em "Alvos" dizes que percentagem queres em cada um (têm de somar 100%), e a app mostra quanto falta ou sobra em cada tipo para lá chegar. Assim sabes onde pôr os próximos aportes. Se um tipo se afastar mais de 5 pontos do alvo, aparece um aviso na página inicial.
 
 Ao lado do ganho em percentagem aparece a rentabilidade por ano, que conta com a data de cada aporte e resgate (ganhar 10% num ano não é o mesmo que ganhar 10% em cinco). Só aparece quando há um valor registado e já passou pelo menos um ano desde o primeiro aporte.
 

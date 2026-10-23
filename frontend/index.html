@@ -121,6 +121,8 @@
         <span class="home-card-desc">Entradas, saídas e transferências entre contas</span>
         <span class="home-card-value" id="nw-accounts">—</span>
         <span class="home-card-sub">saldo em contas</span>
+        <!-- saldo previsto no fim do mês e para quantos meses de gastos dá (monthForecast e emergencyMonths no calc.js) -->
+        <span class="home-card-extra" id="nw-accounts-extra"></span>
       </button>
       <button class="home-card" data-go="inv">
         <span class="home-card-title">Investimentos</span>
@@ -204,6 +206,15 @@
       <div class="stat"><div class="stat-label">Taxa de poupança</div><div class="stat-value" id="mov-rate">—</div><div class="stat-sub" id="mov-rate-sub">do que entrou, quanto não foi gasto</div><div class="stat-cmp" id="mov-rate-cmp"></div></div>
     </div>
 
+    <!-- Saldo previsto no fim do mês (monthForecast no calc.js); só no mês atual e se houver alguma coisa por vir -->
+    <div class="panel hidden" id="forecast-panel" style="margin-top:16px">
+      <div class="panel-header">
+        <div><div class="panel-title">Previsão para o fim do mês</div><div class="li-sub" id="forecast-sub"></div></div>
+        <div class="forecast-total" id="forecast-total"></div>
+      </div>
+      <div class="forecast-body" id="forecast-body"></div>
+    </div>
+
     <!-- Orçamentos por categoria no período escolhido (budgetStatus no calc.js); só aparece se houver orçamentos -->
     <div class="panel hidden" id="budget-panel" style="margin-top:16px">
       <div class="panel-header">
@@ -268,6 +279,15 @@
       <div class="stat"><div class="stat-label">Valor atual</div><div class="stat-value" id="inv-value">—</div><div class="stat-sub" id="inv-value-sub"></div></div>
       <div class="stat"><div class="stat-label">Ganho / perda</div><div class="stat-value" id="inv-gain">—</div><div class="stat-sub" id="inv-gain-sub"></div></div>
       <div class="stat"><div class="stat-label">Aportes este ano</div><div class="stat-value" id="inv-year">—</div><div class="stat-sub" id="inv-year-sub"></div></div>
+    </div>
+
+    <!-- Alocação por tipo de investimento, com alvos opcionais (allocation no calc.js); só na carteira completa e com valor -->
+    <div class="panel hidden" id="alloc-panel" style="margin-top:16px">
+      <div class="panel-header">
+        <div><div class="panel-title">Alocação por tipo</div><div class="li-sub" id="alloc-sub"></div></div>
+        <button class="btn" data-action="alloc-targets">Alvos</button>
+      </div>
+      <div class="alloc-list" id="alloc-list"></div>
     </div>
 
     <div class="panel" style="margin-top:16px">

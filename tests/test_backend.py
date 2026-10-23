@@ -496,6 +496,23 @@ def test_reservations_are_validated_and_deleted_with_their_goal_or_source(table)
     assert d["reservations"] == [] and [x["id"] for x in d["goals"]] == [g2["id"]]
 
 
+def test_alloc_targets_are_saved_and_validated(table):
+    """Os alvos da alocação (percentagem da carteira por tipo de investimento) ficam guardados, atualizam-se e apagam-se."""
+    t = save([{"kind": "alloc_target", "inv_type": "ETF", "pct": "70"}])["saved"][0]
+    assert t["id"].startswith("ALT_") and t["inv_type"] == "ETF" and t["pct"] == 70
+    assert save([dict(t, pct=65.5)])["saved"][0]["id"] == t["id"]   # atualizar mantém o id
+    base = {"kind": "alloc_target", "inv_type": "PPR", "pct": 20}
+    for bad in ({"inv_type": ""}, {"pct": 0}, {"pct": -5}, {"pct": 100.01}, {"pct": "muito"}, {"pct": None}, {"id": "ALT_xyz"}):
+        status, body = call("POST /items", body={"items": [{**base, **bad}]})
+        assert status == 400 and body["detail"], bad
+    assert save([dict(base, pct=100)])["saved"][0]["pct"] == 100
+    # o backup não inclui os alvos (tal como os orçamentos)
+    assert not any("ETF" in content for _, content in app.backup_files("u1", "2026-10-23"))
+    save([], delete=[t["id"]])
+    _, d = call("GET /data")
+    assert [x["inv_type"] for x in d["alloc_targets"]] == ["PPR"]
+
+
 def test_request_size_limit(table):
     """Mais de 300 itens num pedido dá 400."""
     acc = save([{"kind": "account", "name": "A", "opening_balance": 0, "opening_date": "2026-01-01"}])["saved"][0]["id"]

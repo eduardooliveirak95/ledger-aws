@@ -292,6 +292,14 @@ function renderNetWorth() {
   $('#nw-properties').textContent = eur(nw.properties);
   $('#nw-debt').textContent = nw.debt ? '−' + eur(nw.debt) : eur(0);
   $('#nw-total').textContent = eur(nw.total);
+  // no cartão dos Movimentos: o saldo previsto no fim do mês (se for diferente do de hoje) e para quantos meses de gastos dá
+  const fc = monthForecast(), em = emergencyMonths();
+  const extra = [];
+  if (Math.abs(fc.total - fc.balance) >= 1) extra.push(`≈ ${eurShort(fc.total)} no fim do mês`);
+  if (em) extra.push(`dá para ${em.months.toFixed(1).replace('.', ',')} ${em.months >= 0.95 && em.months < 1.05 ? 'mês' : 'meses'} de gastos`);
+  $('#nw-accounts-extra').textContent = extra.join(' · ');
+  $('#nw-accounts-extra').title = em ? `Saldo em contas a dividir pela média dos gastos por mês dos últimos ${em.n} ${em.n === 1 ? 'mês' : 'meses'} `
+    + `(${eur(em.avg)}; sem investimentos nem amortizações). A previsão está nos Movimentos.` : '';
   if (S.tab === 'home') { renderAlerts(); renderGoals(); renderNetWorthChart(); }
 }
 
@@ -321,6 +329,30 @@ function renderNetWorthChart() {
   $('#nw-chart-note').classList.toggle('hidden', !enough || !D.properties.length);
 }
 
+// ── previsão para o fim do mês (painel dos Movimentos; monthForecast no calc.js) ──
+// Só no mês atual, com a conta escolhida no filtro (ou todas). As entradas e saídas habituais que ainda faltam vêm por nome;
+// os gastos do dia a dia são a média dos últimos meses menos o que já se gastou este mês.
+function renderForecast() {
+  const show = S.movMode === 'month' && S.movAnchor === thisMonth();
+  const f = show && monthForecast(S.movAccount);
+  const visible = f && (f.scheduled || f.incoming.length || f.outgoing.length || f.daily);
+  $('#forecast-panel').classList.toggle('hidden', !visible);
+  if (!visible) return;
+  const list = items => items.map(x => `${esc(x.description)} <b>${eur(x.amount)}</b>`).join(' · ');
+  $('#forecast-sub').textContent = `${S.movAccount ? accountName(S.movAccount) : 'todas as contas'} · a ${dateLabel(f.end)}, se tudo correr como costuma`;
+  $('#forecast-total').innerHTML = `<span class="${f.total < 0 ? 'neg' : ''}">${eur(f.total)}</span>`;
+  $('#forecast-body').innerHTML = [
+    `<div class="forecast-row"><span>Saldo hoje</span><b>${eur(f.balance)}</b></div>`,
+    f.scheduled ? `<div class="forecast-row"><span>Já registado para o resto do mês</span><b class="${signClass(f.scheduled)}">${eurSigned(f.scheduled)}</b></div>` : '',
+    f.incoming.length ? `<div class="forecast-row"><span>Entradas habituais por chegar: ${list(f.incoming)}</span>
+      <b class="pos">${eurSigned(f.incoming.reduce((s2, x) => s2 + x.amount, 0))}</b></div>` : '',
+    f.outgoing.length ? `<div class="forecast-row"><span>Saídas habituais por sair: ${list(f.outgoing)}</span>
+      <b class="neg">${eurSigned(-f.outgoing.reduce((s2, x) => s2 + x.amount, 0))}</b></div>` : '',
+    f.daily ? `<div class="forecast-row"><span>Gastos do dia a dia que ainda faltam (média dos últimos meses menos o que já gastaste)</span>
+      <b class="neg">${eurSigned(-f.daily)}</b></div>` : '',
+  ].join('');
+}
+
 // ── avisos (painel "A ver" da página inicial; homeAlerts no calc.js) ──
 // O que precisa de atenção, cada um com um botão para o resolver e ✕ para o dispensar. Um aviso dispensado fica guardado
 // neste aparelho (localStorage "ledger.dismissed", os últimos 100) e só volta se mudar (ex.: no mês seguinte). Sem avisos,
@@ -348,6 +380,7 @@ function alertAction(type, arg) {
   if (type === 'inv-month') return investmentMonthGrid();
   if (type === 'loan-month') return loanMonthGrid();
   if (type === 'mov') return go('mov');
+  if (type === 'inv') return go('inv');
   if (type === 'recurring') { go('mov'); return recurringModal(); }
   if (type === 'goals') return $('#goals').closest('.panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
   const goal = findById('goals', arg);
@@ -409,6 +442,13 @@ function goalHtml(g) {
   </div>`;
 }
 
+// Sugestão para o valor de um fundo de emergência: 3 a 6 meses dos gastos médios (emergencyMonths)
+function emergencyHint() {
+  const em = emergencyMonths();
+  return em ? `Para um fundo de emergência costuma juntar-se 3 a 6 meses de gastos: com os teus (~${eurShort(em.avg)}/mês), `
+    + `${eurShort(em.avg * 3)} a ${eurShort(em.avg * 6)}.` : '';
+}
+
 // Formulário de uma meta de poupança (criar / editar / apagar). Uma meta que já tem reservas não pode passar para o
 // património líquido (as reservas ficavam a ocupar dinheiro sem se verem): primeiro tiram-se.
 function goalForm(goal = null) {
@@ -422,7 +462,8 @@ function goalForm(goal = null) {
       : { source: 'reserve', monthly_source: sourceOptions[0]?.value || '' },
     fields: [
       { name: 'name', label: 'Nome', type: 'text', required: true, placeholder: 'ex.: Fundo de emergência, Entrada da casa' },
-      { name: 'target', label: 'Valor a juntar (€)', type: 'money', required: true, positive: true, half: true },
+      { name: 'target', label: 'Valor a juntar (€)', type: 'money', required: true, positive: true, half: true,
+        hint: emergencyHint() },
       { name: 'deadline', label: 'Até', type: 'month', half: true, hint: 'O mês em que queres lá chegar.' },
       { name: 'source', label: 'Como se junta', type: 'seg', required: true, showIf: () => !hasReservations, options: [
         { value: 'reserve', label: 'Com reservas' }, { value: 'networth', label: 'Património líquido' }] },
@@ -633,6 +674,7 @@ function renderMovements() {
   });
 
   // Orçamentos do período (budgetStatus): em todas as contas, sem os filtros de categoria nem a pesquisa
+  renderForecast();
   const budgets = budgetStatus(from, to);
   $('#budget-panel').classList.toggle('hidden', !budgets.length);
   if (budgets.length) {
@@ -1107,6 +1149,8 @@ function renderInvestments() {
   $('#inv-year').textContent = eurSigned(round2(yearContrib));
   $('#inv-year-sub').textContent = `${year} · média ${eurShort(yearContrib / yearMonths.length)}/mês`;
 
+  renderAllocation(!f);
+
   // gráfico: valor vs investido ao longo do tempo
   const s = investmentSeries(f);
   drawChart('chart-inv-value', {
@@ -1302,6 +1346,86 @@ function investmentMonthGrid() {
       } },
     ],
   });
+}
+
+// ── alocação por tipo (painel dos Investimentos; allocation no calc.js) ──
+// Uma linha por tipo: barra com o peso de hoje (e uma marca no alvo, se houver), valor, % e, com alvo, quanto falta ou sobra.
+// Só na carteira completa (show) e com algum valor.
+function renderAllocation(show) {
+  const list = show ? allocation() : [];
+  const visible = list.some(a => a.value > 0);
+  $('#alloc-panel').classList.toggle('hidden', !visible);
+  if (!visible) return;
+  const withTargets = list.some(a => a.target !== null);
+  $('#alloc-sub').textContent = withTargets ? 'peso de hoje · alvo · quanto falta (+) ou sobra (−) para o alvo, com o valor de hoje'
+    : 'peso de cada tipo na carteira · em "Alvos" podes dizer que percentagem queres em cada um';
+  $('#alloc-list').innerHTML = list.map(a => `<div class="alloc-row">
+    <span class="li-name">${esc(a.type)}</span>
+    <div class="progress alloc-bar" role="progressbar" aria-label="${esc(a.type)}" aria-valuenow="${Math.round(a.share * 100)}" aria-valuemin="0" aria-valuemax="100">
+      <div style="width:${a.share * 100}%"></div>${a.target !== null ? `<span class="alloc-target" style="left:${a.target}%" title="Alvo: ${a.target}%"></span>` : ''}</div>
+    <span class="num alloc-value">${eur(a.value)}</span>
+    <span class="num">${Math.round(a.share * 100)}%${a.target !== null ? ` <span class="muted">/ ${numInput(a.target)}%</span>` : ''}</span>
+    <span class="num ${a.diff ? signClass(a.diff) : ''}">${a.diff === null ? '' : Math.abs(a.diff) < 1 ? '✓' : eurSigned(a.diff)}</span>
+  </div>`).join('');
+}
+
+// Janela "Alvos": a percentagem que se quer em cada tipo de investimento (os que tens primeiro). Vazio = sem alvo; com algum,
+// têm de somar 100%.
+function allocTargetsModal() {
+  const latest = Object.create(null), dupes = [];
+  for (const t of [...D.alloc_targets].sort((a, b) => (a.updated_at || '').localeCompare(b.updated_at || ''))) {
+    if (latest[t.inv_type]) dupes.push(latest[t.inv_type].id);   // alvos repetidos do mesmo tipo: fica o mais recente
+    latest[t.inv_type] = t;
+  }
+  const now = Object.fromEntries(allocation().map(a => [a.type, a.share]));
+  const types = [...new Set([...allocation().filter(a => a.value > 0).map(a => a.type), ...INVESTMENT_TYPES, ...Object.keys(latest)])];
+  const body = document.createElement('div');
+  body.style.cssText = 'display:flex;flex-direction:column;gap:14px';
+  body.innerHTML = `
+    <div class="modal-hint">Que percentagem da carteira queres em cada tipo. Deixa vazio os que não te interessam; os preenchidos têm de
+      somar 100%. Na página inicial aparece um aviso quando um tipo se afasta mais de 5 pontos do alvo.</div>
+    <div class="grid-scroll"><table class="grid-edit budget-edit"><thead><tr><th>Tipo</th><th class="num">Hoje</th><th class="num">Alvo (%)</th></tr></thead>
+      <tbody>${types.map(t => `<tr><td>${esc(t)}</td><td class="num">${now[t] ? Math.round(now[t] * 100) + '%' : '—'}</td>
+        <td class="budget-limit"><input data-type="${esc(t)}" inputmode="decimal" placeholder="—" value="${latest[t] ? numInput(latest[t].pct) : ''}"
+          aria-label="Alvo para ${esc(t)}"></td></tr>`).join('')}</tbody></table></div>
+    <div class="modal-hint" id="alt-sum"></div>
+    <div class="form-error" id="alt-err"></div>`;
+  const values = () => $$('input[data-type]', body).map(i => ({ type: i.dataset.type, txt: i.value.trim(), n: parseNum(i.value.trim()) }));
+  const showSum = () => {
+    const total = round2(values().filter(v => v.txt && v.n > 0).reduce((s2, v) => s2 + v.n, 0));
+    $('#alt-sum', body).textContent = total ? `Total: ${numInput(total)}%${Math.abs(total - 100) > 0.05 ? ' (tem de dar 100%)' : ' ✓'}` : '';
+  };
+  body.addEventListener('input', showSum);
+  modal.open({
+    title: 'Alvos da alocação', body, wide: true,
+    footer: [
+      { label: 'Cancelar', onClick: () => modal.close() },
+      { label: 'Guardar', cls: 'primary', onClick: async e => {
+        const items = [], deletes = [...dupes], bad = [];
+        let total = 0;
+        for (const v of values()) {
+          const cur = latest[v.type];
+          if (!v.txt) { if (cur) deletes.push(cur.id); continue; }
+          if (!(v.n > 0 && v.n <= 100)) { bad.push(v.type); continue; }
+          total += v.n;
+          if (!cur || round2(v.n) !== cur.pct) items.push({ kind: 'alloc_target', id: cur?.id, inv_type: v.type, pct: round2(v.n) });
+        }
+        if (bad.length) return ($('#alt-err', body).textContent = `Valor inválido em: ${bad.join(', ')}`);
+        if (total && Math.abs(round2(total) - 100) > 0.05) return ($('#alt-err', body).textContent = `Os alvos somam ${numInput(round2(total))}%: têm de dar 100%`);
+        if (!items.length && !deletes.length) return modal.close();
+        e.target.disabled = true;
+        try {
+          await saveItems(items, deletes);
+          modal.close();
+          toast('Alvos guardados');
+        } catch (err) {
+          $('#alt-err', body).textContent = err.message;
+          e.target.disabled = false;
+        }
+      } },
+    ],
+  });
+  showSum();
 }
 
 // ════════ CRÉDITOS ════════
@@ -1738,6 +1862,7 @@ document.addEventListener('click', e => {
     case 'loan-month': return loanMonthGrid();
     case 'prop-new': return propertyForm();
     case 'goal-new': return goalForm();
+    case 'alloc-targets': return allocTargetsModal();
     case 'import': return openImport(d.format);
     case 'export': return exportCSV(d.format);
   }
