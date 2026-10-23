@@ -44,10 +44,22 @@ function esc(s) {
 const EUR = new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' });
 const EUR0 = new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 });
 // eur: 1 234,56 € · eurShort: 1 235 € · eurSigned: +12,00 € / −12,00 € (com sinal) · eurSignedShort: +12 € / −12 €
-function eur(n) { return EUR.format(n || 0); }
-function eurShort(n) { return EUR0.format(n || 0); }
-function eurSigned(n) { return (n > 0 ? '+' : n < 0 ? '−' : '') + EUR.format(Math.abs(n || 0)); }
-function eurSignedShort(n) { return (n > 0 ? '+' : n < 0 ? '−' : '') + EUR0.format(Math.abs(n || 0)); }
+// No modo privado (ver abaixo), todos dão "••• €" (os com sinal mantêm o sinal).
+function eur(n) { return privateMode ? HIDDEN_EUR : EUR.format(n || 0); }
+function eurShort(n) { return privateMode ? HIDDEN_EUR : EUR0.format(n || 0); }
+function eurSigned(n) { return (n > 0 ? '+' : n < 0 ? '−' : '') + (privateMode ? HIDDEN_EUR : EUR.format(Math.abs(n || 0))); }
+function eurSignedShort(n) { return (n > 0 ? '+' : n < 0 ? '−' : '') + (privateMode ? HIDDEN_EUR : EUR0.format(Math.abs(n || 0))); }
+
+// Modo privado (botão 👁 no topo): os valores em euros aparecem como "••• €", para se poder abrir a app em público.
+// Fica guardado só neste aparelho (localStorage "ledger.private"), como o tema. Os campos dos formulários e os CSV
+// exportados continuam com os valores verdadeiros (não usam estas funções); as percentagens também se veem.
+const PRIVATE_KEY = 'ledger.private';
+const HIDDEN_EUR = '••• €';
+let privateMode = (() => { try { return localStorage.getItem(PRIVATE_KEY) === '1'; } catch { return false; } })();
+function setPrivateMode(on) {
+  privateMode = !!on;
+  try { localStorage.setItem(PRIVATE_KEY, privateMode ? '1' : '0'); } catch { /* sem armazenamento: fica só em memória */ }
+}
 // Formata uma fração como percentagem com sinal (0.051 -> "+5,1%"); "—" se não for um número finito
 function pct(n, digits = 1) {
   if (!isFinite(n)) return '—';

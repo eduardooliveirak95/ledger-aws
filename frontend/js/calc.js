@@ -262,9 +262,10 @@ function recurringKey(description) {
  *   - aparecem em pelo menos 60% dos meses entre a primeira e a última vez (regulares, não de vez em quando);
  *   - ainda estão ativas: a última foi no mês atual ou no anterior.
  * Os investimentos e as amortizações (dinheiro posto de lado) e as transferências entre contas não contam.
- * Devolve [{ key, description, category, account_id, amount, min, max, variable, months, last }], do maior valor
+ * Devolve [{ key, description, category, account_id, amount, min, max, variable, months, last, amounts }], do maior valor
  * para o menor: amount = valor habitual (a mediana); variable = o valor muda mais de 10% (ex.: luz, água);
- * description, category e account_id são os do movimento mais recente; months = em quantos meses apareceu.
+ * description, category e account_id são os do movimento mais recente; months = em quantos meses apareceu;
+ * amounts = os valores por ordem de data (ver priceRises).
  */
 function recurringExpenses() {
   const now = thisMonth(), from = addMonths(now, -12), recent = addMonths(now, -1);
@@ -287,9 +288,25 @@ function recurringExpenses() {
     const min = amounts[0], max = amounts[amounts.length - 1];
     const latest = txs.reduce((a, b) => (b.date > a.date ? b : a));
     out.push({ key, description: latest.description, category: latest.category, account_id: latest.account_id, amount, min, max,
-      variable: max - min > amount * 0.1, months: months.length, last: latest.date });
+      variable: max - min > amount * 0.1, months: months.length, last: latest.date,
+      amounts: [...txs].sort((a, b) => a.date.localeCompare(b.date)).map(t => t.amount) });
   }
   return out.sort((a, b) => b.amount - a.amount || a.description.localeCompare(b.description, 'pt'));
+}
+
+/**
+ * Despesas fixas que subiram de preço (ex.: uma subscrição que passou de 11,99 € para 13,99 €): o último valor é mais de 2%
+ * acima de todos os anteriores, que eram sempre os mesmos (±1%; pelo menos 2). Quando o valor novo se repete, os anteriores
+ * deixam de ser todos iguais e o aviso desaparece sozinho. [{ key, description, from, to, date }]
+ */
+function priceRises(list = recurringExpenses()) {
+  return list.flatMap(x => {
+    const before = x.amounts.slice(0, -1), to = x.amounts[x.amounts.length - 1];
+    if (before.length < 2) return [];
+    const lo = Math.min(...before), from = Math.max(...before);
+    if (from - lo > from * 0.01 || to <= from * 1.02) return [];
+    return [{ key: x.key, description: x.description, from, to, date: x.last }];
+  });
 }
 
 // ════════ INVESTIMENTOS ════════
@@ -699,6 +716,10 @@ function reserveSources(all = false) {
  *   perMonth   quanto é preciso juntar por mês para chegar a tempo = o que falta / monthsLeft (no mês do prazo, o que falta)
  *   state      'done' (chegou), 'ok' (a este ritmo chega a tempo), 'behind' (não chega, ou ainda não se sabe o ritmo),
  *              'late' (o prazo passou) ou '' (sem prazo)
+ *   monthly    reserva mensal planeada (só nas metas com reservas; null sem plano) e monthlySource, de onde sai. Sem ritmo
+ *              (ainda não há um mês completo), o eta e o state usam o plano (fromPlan = true).
+ *              monthlyDue = há plano, a meta não está atingida e este mês ainda não se reservou nada para ela;
+ *              monthlyAmount = o que reservar este mês (o plano, ou o que falta, se for menos)
  */
 function goalStatus(goal) {
   const now = thisMonth(), end = addMonths(now, -1);
@@ -725,22 +746,94 @@ function goalStatus(goal) {
     rate = round2((valueAt(end) - valueAt(start)) / rateMonths);
   }
   const done = current >= goal.target, left = done ? 0 : round2(goal.target - current);
+  const monthly = !networth && goal.monthly > 0 ? goal.monthly : null;
+  const fromPlan = rate === null && monthly !== null, pace = fromPlan ? monthly : rate;
   let eta = null, far = false;
-  if (!done && rate > 0) {
-    const n = Math.ceil(left / rate);
+  if (!done && pace > 0) {
+    const n = Math.ceil(left / pace);
     if (n > 600) far = true; else eta = addMonths(now, n);
   }
+  const monthlyDue = monthly !== null && !done
+    && !D.reservations.some(r => r.goal_id === goal.id && r.move === 'reserve' && ymOf(r.date) === now);
   const deadline = goal.deadline || null;
   const monthsLeft = deadline ? monthsDiff(now, deadline) : null;
   const perMonth = deadline && !done && monthsLeft >= 0 ? round2(left / Math.max(1, monthsLeft)) : null;
   const state = done ? 'done' : !deadline ? '' : monthsLeft < 0 ? 'late' : eta && eta <= deadline ? 'ok' : 'behind';
   return { id: goal.id, name: goal.name, target: goal.target, deadline, source: networth ? 'networth' : 'reserve', sources,
     current, left, ratio: Math.min(1, Math.max(0, current / goal.target)), done, rate, rateMonths, eta, far, monthsLeft,
-    perMonth, state };
+    perMonth, state, monthly, monthlySource: monthly !== null ? goal.monthly_source || null : null, fromPlan, monthlyDue,
+    monthlyAmount: monthly !== null ? round2(Math.min(monthly, left)) : 0 };
 }
 
 /** Todas as metas: primeiro as que faltam, das de prazo mais próximo para as sem prazo, e por fim as atingidas. */
 function goalsStatus() {
   return D.goals.map(goalStatus).sort((a, b) => a.done - b.done
     || (a.deadline || '9999-99').localeCompare(b.deadline || '9999-99') || a.name.localeCompare(b.name, 'pt'));
+}
+
+// ════════ AVISOS DA PÁGINA INICIAL ════════
+
+/**
+ * O que precisa de atenção, para o painel "A ver" da página inicial, dos mais graves para os menos:
+ *   - reservou-se numa conta mais do que lá há; uma meta cujo prazo passou ou a que o ritmo já não chega a tempo
+ *   - orçamentos deste mês a 80% ou mais
+ *   - investimentos ainda com valor e créditos ainda por pagar sem o valor / saldo do mês passado
+ *   - reservas mensais das metas por fazer este mês; despesas fixas que subiram de preço (priceRises)
+ * Cada aviso: { id, level ('bad' | 'warn' | 'info'), text (texto simples, sem HTML), action: { label, type, arg } }.
+ * O id muda quando o aviso muda (ex.: inclui o mês), para um aviso dispensado voltar a aparecer quando houver outro igual.
+ */
+function homeAlerts() {
+  const now = thisMonth(), prev = addMonths(now, -1), out = [];
+  const add = (id, level, text, label, type, arg = '') => out.push({ id, level, text, action: { label, type, arg } });
+
+  for (const x of reserveSources().filter(x => x.free < 0)) {
+    add(`over:${x.id}:${now}`, 'bad', `Em ${x.name} reservaste ${eur(-x.free)} a mais do que lá tens (${eur(x.value)}): tira esse valor de alguma meta.`,
+      'Ver metas', 'goals');
+  }
+  for (const g of goalsStatus()) {
+    if (g.state === 'late') {
+      add(`late:${g.id}:${now}`, 'bad', `${g.name}: o prazo acabou em ${monthLabel(g.deadline)} e faltam ${eur(g.left)}.`, 'Editar meta', 'goal-edit', g.id);
+    } else if (g.state === 'behind' && (g.rate !== null || g.fromPlan)) {
+      const pace = g.fromPlan ? `com os ${eurShort(g.monthly)}/mês planeados` : `ao ritmo atual (${eurSignedShort(g.rate)}/mês)`;
+      add(`behind:${g.id}:${now}`, 'warn', g.eta
+        ? `${g.name}: ${pace} só chegas lá em ${monthLabel(g.eta)}; o prazo é ${monthLabel(g.deadline)}. Precisas de ${eurShort(g.perMonth)}/mês.`
+        : `${g.name}: ${pace} não chegas lá; para o prazo de ${monthLabel(g.deadline)} precisas de ${eurShort(g.perMonth)}/mês.`,
+        'Editar meta', 'goal-edit', g.id);
+    }
+    if (g.monthlyDue) {
+      if (!g.monthlySource || !(findById('accounts', g.monthlySource) || findById('investments', g.monthlySource))) {
+        add(`monthly:${g.id}:${now}`, 'warn', `${g.name}: a conta das reservas mensais foi apagada; escolhe outra.`, 'Editar meta', 'goal-edit', g.id);
+      } else {
+        add(`monthly:${g.id}:${now}`, 'info', `${g.name}: ainda não reservaste os ${eur(g.monthlyAmount)} deste mês (de ${sourceName(g.monthlySource)}).`,
+          `Reservar ${eur(g.monthlyAmount)}`, 'goal-monthly', g.id);
+      }
+    }
+  }
+
+  const tight = budgetStatus(now, now).filter(b => b.state !== 'ok');
+  if (tight.length) {
+    add(`budget:${now}:${tight.map(b => b.category).join('|')}`, tight.some(b => b.state === 'over') ? 'bad' : 'warn',
+      `Orçamentos de ${monthLabel(now)}: ${tight.map(b => b.state === 'over' ? `${b.category} ${eur(-b.left)} acima do limite`
+        : `${b.category} a ${Math.round(b.ratio * 100)}%`).join(', ')}.`, 'Ver movimentos', 'mov');
+  }
+
+  const invs = D.investments.filter(i => !i.archived && (firstInvestmentMonth([i.id]) || now) < now && investmentSummary(i.id).value > 0)
+    .map(i => ({ i, last: investmentSummary(i.id).lastValMonth })).filter(x => !x.last || x.last < prev);
+  if (invs.length) {
+    add(`inv:${prev}:${invs.map(x => x.i.id).join('|')}`, 'warn', `Investimentos sem o valor de ${monthLabel(prev)}: ${invs.map(x =>
+      `${x.i.name} (${x.last ? `último: ${monthLabel(x.last)}` : 'nenhum valor'})`).join(', ')}.`, 'Atualizar mês', 'inv-month');
+  }
+  const loans = D.loans.filter(l => !l.archived && ymOf(l.start_date) < now && loanCurrent(l) > 0).map(l => ({ l,
+    last: D.loan_balances.reduce((m, b) => (b.loan_id === l.id && b.month > m ? b.month : m), '') || null })).filter(x => !x.last || x.last < prev);
+  if (loans.length) {
+    add(`loan:${prev}:${loans.map(x => x.l.id).join('|')}`, 'warn', `Créditos sem o saldo de ${monthLabel(prev)}: ${loans.map(x =>
+      `${x.l.name} (${x.last ? `último: ${monthLabel(x.last)}` : 'nenhum saldo'})`).join(', ')}.`, 'Atualizar mês', 'loan-month');
+  }
+
+  for (const r of priceRises()) {
+    add(`rise:${r.key}:${r.date}`, 'info', `${r.description}: passou de ${eur(r.from)} para ${eur(r.to)} (${eurSigned(round2(r.to - r.from))}/mês).`,
+      'Ver despesas fixas', 'recurring');
+  }
+  const order = { bad: 0, warn: 1, info: 2 };
+  return out.sort((a, b) => order[a.level] - order[b.level]);
 }

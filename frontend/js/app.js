@@ -283,7 +283,8 @@ function renderAll() {
 }
 
 // Os 5 números da página inicial: contas, investimentos, imóveis, dívidas (nos cartões) e património líquido.
-// O gráfico da evolução e as metas de poupança só são desenhados com a página inicial à vista (como os gráficos dos separadores).
+// Os avisos, as metas de poupança e o gráfico da evolução só são desenhados com a página inicial à vista (como os gráficos
+// dos separadores).
 function renderNetWorth() {
   const nw = netWorth();
   $('#nw-accounts').textContent = eur(nw.accounts);
@@ -291,7 +292,7 @@ function renderNetWorth() {
   $('#nw-properties').textContent = eur(nw.properties);
   $('#nw-debt').textContent = nw.debt ? '−' + eur(nw.debt) : eur(0);
   $('#nw-total').textContent = eur(nw.total);
-  if (S.tab === 'home') { renderGoals(); renderNetWorthChart(); }
+  if (S.tab === 'home') { renderAlerts(); renderGoals(); renderNetWorthChart(); }
 }
 
 // Gráfico da página inicial: o património líquido no fim de cada mês; a tooltip mostra de que é feito
@@ -320,17 +321,49 @@ function renderNetWorthChart() {
   $('#nw-chart-note').classList.toggle('hidden', !enough || !D.properties.length);
 }
 
+// ── avisos (painel "A ver" da página inicial; homeAlerts no calc.js) ──
+// O que precisa de atenção, cada um com um botão para o resolver e ✕ para o dispensar. Um aviso dispensado fica guardado
+// neste aparelho (localStorage "ledger.dismissed", os últimos 100) e só volta se mudar (ex.: no mês seguinte). Sem avisos,
+// o painel não aparece.
+const DISMISSED_KEY = 'ledger.dismissed';
+function dismissedAlerts() {
+  try { const v = JSON.parse(localStorage.getItem(DISMISSED_KEY) || '[]'); return Array.isArray(v) ? v : []; } catch { return []; }
+}
+function dismissAlert(id) {
+  try { localStorage.setItem(DISMISSED_KEY, JSON.stringify([...dismissedAlerts().filter(x => x !== id), id].slice(-100))); } catch { /* sem armazenamento */ }
+  renderAlerts();
+}
+function renderAlerts() {
+  const hidden = new Set(dismissedAlerts());
+  const alerts = homeAlerts().filter(a => !hidden.has(a.id));
+  $('#alerts-panel').classList.toggle('hidden', !alerts.length);
+  $('#alerts').innerHTML = alerts.map(a => `<div class="alert ${a.level}">
+    <span class="alert-dot" aria-hidden="true"></span><span class="alert-text">${esc(a.text)}</span>
+    <span class="alert-actions"><button class="btn" data-alert-act="${esc(a.action.type)}" data-alert-arg="${esc(a.action.arg)}">${esc(a.action.label)}</button>
+      <button class="icon-btn" data-alert-dismiss="${esc(a.id)}" aria-label="Dispensar este aviso" title="Dispensar (volta se mudar)">✕</button></span>
+  </div>`).join('');
+}
+// O botão de cada aviso: abre o que resolve o aviso
+function alertAction(type, arg) {
+  if (type === 'inv-month') return investmentMonthGrid();
+  if (type === 'loan-month') return loanMonthGrid();
+  if (type === 'mov') return go('mov');
+  if (type === 'recurring') { go('mov'); return recurringModal(); }
+  if (type === 'goals') return $('#goals').closest('.panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  const goal = findById('goals', arg);
+  if (goal && type === 'goal-edit') return goalForm(goal);
+  if (goal && type === 'goal-monthly') return reserveMonthly(goal);
+}
+
 // ── metas de poupança (painel da página inicial; goalStatus e reserveSources no calc.js) ──
 // Cada meta: quanto já há e quanto falta, com uma barra, e a que ritmo se lá chega. Com prazo, quanto é preciso por mês
 // e a barra fica verde se o ritmo chega, laranja se não chega e vermelha se o prazo passou. Por cima, quanto ainda está
-// livre nas contas e investimentos onde há reservas (e um aviso se se reservou mais do que lá há).
+// livre nas contas e investimentos onde há reservas (o aviso de se ter reservado mais do que lá há está no painel "A ver").
 function renderGoals() {
   const goals = goalsStatus(), sources = reserveSources();
   $('#goals').innerHTML = goals.length ? `
     ${sources.length ? `<div class="goal-free">Livre para reservar: ${sources.map(x =>
       `${esc(x.name)} <b class="${x.free < 0 ? 'neg' : ''}">${x.free < 0 ? '−' + eur(-x.free) : eur(x.free)}</b>`).join(' · ')}</div>` : ''}
-    ${sources.filter(x => x.free < 0).map(x => `<div class="goal-free neg">Em ${esc(x.name)} reservaste ${eur(-x.free)} a mais do que
-      lá tens (${eur(x.value)}): tira esse valor de alguma meta.</div>`).join('')}
     <div class="goal-list">${goals.map(goalHtml).join('')}</div>`
     : `<div class="empty">Ainda não tens metas de poupança.<br>Uma meta é um valor que queres juntar (fundo de emergência, entrada da casa,
         férias…), com ou sem prazo. Vais reservando para ela partes da tua poupança, sem precisares de uma conta só para isso.<br>
@@ -340,7 +373,8 @@ function renderGoals() {
 function goalHtml(g) {
   const reserve = g.source === 'reserve';
   const what = !reserve ? 'Património líquido'
-    : g.sources.length ? 'Reservado em ' + g.sources.map(x => `${x.name} (${eurShort(x.amount)})`).join(', ') : 'Ainda sem reservas';
+    : (g.sources.length ? 'Reservado em ' + g.sources.map(x => `${x.name} (${eurShort(x.amount)})`).join(', ') : 'Ainda sem reservas')
+      + (g.monthly ? ` · ${eurShort(g.monthly)}/mês planeados` : '');
   const months = `${g.rateMonths} ${g.rateMonths === 1 ? 'mês' : 'meses'}`;
   const rate = g.rate === null ? '' : `${eurSignedShort(g.rate)}/mês`;
   let plan = '', pace = '';
@@ -353,7 +387,8 @@ function goalHtml(g) {
         : `Precisas de juntar <b>${eurShort(g.perMonth)}/mês</b> até ${monthLabel(g.deadline)}.`;
     }
     const cls = { ok: 'pos', behind: 'warn', late: 'neg' }[g.state] || '';
-    pace = g.rate === null ? (reserve && !g.sources.length ? 'Carrega em "+ Reservar" para pores dinheiro de parte para esta meta.'
+    pace = g.fromPlan ? `<span class="${cls}">Com os ${eurShort(g.monthly)}/mês planeados ${g.far ? 'demoras mais de 50 anos' : `chegas lá em ${monthLabel(g.eta)}`}.</span>`
+      : g.rate === null ? (reserve && !g.sources.length ? 'Carrega em "+ Reservar" para pores dinheiro de parte para esta meta.'
         : 'Ainda não há um mês completo para saber a que ritmo estás a juntar.')
       : g.rate <= 0 ? `<span class="${g.deadline ? 'neg' : ''}">Nos últimos ${months} ${reserve ? 'não reservaste nada' : 'o valor não subiu'} (${rate}).</span>`
       : g.far ? `<span class="${cls}">Ao ritmo atual (${rate}) demoras mais de 50 anos.</span>`
@@ -378,16 +413,23 @@ function goalHtml(g) {
 // património líquido (as reservas ficavam a ocupar dinheiro sem se verem): primeiro tiram-se.
 function goalForm(goal = null) {
   const hasReservations = !!goal && D.reservations.some(r => r.goal_id === goal.id);
+  const reserving = v => hasReservations || v.source === 'reserve';
+  const sourceOptions = reserveSources(true).map(x => ({ value: x.id, label: x.name }));
   formModal({
     title: goal ? 'Editar meta' : 'Nova meta de poupança',
-    values: goal ? { ...goal, deadline: goal.deadline || '', source: goal.source === 'networth' ? 'networth' : 'reserve' }
-      : { source: 'reserve' },
+    values: goal ? { ...goal, deadline: goal.deadline || '', source: goal.source === 'networth' ? 'networth' : 'reserve',
+      monthly: goal.monthly ?? '', monthly_source: goal.monthly_source || sourceOptions[0]?.value || '' }
+      : { source: 'reserve', monthly_source: sourceOptions[0]?.value || '' },
     fields: [
       { name: 'name', label: 'Nome', type: 'text', required: true, placeholder: 'ex.: Fundo de emergência, Entrada da casa' },
       { name: 'target', label: 'Valor a juntar (€)', type: 'money', required: true, positive: true, half: true },
       { name: 'deadline', label: 'Até', type: 'month', half: true, hint: 'O mês em que queres lá chegar.' },
       { name: 'source', label: 'Como se junta', type: 'seg', required: true, showIf: () => !hasReservations, options: [
         { value: 'reserve', label: 'Com reservas' }, { value: 'networth', label: 'Património líquido' }] },
+      { name: 'monthly', label: 'Reservar por mês (€)', type: 'money', positive: true, half: true, showIf: reserving,
+        hint: 'No início de cada mês, a página inicial pergunta se queres fazer esta reserva.' },
+      { name: 'monthly_source', label: 'De onde', type: 'select', options: sourceOptions, half: true,
+        showIf: v => reserving(v) && String(v.monthly ?? '').trim() !== '' },
     ],
     intro: hasReservations ? 'Esta meta já tem reservas. Para a passares a acompanhar o património líquido, tira-as primeiro.'
       : goal ? '' : 'Com reservas, pões de parte para a meta partes do saldo das tuas contas ou investimentos (em "+ Reservar / tirar"),'
@@ -395,8 +437,10 @@ function goalForm(goal = null) {
       + ' (ex.: "chegar aos 100 mil").',
     onSubmit: async v => {
       if (v.deadline && !/^\d{4}-\d{2}$/.test(v.deadline)) throw new Error('"Até" tem de ser um mês (AAAA-MM)');
-      await saveItems([{ kind: 'goal', id: goal?.id, name: v.name, target: v.target, deadline: v.deadline || '',
-        source: hasReservations ? 'reserve' : v.source }]);
+      const source = hasReservations ? 'reserve' : v.source;
+      if (source === 'reserve' && v.monthly && !v.monthly_source) throw new Error('Escolhe de onde vêm as reservas mensais');
+      await saveItems([{ kind: 'goal', id: goal?.id, name: v.name, target: v.target, deadline: v.deadline || '', source,
+        ...(source === 'reserve' && v.monthly ? { monthly: v.monthly, monthly_source: v.monthly_source } : {}) }]);
       toast(goal ? 'Meta atualizada' : 'Meta criada');
     },
     danger: goal && { label: 'Apagar meta', onClick: async () => {
@@ -446,6 +490,19 @@ function reserveModal(goal) {
       toast(v.move === 'reserve' ? 'Reserva feita' : 'Dinheiro tirado da meta');
     },
   });
+}
+
+// Faz a reserva mensal planeada de uma meta (botão do aviso "ainda não reservaste…"): o valor do plano (ou o que falta),
+// hoje, da conta ou investimento do plano, se lá houver dinheiro livre que chegue
+async function reserveMonthly(goal) {
+  const g = goalStatus(goal), x = reserveSources(true).find(s2 => s2.id === g.monthlySource);
+  if (!g.monthlyDue) return;
+  if (!x) return toast('Escolhe de onde vêm as reservas mensais (✎ na meta)', true);
+  if (g.monthlyAmount > x.free) return toast(`Em ${x.name} só tens ${eur(Math.max(0, x.free))} livres`, true);
+  try {
+    await saveItems([{ kind: 'reservation', goal_id: goal.id, source_id: x.id, move: 'reserve', amount: g.monthlyAmount, date: todayISO() }]);
+    toast(`Reservados ${eur(g.monthlyAmount)} para ${goal.name}`);
+  } catch (e) { toast(e.message, true); }
 }
 
 // Aviso ao apagar uma conta ou um investimento com dinheiro reservado para metas (as reservas feitas lá também são apagadas)
@@ -1650,7 +1707,7 @@ $('#adm-filter').addEventListener('change', e => { S.adminUser = e.target.value;
 // Um único "listener" para a página toda (delegação de eventos): funciona também para botões
 // criados depois, dentro das tabelas. O atributo diz o que fazer (ex.: data-edit-tx="<id>").
 document.addEventListener('click', e => {
-  const el = e.target.closest('[data-action],[data-edit-acc],[data-edit-tx],[data-del-tx],[data-edit-inv],[data-inv-focus],[data-edit-imv],[data-del-imv],[data-edit-loan],[data-sim-loan],[data-edit-prop],[data-edit-goal],[data-goal-reserve],[data-del-gres]');
+  const el = e.target.closest('[data-action],[data-edit-acc],[data-edit-tx],[data-del-tx],[data-edit-inv],[data-inv-focus],[data-edit-imv],[data-del-imv],[data-edit-loan],[data-sim-loan],[data-edit-prop],[data-edit-goal],[data-goal-reserve],[data-del-gres],[data-alert-act],[data-alert-dismiss]');
   if (!el) return;
   const d = el.dataset;
   if (d.invFocus) { e.preventDefault(); S.invFilter = d.invFocus; renderInvestments(); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
@@ -1666,6 +1723,8 @@ document.addEventListener('click', e => {
   if (d.editGoal) return goalForm(findById('goals', d.editGoal));
   if (d.goalReserve) return reserveModal(findById('goals', d.goalReserve));
   if (d.delGres) return deleteReservation(d.delGres);
+  if (d.alertAct) return alertAction(d.alertAct, d.alertArg);
+  if (d.alertDismiss) return dismissAlert(d.alertDismiss);
   switch (d.action) {
     case 'acc-new': return accountForm();
     case 'tx-new': return txForm();
@@ -1698,6 +1757,23 @@ function updateThemeButton() {
 }
 $('#theme-btn').addEventListener('click', () => { setThemeChoice(nextThemeChoice(themeChoice())); updateThemeButton(); });
 updateThemeButton();
+
+// Modo privado (ver privateMode no util.js): o botão esconde ou mostra os valores e volta a desenhar tudo
+function updatePrivateButton() {
+  const btn = $('#private-btn');
+  btn.querySelector('.theme-icon').textContent = privateMode ? '🙈' : '👁';
+  btn.querySelector('.private-label').textContent = privateMode ? 'Mostrar' : 'Ocultar';
+  btn.title = privateMode ? 'Mostrar os valores' : 'Esconder os valores (modo privado)';
+  btn.setAttribute('aria-label', btn.title);
+  btn.setAttribute('aria-pressed', String(privateMode));
+}
+$('#private-btn').addEventListener('click', () => {
+  setPrivateMode(!privateMode);
+  updatePrivateButton();
+  destroyCharts();
+  renderAll();
+});
+updatePrivateButton();
 document.addEventListener('ledger-theme', () => {
   applyChartTheme();
   destroyCharts();

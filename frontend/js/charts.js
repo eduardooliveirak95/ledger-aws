@@ -56,8 +56,9 @@ function moneyAxis(extra = {}) {
 function catAxis(extra = {}) {
   return { grid: { display: false }, border: { color: GRID }, ticks: { maxRotation: 0, autoSkipPadding: 12 }, ...extra };
 }
-// Formato curto para eixos: 950 € · 1,2k € · 15k € · 1,3M €
+// Formato curto para eixos: 950 € · 1,2k € · 15k € · 1,3M € (no modo privado, "•••")
 function compactEur(v) {
+  if (privateMode) return '•••';
   const a = Math.abs(v);
   const s = a >= 1e6 ? (a / 1e6).toFixed(1).replace('.', ',') + 'M' : a >= 1e3 ? (a / 1e3).toFixed(a >= 1e4 ? 0 : 1).replace('.', ',') + 'k' : a.toFixed(0);
   return (v < 0 ? '−' : '') + s + ' €';

@@ -111,6 +111,30 @@ test('o ritmo só começa depois do primeiro mês com reservas', () => {
   assert.deepEqual([s.current, s.rate, s.sources, s.ratio], [0, null, [], 0]);
 });
 
+test('reserva mensal planeada: sem ritmo, o plano dá a data de chegada; fica por fazer até haver uma reserva este mês', () => {
+  const plan = { ...FUND, monthly: 500, monthly_source: ACC1 };
+  // só um mês com reservas: ainda não há ritmo; 8000 € em falta a 500 €/mês são 16 meses (fev 2028, depois do prazo)
+  load({ ...SAVINGS, reservations: [res(G1, ACC1, '2026-09-02', 2000)] });
+  let s = status(plan);
+  assert.deepEqual([s.rate, s.fromPlan, s.monthly, s.monthlySource, s.eta, s.state, s.monthlyDue, s.monthlyAmount],
+    [null, true, 500, ACC1, '2028-02', 'behind', true, 500]);
+  // tirar dinheiro este mês não conta; uma reserva este mês (de qualquer valor e de qualquer conta) já conta
+  load({ ...SAVINGS, reservations: [res(G1, ACC1, '2026-09-02', 2000), res(G1, ACC1, '2026-10-01', 100, 'release')] });
+  assert.equal(status(plan).monthlyDue, true);
+  load({ ...SAVINGS, reservations: [res(G1, ACC1, '2026-09-02', 2000), res(G1, INV1, '2026-10-01', 50)] });
+  assert.equal(status(plan).monthlyDue, false);
+  // perto do fim, só o que falta; atingida, nada por fazer
+  load({ ...SAVINGS, reservations: [res(G1, ACC1, '2026-09-02', 9800)] });
+  assert.equal(status(plan).monthlyAmount, 200);
+  load({ ...SAVINGS, reservations: [res(G1, ACC1, '2026-09-02', 10000)] });
+  assert.deepEqual([status(plan).done, status(plan).monthlyDue], [true, false]);
+  // com ritmo, o plano não mexe na data de chegada; nas metas do património líquido não há plano
+  load(SAVINGS);
+  s = status(plan);
+  assert.deepEqual([s.fromPlan, s.eta], [false, '2027-09']);
+  assert.deepEqual([status({ ...plan, source: 'networth' }).monthly, status({ ...plan, source: 'networth' }).monthlyDue], [null, false]);
+});
+
 test('as metas do primeiro dia (contas inteiras) contam como metas com reservas', () => {
   load(SAVINGS);
   const s = status({ ...FUND, source: 'selected', parts: [ACC1] });

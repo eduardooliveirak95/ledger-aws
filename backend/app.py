@@ -537,6 +537,14 @@ def build(user, raw):
         )
         if str(raw.get("deadline") or "").strip():
             item["deadline"] = v_month(raw.get("deadline"), "deadline")
+        # Reserva mensal planeada (opcional, só nas metas com reservas): quanto reservar todos os meses e de que conta ou
+        # investimento. No início de cada mês, a página inicial pergunta se se quer fazer essa reserva.
+        monthly = v_num(raw.get("monthly"), "monthly", positive=True, optional=True)
+        if monthly is not None and item["source"] == "reserve":
+            src = raw.get("monthly_source")
+            if not isinstance(src, str) or not (ID_RE["account"].match(src) or ID_RE["investment"].match(src)):
+                raise ValueError("monthly_source: referência inválida")
+            item.update(monthly=monthly, monthly_source=src)
 
     elif kind == "reservation":
         # Reserva para uma meta: parte do saldo de uma conta (ou do valor de um investimento) posta de lado para a meta

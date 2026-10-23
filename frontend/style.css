@@ -361,6 +361,14 @@ table.budget-edit td.budget-limit { width: 140px; }   /* campo do limite na jane
 .goal-nums { font-family: var(--font-num); font-size: 13px; font-weight: 600; margin-top: 2px; }
 .goal-text { font-size: 12px; line-height: 1.5; color: var(--text); }
 .goal-actions { margin-top: auto; padding-top: 4px; }
+/* Avisos da página inicial ("A ver"): uma linha por aviso, com uma bola da cor da gravidade, o texto e os botões */
+.alert { display: flex; align-items: center; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--border); font-size: 13px; line-height: 1.5; }
+.alert:last-child { border-bottom: none; }
+.alert-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.alert.warn .alert-dot { background: var(--warn); }
+.alert.bad .alert-dot { background: var(--neg); }
+.alert-text { flex: 1; min-width: 0; color: var(--text); }
+.alert-actions { flex: none; display: flex; align-items: center; gap: 4px; }
 .goal-free { padding: 12px 18px 0; font-size: 12px; color: var(--muted); line-height: 1.6; }
 .goal-free b { font-family: var(--font-num); color: var(--text); font-weight: 600; }
 .goal-free.neg, .goal-free b.neg { color: var(--neg); }
@@ -480,7 +488,9 @@ table.grid-edit .num { font-family: var(--font-num); text-align: right; color: v
   .field-row, .map-grid { grid-template-columns: 1fr; }
   .user-box { gap: 6px; }
   .user-box .btn { padding-left: 8px; padding-right: 8px; }   /* os botões de baixo cabem em 2 linhas a partir de 360 px */
-  .theme-label { display: none; }   /* botão do tema só com o ícone, para a barra do topo caber em duas linhas */
+  .theme-label, .private-label { display: none; }   /* botões do tema e do modo privado só com o ícone, para a barra do topo caber em duas linhas */
+  .alert { flex-wrap: wrap; row-gap: 6px; }   /* avisos: os botões passam para baixo do texto */
+  .alert-actions { width: 100%; padding-left: 20px; }
   /* Só "Ledger" no topo: o "← Início" e o menu cabem ao lado em todos os separadores (o topo fica sempre com a mesma
      altura); num ecrã ainda mais estreito, o nome do separador encolhe com "…" em vez de passar para a linha de baixo */
   .logo-btn span { display: none; }

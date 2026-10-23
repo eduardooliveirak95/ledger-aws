@@ -94,6 +94,8 @@
     </label>
     <!-- Tema: automático (segue o telemóvel ou o PC) → claro → escuro; o texto é posto pelo app.js -->
     <button class="btn" id="theme-btn"><span class="theme-icon" aria-hidden="true">🌓</span><span class="theme-label">Auto</span></button>
+    <!-- modo privado: esconde os valores em euros (privateMode no util.js) -->
+    <button class="btn" id="private-btn" aria-pressed="false"><span class="theme-icon" aria-hidden="true">👁</span><span class="private-label">Ocultar</span></button>
     <button class="btn" id="password-btn" title="Mudar a tua password">🔑 Password</button>
     <button class="btn danger" id="logout-btn">Sair</button>
   </div>
@@ -107,6 +109,11 @@
     <div class="home-total">
       <div class="nw-label">Património líquido</div>
       <div class="home-total-value" id="nw-total">—</div>
+    </div>
+    <!-- avisos: o que precisa de atenção (homeAlerts no calc.js, renderAlerts no app.js); só aparece se houver algum -->
+    <div class="panel hidden" id="alerts-panel" style="margin-top:16px">
+      <div class="panel-header"><div class="panel-title">A ver</div></div>
+      <div id="alerts"></div>
     </div>
     <div class="home-grid">
       <button class="home-card" data-go="mov">

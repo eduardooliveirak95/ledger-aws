@@ -447,6 +447,18 @@ def test_goals_are_saved_and_validated(table):
         assert status == 400 and body["detail"], bad
     # o backup não inclui as metas (tal como os orçamentos)
     assert not any("Casa" in content for _, content in app.backup_files("u1", "2026-10-19"))
+    # reserva mensal planeada: valor > 0 e de onde (conta ou investimento); numa meta do património líquido não se guarda
+    acc = "ACC_" + "a" * 12
+    m = save([dict(base, monthly="300", monthly_source=acc)])["saved"][0]
+    assert m["monthly"] == 300 and m["monthly_source"] == acc
+    m2 = save([dict(base, id=m["id"], monthly="")])["saved"][0]
+    assert "monthly" not in m2 and "monthly_source" not in m2
+    nw = save([dict(base, source="networth", monthly=300, monthly_source=acc)])["saved"][0]
+    assert "monthly" not in nw and "monthly_source" not in nw
+    for bad in ({"monthly": 300}, {"monthly": 300, "monthly_source": "LOAN_000000000001"}, {"monthly": 300, "monthly_source": [acc]},
+                {"monthly": 0, "monthly_source": acc}, {"monthly": -1, "monthly_source": acc}, {"monthly": "x", "monthly_source": acc}):
+        status, body = call("POST /items", body={"items": [{**base, **bad}]})
+        assert status == 400 and body["detail"], bad
 
 
 def test_reservations_are_validated_and_deleted_with_their_goal_or_source(table):

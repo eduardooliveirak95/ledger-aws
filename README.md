@@ -18,11 +18,13 @@ No telemóvel dá para pôr o Ledger no ecrã principal, com ícone próprio e s
 
 O botão do tema, no topo, passa de automático (segue o telemóvel ou o computador) a claro e a escuro. A escolha fica guardada só nesse aparelho.
 
+O botão 👁, ao lado, esconde todos os valores em euros (aparecem como ••• €) até voltares a carregar nele. Dá jeito para abrir a app em público. Também fica guardado só nesse aparelho, e os ficheiros exportados continuam com os valores todos.
+
 Se te esqueceres da password, fala com o administrador, que te dá uma temporária. No login seguinte escolhes uma nova.
 
 ## Separadores
 
-Depois de entrar aparece a página inicial com o património líquido (contas + investimentos + imóveis − créditos), um cartão por separador, as metas de poupança e um gráfico com a evolução mês a mês. Carrega num cartão para abrir o separador. Lá dentro, "← Início" volta à página inicial e o nome do separador, no topo, abre um menu para saltar para outro. O botão de voltar do browser ou do telemóvel também leva à página inicial.
+Depois de entrar aparece a página inicial com o património líquido (contas + investimentos + imóveis − créditos), os avisos, um cartão por separador, as metas de poupança e um gráfico com a evolução mês a mês. Carrega num cartão para abrir o separador. Lá dentro, "← Início" volta à página inicial e o nome do separador, no topo, abre um menu para saltar para outro. O botão de voltar do browser ou do telemóvel também leva à página inicial.
 
 O que vai em cada um e o que fazer todos os meses:
 
@@ -31,11 +33,17 @@ O que vai em cada um e o que fazer todos os meses:
 - Créditos: quanto deves, quanto já pagaste e quanto foi juro. Em "Atualizar mês" pões o saldo em dívida, a prestação e a amortização extra, se houver.
 - Património: casa, terreno, garagem e quanto valem. Atualizas o valor quando mudar, no ✎ do imóvel.
 
+### Avisos
+
+Por baixo do património líquido aparece "A ver", com o que precisa de atenção: investimentos sem o valor do mês passado, créditos sem o saldo do mês passado, orçamentos deste mês a 80% ou mais, despesas fixas que subiram de preço, metas que já não chegam a tempo ou cujo prazo passou, dinheiro reservado a mais numa conta e a reserva mensal de uma meta por fazer. Cada aviso tem um botão para o resolver e um ✕ para o dispensar. Um aviso dispensado só volta se mudar, por exemplo no mês seguinte. Sem avisos, a secção não aparece.
+
 ### Metas de poupança
 
 Na página inicial, em "+ Meta", dizes quanto queres juntar (um fundo de emergência, a entrada da casa, umas férias) e, se quiseres, até que mês.
 
 Não precisas de uma conta só para cada meta. Em "+ Reservar / tirar" pões de parte para a meta uma parte do saldo de uma conta ou do valor de um investimento. O dinheiro não sai da conta, só passa a ter destino. Várias metas podem ter dinheiro reservado na mesma conta, e por cima das metas aparece quanto ainda está livre em cada uma. Se gastares dinheiro que estava reservado, aparece um aviso para o tirares de alguma meta. Apagar uma meta apaga as reservas dela e o dinheiro fica livre.
+
+Na meta podes pôr quanto queres reservar por mês e de onde. No início de cada mês, os avisos perguntam se queres fazer essa reserva, e basta um toque. Enquanto ainda não houver um mês completo de reservas, é com esse valor que a app calcula quando lá chegas.
 
 Em vez de reservas, uma meta pode acompanhar o património líquido todo, por exemplo para chegar aos 100 mil.
 
