@@ -1,0 +1,753 @@
+// ── csv.js: exportação, modelos e importação de ficheiros CSV ─────────────
+// Os ficheiros usam ";" e vírgula decimal para abrirem bem no Excel em português.
+// A importação também aceita ficheiros com ",", datas dd/mm/aaaa e o formato da versão antiga da app.
+
+// Lê o texto de um CSV e devolve uma lista de linhas (cada linha = lista de células).
+// - tira o BOM do início (marca que o Excel põe nos ficheiros UTF-8)
+// - descobre o separador (; , ou tab) pelo que aparece mais vezes na primeira linha, se não for indicado
+//   (os extratos do banco começam com uma linha de título sem separadores: usam sempre ";")
+// - respeita aspas: "a;b" é uma só célula e "" dentro de aspas é uma aspa literal
+// - tira a ' que o toCSV põe antes de textos começados por = + - @, tab ou retorno do carro (ver toCSV)
+// - ignora linhas vazias
+function parseCSV(text, delim) {
+  text = text.replace(/^﻿/, '');
+  const firstLine = text.split(/\r?\n/, 1)[0];
+  delim = delim || [';', ',', '\t'].reduce((best, d) => (firstLine.split(d).length > firstLine.split(best).length ? d : best), ';');
+  const rows = [];
+  let row = [], field = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) {
+      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else q = false; }
+      else field += c;
+    } else if (c === '"') q = true;
+    else if (c === delim) { row.push(field); field = ''; }
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      row.push(field); rows.push(row); row = []; field = '';
+    } else field += c;
+  }
+  if (field !== '' || row.length) { row.push(field); rows.push(row); }
+  return rows.filter(r => r.some(x => x.trim() !== '')).map(r => r.map(c => c.replace(/^'(?=[=+\-@\t\r])/, '')));
+}
+
+// Monta o texto de um CSV com ";" (números com 2 casas e vírgula decimal;
+// células com ; aspas ou quebras de linha vão entre aspas).
+// Um texto começado por = + - @, tab ou retorno do carro (\r) seria lido pelo Excel como fórmula (uma
+// descrição vinda do banco podia trazer uma): leva uma ' à frente, que o Excel não mostra e que o parseCSV tira.
+function toCSV(header, rows) {
+  const cell = v => {
+    if (v === null || v === undefined) return '';
+    let s = typeof v === 'number' ? v.toFixed(2).replace('.', ',') : String(v);
+    if (typeof v !== 'number' && /^[=+\-@\t\r]/.test(s)) s = "'" + s;
+    return /[";\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  return [header, ...rows].map(r => r.map(cell).join(';')).join('\r\n');
+}
+
+// ── FORMATOS ──────────────────────────────────────────────────────────────
+// Os formatos próprios da app: cabeçalho das colunas e linhas de exemplo (usadas nos modelos).
+// "Contas" vem primeiro: guarda o tipo e o saldo inicial de cada conta, que os movimentos não têm.
+const FORMATS = {
+  acc: {
+    label: 'Contas',
+    header: ['Conta', 'Tipo de conta', 'Saldo inicial', 'Data do saldo inicial'],
+    example: [
+      ['Conta principal', 'Conta à ordem', 1250, '2024-01-01'],
+      ['Poupança', 'Poupança', 5000, '2024-01-01'],
+    ],
+  },
+  mov: {
+    label: 'Movimentos',
+    header: ['Data', 'Conta', 'Tipo', 'Categoria', 'Descrição', 'Valor', 'Conta destino', 'Aproximado'],
+    example: [
+      ['2024-01-31', 'Conta principal', 'Saída', 'Supermercado', 'Total aproximado do mês', 320, '', 'sim'],
+      ['2024-01-25', 'Conta principal', 'Entrada', 'Salário', '', 1450, '', 'não'],
+      ['2024-02-01', 'Conta principal', 'Transferência', 'Transferência', 'Para poupança', 200, 'Poupança', 'não'],
+    ],
+  },
+  inv: {
+    label: 'Investimentos',
+    header: ['Data', 'Investimento', 'Tipo de investimento', 'Operação', 'Valor', 'Descrição'],
+    example: [
+      ['2024-01-05', 'ETF Mundial', 'ETF', 'Aporte', 200, ''],
+      ['2024-01', 'ETF Mundial', 'ETF', 'Valor', 204.5, 'valor no fim do mês'],
+      ['2024-02-05', 'PPR', 'PPR', 'Aporte', 100, ''],
+      ['2024-03-10', 'ETF Mundial', 'ETF', 'Resgate', 50, ''],
+    ],
+  },
+  loan: {
+    label: 'Créditos',
+    header: ['Mês', 'Crédito', 'Tipo de crédito', 'Saldo em dívida', 'Prestação', 'Montante inicial', 'Data de início', 'Taxa (%)', 'Banco', 'Amortização extra', 'Fim do contrato'],
+    example: [
+      ['2024-01', 'Crédito habitação', 'Habitação', 148200, 650, 150000, '2023-06-15', 3.5, 'Banco X', '', '2063-06-15'],
+      ['2024-02', 'Crédito habitação', 'Habitação', 142700, 650, 150000, '2023-06-15', 3.5, 'Banco X', 5000, '2063-06-15'],
+    ],
+  },
+  prop: {
+    label: 'Património',
+    header: ['Imóvel', 'Tipo de imóvel', 'Valor atual', 'Preço de compra', 'Data de compra', 'Crédito associado', 'Notas'],
+    example: [
+      ['Casa', 'Habitação própria', 250000, 180000, '2023-06-15', 'Crédito habitação', ''],
+    ],
+  },
+};
+
+// Converte os dados da app em linhas de CSV para um formato ('acc', 'mov', 'inv', 'loan' ou 'prop')
+function exportRows(format) {
+  if (format === 'acc') {
+    return sortByName(D.accounts).map(a => [a.name, a.acc_type, a.opening_balance, a.opening_date]);
+  }
+  if (format === 'mov') {
+    return [...D.transactions].sort((a, b) => a.date.localeCompare(b.date)).map(t => [
+      t.date, accountName(t.account_id), DIRECTION_LABEL[t.direction], t.category, t.description, t.amount,
+      t.direction === 'transfer' ? accountName(t.to_account_id) : '', t.approx ? 'sim' : 'não',
+    ]);
+  }
+  if (format === 'inv') {
+    const typeOf = id => findById('investments', id)?.inv_type || '';
+    const rows = D.inv_moves.map(x => [x.date, investmentName(x.investment_id), typeOf(x.investment_id),
+      x.move === 'contribution' ? 'Aporte' : 'Resgate', x.amount, x.description]);
+    rows.push(...D.valuations.map(v => [v.month, investmentName(v.investment_id), typeOf(v.investment_id), 'Valor', v.value, '']));
+    // uma linha sem operação declara o investimento, com as notas na descrição (o ISIN das exportações da corretora fica lá): para os que
+    // não têm registos e para os que têm notas, para não se perder nada
+    for (const i of sortByName(D.investments)) if (i.notes || !rows.some(r => r[1] === i.name)) rows.push(['', i.name, i.inv_type, '', null, i.notes]);
+    // por data e, no mesmo dia ou mês, por investimento (como o backup diário do backend)
+    return rows.sort((a, b) => String(a[0]).localeCompare(String(b[0])) || a[1].localeCompare(b[1], 'pt'));
+  }
+  if (format === 'loan') {
+    const rows = [];
+    for (const l of sortByName(D.loans)) {
+      // a taxa vai como texto (3,125) para não perder a 3.ª casa decimal com o arredondamento a 2 casas
+      const meta = [l.principal, l.start_date, l.rate != null ? String(l.rate).replace('.', ',') : '', l.lender];
+      const bs = D.loan_balances.filter(b => b.loan_id === l.id).sort((a, b) => a.month.localeCompare(b.month));
+      // a primeira linha (sem mês) cria o crédito ao importar, com a prestação dele; nos meses, a prestação só aparece
+      // se tiver sido registada nesse mês (vazio = a do crédito), para o backup voltar exatamente igual
+      rows.push(['', l.name, l.loan_type, null, l.payment ?? null, ...meta, null, l.end_date || '']);
+      for (const b of bs) rows.push([b.month, l.name, l.loan_type, b.balance, b.payment ?? null, ...meta, b.extra || null, l.end_date || '']);
+    }
+    return rows;
+  }
+  if (format === 'prop') {
+    return sortByName(D.properties).map(p => [p.name, p.prop_type, p.value, p.purchase_price ?? null, p.purchase_date || '',
+      p.loan_id ? loanName(p.loan_id) : '', p.notes]);
+  }
+}
+
+// Descarrega o CSV de um separador
+function exportCSV(format) {
+  const rows = exportRows(format);
+  if (!rows.length) { toast('Ainda não há dados para exportar neste separador', true); return; }
+  download(`ledger-${FORMATS[format].label.toLowerCase()}-${todayISO()}.csv`, toCSV(FORMATS[format].header, rows));
+  toast(`${FORMATS[format].label}: ${rows.length} linhas exportadas`);
+}
+
+// Botão "Backup": descarrega os 5 CSV (contas, movimentos, investimentos, créditos, património) de uma vez.
+// O envio por email é automático, uma vez por dia, para quem ligar o "Backup diário" (ver app.js);
+// esses CSV são gerados no backend (backup_rows no app.py) com as mesmas colunas.
+function exportAll() {
+  let files = 0;
+  for (const f of ['acc', 'mov', 'inv', 'loan', 'prop']) {
+    const rows = exportRows(f);
+    if (!rows.length) continue;
+    download(`ledger-${FORMATS[f].label.toLowerCase()}-${todayISO()}.csv`, toCSV(FORMATS[f].header, rows));
+    files++;
+  }
+  toast(files ? `Backup: ${files} ficheiro(s) descarregado(s)` : 'Ainda não há dados', !files);
+}
+
+// Descarrega um modelo vazio (só com as linhas de exemplo) para preencher no Excel
+function downloadTemplate(format) {
+  download(`modelo-${FORMATS[format].label.toLowerCase()}.csv`, toCSV(FORMATS[format].header, FORMATS[format].example));
+}
+
+// ── IMPORTAR: transformar linhas de CSV em itens ─────────────────────────
+// Descobre o formato do ficheiro pelas colunas do cabeçalho (sem acentos e em minúsculas).
+// Devolve 'acc', 'mov', 'inv', 'loan', 'prop', 'legacy' (app antiga), um dos formatos da corretora ('broker_*'), ou null.
+function detectFormat(header) {
+  const h = header.map(norm);
+  // Exportações da corretora (interface em português): transações, extrato de conta e portefólio
+  if (h.includes('isin') && h.includes('id da ordem') && h.includes('quantidade')) return 'broker_tx';
+  if (h.includes('isin') && h.some(x => x.startsWith('descri')) && h.some(x => x.startsWith('mudan')) && h.includes('saldo')) return 'broker_account';
+  if (h.includes('produto') && h.some(x => x.includes('isin')) && h.some(x => x.startsWith('valor')) && !h.includes('data')) return 'broker_portfolio';
+  if (h.includes('operacao') && h.includes('investimento')) return 'inv';
+  if (h.includes('credito') && (h.includes('saldo em divida') || h.includes('mes'))) return 'loan';
+  if (h.includes('imovel') && h.includes('valor atual')) return 'prop';
+  if (h.includes('conta') && h.some(x => x.startsWith('saldo inicial'))) return 'acc';
+  if (h.includes('conta') && h.includes('tipo') && h.includes('valor')) return 'mov';
+  if (h.includes('date') && h.includes('type') && h.some(x => x.startsWith('amount'))) return 'legacy';
+  return null;
+}
+
+// Traduz o tipo escrito no CSV (Entrada, despesa, credito...) para 'in' / 'out' / 'transfer'
+function directionOf(s) {
+  const n = norm(s);
+  if (['entrada', 'in', 'income', 'receita', 'credito'].includes(n)) return 'in';
+  if (['saida', 'out', 'expense', 'despesa', 'debito'].includes(n)) return 'out';
+  if (['transferencia', 'transfer'].includes(n)) return 'transfer';
+  return null;
+}
+// Interpreta "sim", "s", "yes", "x"... como verdadeiro (coluna Aproximado)
+const yes = s => ['sim', 's', 'yes', 'y', 'true', '1', 'x'].includes(norm(s));
+
+/**
+ * Lê o texto de um CSV e devolve um plano de importação (ainda não grava nada):
+  *   { format, newAccounts, newInvestments, newLoans (os "pais" a criar), items, errors }
+ *
+ * Os itens "filhos" (movimentos, aportes...) referem os pais pelo NOME (_acc, _inv, _loan)
+  * até se saber os ids, que só existem depois de os pais serem gravados (ver runImport).
+  * Linhas com erro não travam o resto: ficam em errors com o número da linha.
+ */
+function planImport(text) {
+  const rows = parseCSV(text);
+  if (rows.length < 2) throw new Error('O ficheiro está vazio ou só tem cabeçalho');
+  const header = rows[0];
+  const format = detectFormat(header);
+  if (!format) throw new Error('Não reconheci o formato. Usa um dos modelos (cabeçalho: ' + header.slice(0, 5).join(', ') + ')');
+  if (format === 'broker_tx') return planBrokerTransactions(rows);
+  if (format === 'broker_portfolio') return planBrokerPortfolio(rows);
+  if (format === 'broker_account') {
+    throw new Error('Este é o extrato de conta da corretora. Para os investimentos usa o ficheiro das transações: ' +
+      'tem as mesmas compras e vendas, já com as comissões incluídas.');
+  }
+  // Encontra uma coluna pelo nome (ou pelo início do nome) e lê o valor dessa coluna numa linha
+  const col = name => header.findIndex(h => norm(h) === norm(name) || norm(h).startsWith(norm(name)));
+  const get = (r, name) => { const i = col(name); return i >= 0 ? (r[i] ?? '').trim() : ''; };
+
+  const plan = { format, newAccounts: new Map(), newInvestments: new Map(), newLoans: new Map(), items: [], errors: [] };
+  // Pais que já existem na app, por nome normalizado
+  const accByName = new Map(D.accounts.map(a => [norm(a.name), a.id]));
+  const invByName = new Map(D.investments.map(i => [norm(i.name), i.id]));
+  const loanByName = new Map(D.loans.map(l => [norm(l.name), l.id]));
+  // Regista que uma conta é precisa; se não existir, fica para criar (com a data mais antiga em que aparece)
+  const needAccount = (name, date) => {
+    name = name || 'Conta principal';
+    if (!accByName.has(norm(name)) && !plan.newAccounts.has(norm(name))) plan.newAccounts.set(norm(name), { name, date });
+    const cur = plan.newAccounts.get(norm(name));
+    if (cur && date < cur.date) cur.date = date;
+    return name;
+  };
+  // O mesmo para investimentos (o ISIN, se existir, fica nas notas)
+  const needInvestment = (name, type, isin) => {
+    if (!invByName.has(norm(name)) && !plan.newInvestments.has(norm(name))) {
+      plan.newInvestments.set(norm(name), { name, type: type || 'Outro', notes: isin ? `ISIN: ${isin}` : '' });
+    }
+    return name;
+  };
+
+  // Processa cada linha de dados (a linha 1 é o cabeçalho, por isso a primeira de dados é a 2)
+  rows.slice(1).forEach((r, i) => {
+    const line = i + 2;
+    const err = m => plan.errors.push(`Linha ${line}: ${m}`);
+
+    // Movimentos (formato próprio ou da app antiga, onde "investment" vira aporte)
+    if (format === 'mov' || format === 'legacy') {
+      const date = parseDateFlexible(get(r, format === 'mov' ? 'Data' : 'Date'));
+      if (!date) return err('data inválida');
+      const amount = parseNum(get(r, format === 'mov' ? 'Valor' : 'Amount'));
+      if (!(amount > 0)) return err('valor inválido');
+      const type = get(r, format === 'mov' ? 'Tipo' : 'Type');
+      if (format === 'legacy' && norm(type) === 'investment') {
+        const inv = needInvestment('Investimentos (importado)', 'Outro');
+        plan.items.push({ kind: 'inv_move', date, _inv: inv, move: 'contribution', amount, description: [get(r, 'Category'), get(r, 'Description')].filter(Boolean).join(': ') });
+        return;
+      }
+      const direction = directionOf(type);
+      if (!direction) return err(`tipo "${type}" desconhecido (Entrada, Saída ou Transferência)`);
+      const acc = needAccount(format === 'mov' ? get(r, 'Conta') : '', date);
+      const it = { kind: 'transaction', date, _acc: acc, direction, amount,
+        category: get(r, format === 'mov' ? 'Categoria' : 'Category') || (direction === 'transfer' ? 'Transferência' : 'Outros'),
+        description: get(r, format === 'mov' ? 'Descri' : 'Description'),
+        approx: format === 'mov' && yes(get(r, 'Aproximado')) };
+      if (direction === 'transfer') {
+        const to = get(r, 'Conta destino');
+        if (!to) return err('transferência sem "Conta destino"');
+        if (norm(to) === norm(acc)) return err('transferência para a mesma conta');
+        it._to = needAccount(to, date);
+      }
+      plan.items.push(it);
+    }
+
+    if (format === 'inv') {
+      // Investimentos: cada linha é um Aporte, Resgate ou Valor (fim de mês)
+      let name = get(r, 'Investimento');
+      // coluna ISIN opcional: encontra o investimento mesmo que tenha mudado de nome na app
+      const isin = (get(r, 'ISIN').toUpperCase().match(/\b[A-Z]{2}[A-Z0-9]{9}\d\b/) || [])[0];
+      const byIsin = isin && D.investments.find(i => (i.notes || '').includes(isin));
+      if (byIsin) name = byIsin.name;
+      if (!name) return err('falta o nome do investimento');
+      if (!byIsin) needInvestment(name, get(r, 'Tipo de investimento'), isin);
+      const op = norm(get(r, 'Opera'));
+      if (!op) {
+        // linha que só declara o investimento (sem operação): a descrição são as notas dele, se for novo
+        const pending = plan.newInvestments.get(norm(name));
+        if (pending && get(r, 'Descri')) pending.notes = get(r, 'Descri');
+        return;
+      }
+      const amount = parseNum(get(r, 'Valor'));
+      if (op === 'valor') {
+        const month = parseMonthFlexible(get(r, 'Data'));
+        if (!month) return err('data/mês inválido');
+        if (!(amount >= 0)) return err('valor inválido');
+        plan.items.push({ kind: 'valuation', _inv: name, month, value: amount });
+      } else if (op === 'aporte' || op === 'resgate') {
+        const date = parseDateFlexible(get(r, 'Data')) || (parseMonthFlexible(get(r, 'Data')) && lastDayOf(parseMonthFlexible(get(r, 'Data'))));
+        if (!date) return err('data inválida');
+        if (!(amount > 0)) return err('valor inválido');
+        plan.items.push({ kind: 'inv_move', _inv: name, date, move: op === 'aporte' ? 'contribution' : 'withdrawal', amount, description: get(r, 'Descri') });
+      } else return err(`operação "${get(r, 'Opera')}" desconhecida (Aporte, Resgate ou Valor)`);
+    }
+
+    if (format === 'loan') {
+      // Créditos: a primeira linha de cada crédito cria-o; cada linha com mês grava o saldo em dívida desse mês
+      const name = get(r, 'Crédito') || get(r, 'Credito');
+      if (!name) return err('falta o nome do crédito');
+      if (!loanByName.has(norm(name)) && !plan.newLoans.has(norm(name))) {
+        const principal = parseNum(get(r, 'Montante inicial'));
+        const start = parseDateFlexible(get(r, 'Data de início')) || (parseMonthFlexible(get(r, 'Mês')) ? parseMonthFlexible(get(r, 'Mês')) + '-01' : todayISO());
+        const bal = parseNum(get(r, 'Saldo em dívida'));
+        plan.newLoans.set(norm(name), {
+          kind: 'loan', name, loan_type: get(r, 'Tipo de crédito') || 'Outro', lender: get(r, 'Banco'),
+          principal: principal >= 0 ? principal : (bal >= 0 ? bal : 0), start_date: start,
+          rate: isNaN(parseNum(get(r, 'Taxa'))) ? null : parseNum(get(r, 'Taxa')),
+          payment: isNaN(parseNum(get(r, 'Prestação'))) ? null : parseNum(get(r, 'Prestação')),
+          end_date: parseDateFlexible(get(r, 'Fim do contrato')) || null,   // coluna opcional
+        });
+      }
+      const monthRaw = get(r, 'Mês');
+      if (!monthRaw) return;
+      const month = parseMonthFlexible(monthRaw);
+      if (!month) return err('mês inválido');
+      const balance = parseNum(get(r, 'Saldo em dívida'));
+      if (!(balance >= 0)) return err('saldo em dívida inválido');
+      const payment = parseNum(get(r, 'Prestação'));
+      // coluna opcional (ficheiros antigos não a têm)
+      const extra = parseNum(get(r, 'Amortiza'));
+      if (get(r, 'Amortiza') && !(extra >= 0)) return err('amortização extra inválida');
+      plan.items.push({ kind: 'loan_balance', _loan: name, month, balance, payment: payment >= 0 ? payment : null, extra: extra > 0 ? extra : null });
+    }
+
+    if (format === 'acc') {
+      // Contas: uma linha por conta. Uma conta com o mesmo nome é atualizada (tipo e saldo inicial),
+      // por isso tanto faz importar este ficheiro antes ou depois dos movimentos.
+      const name = get(r, 'Conta');
+      if (!name) return err('falta o nome da conta');
+      const opening = parseNum(get(r, 'Saldo inicial'));
+      if (isNaN(opening)) return err('saldo inicial inválido');
+      const dateRaw = get(r, 'Data do saldo inicial');
+      const date = dateRaw ? parseDateFlexible(dateRaw) : todayISO();
+      if (!date) return err('data do saldo inicial inválida');
+      const existing = D.accounts.find(a => norm(a.name) === norm(name));
+      plan.items.push({ kind: 'account', id: existing?.id, name, acc_type: get(r, 'Tipo de conta') || existing?.acc_type || 'Conta à ordem',
+        opening_balance: opening, opening_date: date });
+    }
+
+    if (format === 'prop') {
+      // Património: uma linha por imóvel. Um imóvel com o mesmo nome é atualizado (não duplicado).
+      const name = get(r, 'Imóvel') || get(r, 'Imovel');
+      if (!name) return err('falta o nome do imóvel');
+      const value = parseNum(get(r, 'Valor atual'));
+      if (!(value >= 0)) return err('valor atual inválido');
+      const price = parseNum(get(r, 'Preço de compra'));
+      if (get(r, 'Preço de compra') && !(price >= 0)) return err('preço de compra inválido');
+      const dateRaw = get(r, 'Data de compra');
+      const date = parseDateFlexible(dateRaw);
+      if (dateRaw && !date) return err('data de compra inválida');
+      const loan = get(r, 'Crédito associado') || get(r, 'Credito associado');
+      if (loan && !loanByName.has(norm(loan))) return err(`crédito "${loan}" não existe (importa primeiro os créditos)`);
+      const existing = D.properties.find(p => norm(p.name) === norm(name));
+      plan.items.push({ ...(existing || {}), kind: 'property', id: existing?.id, name, prop_type: get(r, 'Tipo de imóvel') || existing?.prop_type || 'Habitação própria',
+        value, purchase_price: price >= 0 ? price : null, purchase_date: date || '', loan_id: loan ? loanByName.get(norm(loan)) : '', notes: get(r, 'Notas') });
+    }
+  });
+  return plan;
+}
+
+// ── CORRETORA ─────────────────────────────────────────────────────────────
+// A corretora às vezes parte nomes de produto compridos numa linha extra com a data vazia:
+//   15-01-2024,10:00,EXEMPLO ALL-WORLD UCITS ETF - (USD),IE0000000000,...
+//   ,,ACCUMULATING ETF,,,,...
+// Essas linhas são coladas à anterior. Os investimentos são identificados pelo ISIN
+// (guardado nas notas do investimento), por isso mudar-lhes o nome na app não estraga nada.
+const ISIN_RE = /\b[A-Z]{2}[A-Z0-9]{9}\d\b/;
+
+// Posição da primeira coluna com um destes nomes (primeiro exatos, depois pelo início do nome); -1 se não houver
+function colIndex(header, ...names) {
+  const h = header.map(norm);
+  for (const n of names) { const i = h.indexOf(norm(n)); if (i >= 0) return i; }
+  for (const n of names) { const i = h.findIndex(x => x.startsWith(norm(n))); if (i >= 0) return i; }
+  return -1;
+}
+
+// Junta as linhas partidas: linha sem valor na coluna iFirst mas com nome -> o nome vai para a linha anterior
+function mergeWrappedRows(rows, iFirst, iName) {
+  const out = [];
+  for (const r of rows) {
+    if (!String(r[iFirst] ?? '').trim() && String(r[iName] ?? '').trim() && out.length) {
+      out[out.length - 1][iName] = (out[out.length - 1][iName] + ' ' + r[iName].trim()).trim();
+    } else out.push([...r]);
+  }
+  return out;
+}
+
+// "EXEMPLO ALL-WORLD UCITS ETF" -> "Exemplo All-World UCITS ETF" (mantém siglas em maiúsculas)
+function prettyProduct(name) {
+  const KEEP = new Set(['ETF', 'UCITS', 'MSCI', 'FTSE', 'USD', 'EUR', 'GBP', 'S&P', 'ESG', 'SRI', 'EM', 'ACWI', 'IMI', 'REIT', 'II', 'III', 'PLC', 'SA', 'AG', 'NV']);
+  return name.trim().split(/\s+/).map(w => {
+    const core = w.replace(/[()]/g, '').toUpperCase();
+    if (KEEP.has(core)) return w.toUpperCase();
+    return w.toLowerCase().replace(/(^|[-(])([a-zà-ú])/g, (m, a, b) => a + b.toUpperCase());
+  }).join(' ');
+}
+
+// Devolve uma função (isin, nomeProduto) -> nome do investimento na app.
+// Usa o investimento que já tenha esse ISIN nas notas; senão prepara um novo (com nome único).
+function brokerInvestmentResolver(plan) {
+  return (isin, productName) => {
+    const existing = D.investments.find(i => (i.notes || '').includes(isin));
+    if (existing) return existing.name;
+    const key = 'isin:' + isin;
+    if (!plan.newInvestments.has(key)) {
+      let name = prettyProduct(productName).slice(0, 60) || isin;
+      const taken = n => D.investments.some(i => norm(i.name) === norm(n)) ||
+        [...plan.newInvestments.values()].some(x => norm(x.name) === norm(n));
+      if (taken(name)) name = `${name.slice(0, 45)} (${isin})`;
+      plan.newInvestments.set(key, { name, type: /\bETF\b/i.test(productName) ? 'ETF' : 'Ações', notes: `ISIN: ${isin}` });
+    }
+    return plan.newInvestments.get(key).name;
+  };
+}
+
+// Ficheiro das transações da corretora -> aportes (compras) e resgates (vendas).
+// Usa a coluna Total EUR, que já inclui as comissões.
+function planBrokerTransactions(rows) {
+  const header = rows[0];
+  const i = {
+    date: colIndex(header, 'Data'), product: colIndex(header, 'Produto'), isin: colIndex(header, 'ISIN'),
+    qty: colIndex(header, 'Quantidade'), price: colIndex(header, 'Preços', 'Preço'),
+    total: colIndex(header, 'Total EUR', 'Total'), order: colIndex(header, 'ID da Ordem'),
+  };
+  const plan = { format: 'broker_tx', newAccounts: new Map(), newInvestments: new Map(), newLoans: new Map(), items: [], errors: [] };
+  const data = mergeWrappedRows(rows.slice(1), i.date, i.product);
+
+  // nome mais comprido visto para cada ISIN (os nomes partidos às vezes vêm incompletos)
+  const names = {};
+  for (const r of data) {
+    const isin = (r[i.isin] || '').trim();
+    if (isin && (r[i.product] || '').length > (names[isin] || '').length) names[isin] = r[i.product].trim();
+  }
+  const resolve = brokerInvestmentResolver(plan);
+
+  data.forEach((r, n) => {
+    const err = m => plan.errors.push(`Linha ${n + 2}: ${m}`);
+    const date = parseDateFlexible(r[i.date]);
+    if (!date) return err('data inválida');
+    const isin = (r[i.isin] || '').trim();
+    if (!ISIN_RE.test(isin)) return err('ISIN em falta');
+    const qty = parseNum(r[i.qty]), total = parseNum(r[i.total]);
+    if (!qty || isNaN(qty)) return err('quantidade inválida');
+    if (isNaN(total) || total === 0) return err('total inválido');
+    const price = parseNum(r[i.price]);
+    const buy = qty > 0;
+    plan.items.push({
+      kind: 'inv_move', date, _inv: resolve(isin, names[isin]),
+      move: buy ? 'contribution' : 'withdrawal', amount: round2(Math.abs(total)),
+      description: `${buy ? 'Compra' : 'Venda'} ${Math.abs(qty)} × ${isNaN(price) ? '?' : String(price).replace('.', ',')} €${r[i.order] ? ' (ordem ' + r[i.order].slice(0, 8) + ')' : ''}`,
+    });
+  });
+  return plan;
+}
+
+// Ficheiro do portefólio da corretora -> valor de cada investimento num mês.
+// O ficheiro não diz a data, por isso needsMonth faz a janela perguntar o mês.
+function planBrokerPortfolio(rows) {
+  const header = rows[0];
+  const h = header.map(norm);
+  const iProd = colIndex(header, 'Produto');
+  const iIsin = h.findIndex(x => x.includes('isin'));
+  let iVal = h.findIndex(x => x.startsWith('valor') && x.includes('eur'));
+  if (iVal < 0) iVal = h.map((x, k) => (x.startsWith('valor') ? k : -1)).filter(k => k >= 0).pop();
+  const plan = { format: 'broker_portfolio', needsMonth: true, newAccounts: new Map(), newInvestments: new Map(), newLoans: new Map(), items: [], errors: [] };
+  const resolve = brokerInvestmentResolver(plan);
+  const byIsin = {};
+  mergeWrappedRows(rows.slice(1), iProd, iProd).forEach(r => {
+    const isin = (String(r[iIsin] || '').match(ISIN_RE) || [])[0];
+    if (!isin) return; // as linhas de dinheiro (cash) não têm ISIN
+    const v = parseNum(r[iVal]);
+    if (isNaN(v)) return plan.errors.push(`${r[iProd]}: valor inválido`);
+    byIsin[isin] = byIsin[isin] || { name: r[iProd] || isin, value: 0 };
+    byIsin[isin].value += v;
+  });
+  for (const [isin, x] of Object.entries(byIsin)) {
+    plan.items.push({ kind: 'valuation', _inv: resolve(isin, x.name), month: null, value: round2(x.value) });
+  }
+  return plan;
+}
+
+/**
+ * "Impressão digital" de um item (data, conta, tipo, valor...) para reconhecer repetidos,
+ * de forma a que importar o mesmo ficheiro duas vezes não duplique nada.
+ */
+function fingerprint(it) {
+  const a = n => Number(n).toFixed(2);
+  if (it.kind === 'transaction') return ['t', it.date, it.account_id, it.direction, it.to_account_id || '', norm(it.category), a(it.amount)].join('|');
+  if (it.kind === 'inv_move') return ['m', it.date, it.investment_id, it.move, a(it.amount)].join('|');
+  return null; // valores e saldos são "um por mês": importar substitui-os, não duplica
+}
+
+// Executa um plano de importação de CSV em 3 passos e devolve contagens para a mensagem final
+async function runImport(plan, skipDuplicates, onProgress) {
+  // 1) cria os pais que faltam (contas, investimentos, créditos) e fica a saber os ids deles
+  const parents = [
+    ...[...plan.newAccounts.values()].map(a => ({ kind: 'account', name: a.name, acc_type: 'Conta à ordem', opening_balance: 0, opening_date: a.date })),
+    ...[...plan.newInvestments.values()].map(i => ({ kind: 'investment', name: i.name, inv_type: i.type, notes: i.notes || '' })),
+    ...plan.newLoans.values(),
+  ];
+  if (parents.length) applyChanges(await api.save(parents));
+
+  const accId = name => D.accounts.find(a => norm(a.name) === norm(name))?.id;
+  const invId = name => D.investments.find(i => norm(i.name) === norm(name))?.id;
+  const loanId = name => D.loans.find(l => norm(l.name) === norm(name))?.id;
+
+  // 2) troca nomes por ids e salta os repetidos
+  // conta quantos há (não é só um conjunto): duas linhas iguais no mesmo dia (dois cafés de 2,40 €) são ambas reais
+  const existing = new Map();
+  for (const fp of [...D.transactions, ...D.inv_moves].map(fingerprint)) if (fp) existing.set(fp, (existing.get(fp) || 0) + 1);
+  const items = [];
+  let skipped = 0;
+  for (const raw of plan.items) {
+    const it = { ...raw };
+    if (it._acc) it.account_id = accId(it._acc);
+    if (it._to) it.to_account_id = accId(it._to);
+    if (it._inv) it.investment_id = invId(it._inv);
+    if (it._loan) it.loan_id = loanId(it._loan);
+    delete it._acc; delete it._to; delete it._inv; delete it._loan;
+    const fp = fingerprint(it);
+    if (skipDuplicates && fp && existing.get(fp) > 0) { existing.set(fp, existing.get(fp) - 1); skipped++; continue; }
+    items.push(it);
+  }
+
+  // 3) grava em blocos (ver api.save)
+  const res = await api.save(items, [], onProgress);
+  applyChanges(res);
+  return { saved: res.saved.length, skipped, parents: parents.length };
+}
+
+// Abre a janela "Importar": escolher/arrastar ficheiros, pré-visualizar o plano e confirmar.
+// CSV da app (backup, modelos, corretora...) -> planImport/runImport
+// Extratos: com os dados da conta no topo -> parseStatementCsv; outros bancos -> genericBankLayout/buildGenericStatement;
+// depois planBankImport/runBankImport (bank.js)
+function openImport(defaultFormat) {
+  let plan = null;
+  const body = document.createElement('div');
+  body.style.cssText = 'display:flex;flex-direction:column;gap:14px';
+  body.innerHTML = `
+    <div class="modal-hint">
+      Importa um backup, dados antigos ou o CSV de movimentos do teu banco (se não o reconhecer sozinho, confirmas as colunas
+      na pré-visualização); podes largar vários de uma vez.
+      Reconheço automaticamente o tipo de ficheiro (extratos, Contas, Movimentos, Investimentos, Créditos, Património,
+      transações e portefólio da corretora, com ISIN, ou o formato da versão antiga). Aceita separador <b>;</b> ou <b>,</b>,
+      datas <b>AAAA-MM-DD</b> ou <b>DD/MM/AAAA</b> e valores como <b>1.234,56</b>.
+    </div>
+    <div class="templates">
+      <span class="modal-hint">Descarregar modelo:</span>
+      <button class="link-btn" data-t="acc">Contas</button>
+      <button class="link-btn" data-t="mov">Movimentos</button>
+      <button class="link-btn" data-t="inv">Investimentos</button>
+      <button class="link-btn" data-t="loan">Créditos</button>
+      <button class="link-btn" data-t="prop">Património</button>
+    </div>
+    <div class="drop-zone" id="imp-drop">
+      <input type="file" accept=".csv,text/csv" id="imp-file" multiple>
+      Arrasta um ou mais ficheiros <strong>.csv</strong>, ou clica para escolher
+      <div class="drop-filename" id="imp-name"></div>
+    </div>
+    <label class="check"><input type="checkbox" id="imp-skip" checked> Ignorar linhas repetidas (já existentes)</label>
+    <div class="preview-box hidden" id="imp-preview"></div>`;
+  body.querySelectorAll('[data-t]').forEach(b => b.addEventListener('click', () => downloadTemplate(b.dataset.t)));
+
+  // Texto de um ficheiro: tenta UTF-8; se falhar, usa windows-1252 (o do Excel antigo e o de alguns bancos)
+  const decode = async file => {
+    const buf = await file.arrayBuffer();
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); }
+    catch { return new TextDecoder('windows-1252').decode(buf); }
+  };
+
+  // Ficheiros escolhidos. Cada um é: um extrato com os dados da conta no topo, um CSV da app (backup, modelos, corretora...)
+  // ou um extrato de outro banco (CSV genérico). Os extratos (de um ou vários bancos) importam-se juntos;
+  // os CSV da app importam-se à parte, um de cada vez (com mais de um, aparece um erro a dizê-lo).
+  const readFiles = async list => {
+    const files = [...(list || [])];
+    if (!files.length) return;
+    $('#imp-name', body).textContent = '✓ ' + files.map(f => f.name).join(', ');
+    const box = $('#imp-preview', body);
+    box.classList.remove('hidden');
+    $('#imp-go').disabled = true;
+    plan = null;
+    try {
+      const texts = await Promise.all(files.map(decode));
+      const kinds = texts.map((text, i) => {
+        const st = parseStatementCsv(text);
+        if (st) return { st };
+        const rows = parseCSV(text);
+        if (rows.length && detectFormat(rows[0])) return { app: true };
+        const layout = genericBankLayout(text);
+        return layout ? { layout, fileName: files[i].name } : { unknown: files[i].name };
+      });
+      const unknown = kinds.find(k => k.unknown);
+      if (unknown) throw new Error(`Não reconheci «${unknown.unknown}». Os extratos têm de ter uma linha de cabeçalho com a data e o valor (ou o débito e o crédito); os outros CSV têm de seguir um dos modelos.`);
+      const isBank = kinds.some(k => !k.app);
+      // nos extratos os repetidos são sempre ignorados (comparando data, conta e valor)
+      $('#imp-skip', body).closest('label').classList.toggle('hidden', isBank);
+      if (!isBank) {
+        if (files.length > 1) throw new Error('Os ficheiros da app (backup e modelos) importam-se um de cada vez. Para recuperar um backup, importa os créditos antes do património.');
+        return showAppCsv(texts[0]);
+      }
+      const other = files.find((f, i) => kinds[i].app);
+      if (other) throw new Error(`«${other.name}» não é um extrato bancário: importa-o à parte`);
+      showBank(kinds.filter(k => k.st).map(k => k.st), kinds.filter(k => k.layout));
+    } catch (e) {
+      box.innerHTML = `<span class="err">${esc(e.message)}</span>`;
+    }
+  };
+
+  // Pré-visualização dos extratos: em cima, as colunas de cada formato de outro banco (podem ser corrigidas);
+  // em baixo, o plano. Mudar uma coluna, o nome, a conta ou o acerto do saldo volta a calcular tudo.
+  const showBank = (parsed, generic) => {
+    const box = $('#imp-preview', body);
+    const choice = {}, fix = {};
+    // um estado por formato de ficheiro (vários ficheiros do mesmo banco partilham as colunas)
+    const formats = new Map();
+    for (const g of generic) {
+      if (formats.has(g.layout.signature)) continue;
+      const saved = D.bank_formats.find(f => f.signature === g.layout.signature);
+      const cols = { ...g.layout.cols };
+      if (saved) for (const k of BANK_MAPPED) if (saved.columns?.[k] !== undefined) cols[k] = Number(saved.columns[k]);
+      const name = saved?.name || g.fileName.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim().slice(0, 60) || 'Banco';
+      formats.set(g.layout.signature, { cols, name, saved, header: g.layout.header, fileName: g.fileName, preselect: true });
+    }
+    const colSelect = (sig, f, role, label, optional) => `<div class="field"><label>${label}</label>
+      <select data-map-sig="${esc(sig)}" data-map-col="${role}"><option value="-1">${optional ? '— nenhuma —' : '— escolhe —'}</option>
+      ${f.header.map((h, i) => `<option value="${i}" ${f.cols[role] === i ? 'selected' : ''}>${esc(h.trim() || 'coluna ' + (i + 1))}</option>`).join('')}</select></div>`;
+    const render = () => {
+      const statements = [...parsed];
+      for (const g of generic) {
+        const f = formats.get(g.layout.signature);
+        try { statements.push(buildGenericStatement(g.layout, f.cols, f.name)); f.error = ''; } catch (e) { f.error = e.message; }
+      }
+      // a conta da app usada da última vez com este formato fica escolhida (só na primeira vez)
+      for (const st of statements) {
+        const f = st.signature && formats.get(st.signature);
+        if (f?.preselect && f.saved?.account_id && D.accounts.some(a => a.id === f.saved.account_id) && !choice[st.number]) choice[st.number] = f.saved.account_id;
+        if (f) f.number = st.number;
+      }
+      formats.forEach(f => { f.preselect = false; });
+      plan = statements.length ? planBankImport(statements, choice, fix) : { format: 'bank', accounts: [], items: [], updates: [], skipped: 0 };
+      plan.formats = [...formats].filter(([, f]) => !f.error).map(([sig, f]) => ({ id: f.saved?.id, signature: sig, name: f.name, number: f.number,
+        columns: Object.fromEntries(BANK_MAPPED.map(k => [k, f.cols[k]])) }));
+      const maps = [...formats].map(([sig, f]) => `
+        <div class="bank-map">
+          <b>«${esc(f.fileName)}»</b> <span class="modal-hint">· ${f.saved ? 'colunas guardadas da última vez' : 'colunas reconhecidas automaticamente: confirma'}</span>
+          <div class="map-grid">
+            <div class="field"><label>Nome do banco / conta</label><input data-map-sig="${esc(sig)}" data-map-name maxlength="60" value="${esc(f.name)}"></div>
+            ${colSelect(sig, f, 'date', 'Data', false)}
+            ${colSelect(sig, f, 'desc', 'Descrição', true)}
+            ${colSelect(sig, f, 'amount', 'Valor (com sinal)', true)}
+            ${colSelect(sig, f, 'debit', 'Débito', true)}
+            ${colSelect(sig, f, 'credit', 'Crédito', true)}
+            ${colSelect(sig, f, 'balance', 'Saldo depois do movimento', true)}
+          </div>
+          ${f.error ? `<div class="err">${esc(f.error)}</div>` : ''}
+        </div>`).join('');
+      const label = parsed.length && generic.length ? 'Extratos bancários (vários formatos)' : parsed.length ? 'Extrato bancário (com os dados da conta)' : 'Extrato bancário (CSV)';
+      box.innerHTML = `<b>Formato:</b> ${label}<br>${maps}` + (plan.accounts.length ? bankPreviewHTML(plan) : '');
+      box.querySelectorAll('[data-bank-acc]').forEach(sel => sel.addEventListener('change', () => { choice[sel.dataset.bankAcc] = sel.value; render(); }));
+      box.querySelectorAll('[data-bank-fix]').forEach(cb => cb.addEventListener('change', () => { fix[cb.dataset.bankFix] = cb.checked; render(); }));
+      box.querySelectorAll('[data-map-col]').forEach(sel => sel.addEventListener('change', () => {
+        formats.get(sel.dataset.mapSig).cols[sel.dataset.mapCol] = Number(sel.value); render();
+      }));
+      box.querySelectorAll('[data-map-name]').forEach(inp => inp.addEventListener('change', () => {
+        const f = formats.get(inp.dataset.mapSig);
+        f.name = inp.value.trim().slice(0, 60) || f.name; render();
+      }));
+      $('#imp-go').disabled = !plan.items.length && !plan.updates.length && !plan.accounts.some(a => a.choice === 'new');
+    };
+    render();
+  };
+
+  // Pré-visualização de um CSV da app (backup, modelos, corretora, versão antiga): resumo do que vai ser criado
+  const showAppCsv = text => {
+    const box = $('#imp-preview', body);
+    try {
+      plan = planImport(text);
+      const counts = {};
+      for (const it of plan.items) counts[it.kind] = (counts[it.kind] || 0) + 1;
+      const label = { account: 'contas', transaction: 'movimentos', inv_move: 'aportes/resgates', valuation: 'valores mensais', loan_balance: 'saldos de crédito', property: 'imóveis' };
+      const newP = [
+        plan.newAccounts.size && `${plan.newAccounts.size} conta(s) nova(s): ${[...plan.newAccounts.values()].map(a => esc(a.name)).join(', ')}`,
+        plan.newInvestments.size && `${plan.newInvestments.size} investimento(s) novo(s): ${[...plan.newInvestments.values()].map(a => esc(a.name)).join(', ')}`,
+        plan.newLoans.size && `${plan.newLoans.size} crédito(s) novo(s): ${[...plan.newLoans.values()].map(a => esc(a.name)).join(', ')}`,
+      ].filter(Boolean);
+      const formatLabel = { legacy: 'versão antiga da app', broker_tx: 'Corretora: transações (compras e vendas)',
+        broker_portfolio: 'Corretora: portefólio numa data' }[plan.format] || FORMATS[plan.format].label;
+      const monthField = plan.needsMonth ? `<div class="field" style="margin:8px 0;max-width:240px"><label>Este portefólio é do fim de que mês?</label>
+        <input type="month" id="imp-month" value="${addMonths(thisMonth(), -1)}"></div>` : '';
+      box.innerHTML = `<b>Formato:</b> ${formatLabel}<br>${monthField}
+        ${Object.entries(counts).map(([k, v]) => `${v} ${label[k]}`).join(' · ') || 'Nenhuma linha com dados'}<br>
+        ${newP.map(x => '+ ' + x).join('<br>')}
+        ${plan.errors.length ? `<div class="err" style="margin-top:6px">${plan.errors.length} linha(s) com erro, serão ignoradas:<br>${plan.errors.slice(0, 8).map(esc).join('<br>')}${plan.errors.length > 8 ? '<br>…' : ''}</div>` : ''}`;
+      $('#imp-go').disabled = !plan.items.length && !plan.newAccounts.size && !plan.newInvestments.size && !plan.newLoans.size;
+    } catch (e) {
+      plan = null;
+      box.innerHTML = `<span class="err">${esc(e.message)}</span>`;
+      $('#imp-go').disabled = true;
+    }
+  };
+  // Escolher ficheiro no botão ou arrastá-lo para a zona tracejada
+  $('#imp-file', body).addEventListener('change', e => readFiles(e.target.files));
+  const dz = $('#imp-drop', body);
+  dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('dragover'); });
+  dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
+  dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('dragover'); readFiles(e.dataTransfer.files); });
+
+  modal.open({
+    title: 'Importar',
+    body,
+    footer: [
+      { label: 'Cancelar', onClick: () => modal.close() },
+      { label: 'Importar', cls: 'primary', id: 'imp-go', onClick: async e => {
+        if (!plan) return;
+        if (plan.needsMonth) {
+          const m = $('#imp-month', body)?.value;
+          if (!m) return toast('Escolhe o mês do portefólio', true);
+          plan.items.forEach(it => { it.month = m; });
+        }
+        const btn = e.target;
+        btn.disabled = true;
+        if (plan.format === 'bank') {
+          try {
+            const r = await runBankImport(plan, (d, t) => { btn.textContent = `A importar… ${Math.round(d / t * 100)}%`; });
+            modal.close();
+            toast(`Importado: ${r.saved} movimentos${r.updated ? `, ${r.updated} transferências ligadas` : ''}${r.skipped ? `, ${r.skipped} repetidos ignorados` : ''}${r.parents ? `, ${r.parents} conta(s) criada(s)` : ''}`);
+          } catch (err) {
+            toast(err.message, true);
+            btn.disabled = false; btn.textContent = 'Importar';
+          }
+          renderAll();
+          return;
+        }
+        try {
+          const r = await runImport(plan, $('#imp-skip', body).checked, (d, t) => { btn.textContent = `A importar… ${Math.round(d / t * 100)}%`; });
+          modal.close();
+          toast(`Importado: ${r.saved} registos${r.skipped ? `, ${r.skipped} repetidos ignorados` : ''}${r.parents ? `, ${r.parents} contas/investimentos/créditos criados` : ''}`);
+          renderAll();
+        } catch (err) {
+          toast(err.message, true);
+          btn.disabled = false; btn.textContent = 'Importar';
+          renderAll();
+        }
+      } },
+    ],
+  });
+  $('#imp-go').disabled = true;
+}

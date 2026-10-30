@@ -1,0 +1,585 @@
+# ════════════════════════════════════════════════════════════════════════════
+# Ledger - toda a infraestrutura AWS da app (stack CloudFormation "ledger").
+#
+# É um template SAM: o "Transform" abaixo faz o CloudFormation expandir os tipos
+# AWS::Serverless::* em vários recursos normais (função, role IAM, rotas, permissões...).
+# Publicado pelo deploy.sh / deploy.ps1 com "sam deploy" (o GitHub Actions faz isto a cada push).
+#
+# Mudar alguma coisa na infraestrutura = mudar aqui e fazer push. Mudanças feitas à mão
+# na consola podem ser desfeitas no deploy seguinte.
+# ════════════════════════════════════════════════════════════════════════════
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Ledger - personal expenses & investments tracker.
+  Serverless and designed to stay inside the AWS "Always Free" limits:
+  Lambda + DynamoDB (provisioned 25/25) + Cognito + S3/CloudFront + EventBridge Scheduler + SES.
+
+# ── PARÂMETROS: valores escolhidos no momento do deploy (--parameter-overrides) ──
+Parameters:
+  # Email que recebe os alertas de custos (vem do secret ALERT_EMAIL do GitHub)
+  AlertEmail:
+    Type: String
+    Description: Email that receives cost alerts from AWS Budgets
+    AllowedPattern: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+  # Limite mensal do alerta de custos, em dólares
+  MonthlyBudgetUSD:
+    Type: Number
+    Default: 1
+    Description: Send an alert if the monthly AWS bill goes above this value (USD)
+  # Unidades de leitura/escrita da tabela. O Always Free dá 25 + 25 para TODAS as tabelas juntas.
+  TableCapacity:
+    Type: Number
+    Default: 25
+    MinValue: 1
+    MaxValue: 25
+    Description: >
+      Provisioned read/write units for the table. Always Free covers 25 RCU + 25 WCU
+      per region in total (all tables together). Lower it if you have other tables.
+
+# ── DEFINIÇÕES COMUNS a todas as funções Lambda deste template ──
+Globals:
+  Function:
+    Runtime: python3.13
+    Architectures: [arm64]          # processadores Graviton: ~20% mais baratos que x86
+    MemorySize: 256                 # MB; na Lambda, mais memória também dá mais CPU
+    # O API Gateway desiste ao fim de 30 s, mas uma importação de CSV longa continua a correr até acabar
+    Timeout: 120
+
+# ── RECURSOS: tudo o que o CloudFormation cria e gere ──
+Resources:
+  # ── BASE DE DADOS ────────────────────────────────────────────────────────
+  # Uma só tabela: partition key user_id (o "sub" do Cognito) + sort key sk ("TX_...", "ACC_"...)
+  EntriesTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain          # apagar a stack nunca apaga os teus dados
+    UpdateReplacePolicy: Retain     # e se uma mudança obrigar a substituir a tabela, a antiga também fica
+    Properties:
+      BillingMode: PROVISIONED      # capacidade fixa (grátis até 25/25); a alternativa é PAY_PER_REQUEST
+      ProvisionedThroughput:
+        ReadCapacityUnits: !Ref TableCapacity
+        WriteCapacityUnits: !Ref TableCapacity
+      AttributeDefinitions:         # só se declaram os atributos que fazem parte da chave
+        - AttributeName: user_id
+          AttributeType: S          # S = texto
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: user_id
+          KeyType: HASH             # HASH = partition key
+        - AttributeName: sk
+          KeyType: RANGE            # RANGE = sort key
+      SSESpecification:
+        SSEEnabled: false           # mesmo assim fica encriptada em repouso, com a chave gratuita da AWS
+      # TTL: o DynamoDB apaga sozinho (e de graça) os itens cujo "expires" (segundos desde 1970) já passou.
+      # Só os registos de login têm este atributo (duram 90 dias); os dados das contas nunca o têm.
+      TimeToLiveSpecification:
+        AttributeName: expires
+        Enabled: true
+      # Proteção contra apagar (grátis): nem na consola nem pela AWS CLI a tabela se apaga sem a desligar primeiro
+      DeletionProtectionEnabled: true
+
+  # ── LOGIN ────────────────────────────────────────────────────────────────
+  # User pool do Cognito: guarda os utilizadores e as passwords e emite os tokens JWT
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain          # tal como a tabela: nunca é apagada pelo CloudFormation
+    UpdateReplacePolicy: Retain
+    Properties:
+      UserPoolName: !Sub ${AWS::StackName}-users
+      UserPoolTier: LITE            # tier mais simples, grátis até 10 000 utilizadores ativos/mês
+      DeletionProtection: ACTIVE    # tal como a tabela: não se apaga sem desligar a proteção primeiro (grátis)
+      UsernameAttributes: [email]   # o login é o email
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true   # ninguém se regista sozinho (só com o create-user.ps1)
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 10
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      AccountRecoverySetting:       # sem "esqueci-me da password" por email: só o admin repõe
+        RecoveryMechanisms:
+          - Name: admin_only
+            Priority: 1
+      # Depois de cada login com sucesso, o Cognito chama esta Lambda, que o regista (ver PostLoginFunction).
+      # Antes de enviar o convite de uma conta criada no separador Utilizadores, chama a CustomMessageFunction,
+      # que escreve o texto do convite em português, com o endereço do site.
+      LambdaConfig:
+        PostAuthentication: !GetAtt PostLoginFunction.Arn
+        CustomMessage: !GetAtt CustomMessageFunction.Arn
+
+  # Grupo "admin": quem está nele vê o separador Utilizadores (todas as contas e os logins).
+  # O Cognito põe os grupos no ID token (claim "cognito:groups"). Ninguém se põe no grupo sozinho:
+  # só com credenciais AWS (make-admin.ps1).
+  AdminGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      UserPoolId: !Ref UserPool
+      GroupName: admin
+      Description: Ledger administrators (see all users and their logins)
+
+  # App client: a "aplicação" (o site) que pode pedir tokens a esta user pool
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: ledger-web
+      GenerateSecret: false         # um site no browser não consegue guardar segredos
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH  # login com email + password (usado no auth.js)
+        - ALLOW_REFRESH_TOKEN_AUTH  # renovar tokens sem voltar a pedir a password
+      PreventUserExistenceErrors: ENABLED   # o erro não revela se um email existe ou não
+      # Atributos que cada pessoa pode mudar na própria conta, com o access token, diretamente no Cognito.
+      # Sem esta lista podia mudar o email (e deixava de receber o backup). A app não muda nenhum: fica só
+      # um inofensivo, porque uma lista vazia pode valer como "todos". Os administradores não dependem disto.
+      WriteAttributes: [locale]
+      IdTokenValidity: 60
+      AccessTokenValidity: 60
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        IdToken: minutes
+        AccessToken: minutes
+        RefreshToken: days
+
+  # ── API ──────────────────────────────────────────────────────────────────
+  # HTTP API do API Gateway (mais simples e barata que a REST API)
+  Api:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 20    # protege a fatura se alguém martelar o URL
+        ThrottlingRateLimit: 10     # máximo de 10 pedidos por segundo em média
+      # CORS: que sites podem chamar esta API a partir do browser
+      CorsConfiguration:
+        AllowOrigins:
+          - !Sub https://${Distribution.DomainName}   # só o site no CloudFront
+        AllowMethods: [GET, POST, DELETE, OPTIONS]
+        AllowHeaders: [authorization, content-type]
+        MaxAge: 3600                # o browser guarda a resposta do CORS durante 1 hora
+      # Todas as rotas exigem um JWT válido do Cognito: pedidos sem token recebem 401
+      # antes de a Lambda sequer correr
+      Auth:
+        DefaultAuthorizer: CognitoJwt
+        Authorizers:
+          CognitoJwt:
+            IdentitySource: $request.header.Authorization   # o token vem no cabeçalho Authorization
+            JwtConfiguration:
+              issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}   # quem emitiu o token
+              audience:
+                - !Ref UserPoolClient   # para que aplicação foi emitido
+
+  # A função Lambda com o backend (backend/app.py). O SAM cria também a role IAM e as rotas.
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/             # pasta enviada para a Lambda
+      Handler: app.handler          # ficheiro app.py, função handler
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref EntriesTable   # nome real da tabela, lido pelo código
+      Policies:
+        - DynamoDBCrudPolicy:       # permissões mínimas: ler/escrever SÓ nesta tabela
+            TableName: !Ref EntriesTable
+        - Statement:
+            # Só leitura: ao ligar o "Backup diário", ver se o email da conta já está verificado no SES,
+            # para avisar a pessoa (o SES em modo de testes só envia para emails verificados). Não envia emails.
+            - Effect: Allow
+              Action: ses:GetEmailIdentity
+              Resource: !Sub arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*
+      # Cada "Event" liga uma rota do API Gateway a esta função
+      Events:
+        GetData:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: /data, Method: GET }
+        SaveItems:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: /items, Method: POST }
+        DeleteItem:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: "/items/{id}", Method: DELETE }
+        GetSettings:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: /settings, Method: GET }
+        SaveSettings:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: /settings, Method: POST }
+
+  # Backup diário por email (mesmo código, função app.daily_backup). Todos os dias à meia-noite,
+  # hora de Portugal, envia os CSV a quem ativou o "Backup diário" na app.
+  # Função separada para a API não ter permissão de enviar emails nem de listar utilizadores.
+  DailyBackupFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/
+      Handler: app.daily_backup
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref EntriesTable
+          SENDER_EMAIL: !Ref AlertEmail   # remetente dos emails de backup (verificado no SES)
+          USER_POOL_ID: !Ref UserPool     # para saber o email atual de cada conta
+      # Se a função falhar, não volta a correr: repetir podia mandar o mesmo email duas vezes
+      EventInvokeConfig:
+        MaximumRetryAttempts: 0
+      Policies:
+        - DynamoDBReadPolicy:       # só leitura da tabela
+            TableName: !Ref EntriesTable
+        - Statement:
+            # Enviar emails pelo SES. Só identidades desta conta e região.
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: !Sub arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*
+            # Listar os utilizadores (sub + email) desta user pool
+            - Effect: Allow
+              Action: cognito-idp:ListUsers
+              Resource: !GetAtt UserPool.Arn
+      Events:
+        # EventBridge Scheduler: aceita fuso horário, por isso a hora muda sozinha com o horário de verão.
+        # Grátis até 14 milhões de execuções por mês (aqui são ~30).
+        Midnight:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(0 0 * * ? *)
+            ScheduleExpressionTimezone: Europe/Lisbon
+            OmitName: true          # o CloudFormation gera um nome único
+            RetryPolicy:
+              MaximumRetryAttempts: 0
+
+  # Regista cada login (função app.post_login): trigger "Post authentication" do Cognito.
+  # Grava quem entrou e quando nas partições LOGIN (90 dias) e LAST_LOGIN (último login e quantos).
+  # Se esta função der erro, o login falha: por isso o código nunca lança erros e o tempo é curto.
+  PostLoginFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/
+      Handler: app.post_login
+      Timeout: 5                    # o Cognito só espera 5 s pela resposta
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref EntriesTable
+      Policies:
+        - Statement:
+            # Só gravar, e só nas partições dos logins (nunca nos dados de um utilizador)
+            - Effect: Allow
+              Action: [dynamodb:PutItem, dynamodb:UpdateItem]
+              Resource: !GetAtt EntriesTable.Arn
+              Condition:
+                ForAllValues:StringEquals:
+                  dynamodb:LeadingKeys: [LOGIN, LAST_LOGIN]
+
+  # Autoriza o Cognito (só esta user pool) a chamar a função dos logins
+  PostLoginPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt PostLoginFunction.Arn
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt UserPool.Arn
+
+  # Texto do email de convite (função app.custom_message): trigger "Custom message" do Cognito.
+  # Só muda o convite das contas criadas no separador Utilizadores; os outros emails do Cognito ficam iguais.
+  # Não tem permissões (só escreve o texto); se der erro, o Cognito usa o convite por omissão.
+  CustomMessageFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/
+      Handler: app.custom_message
+      Timeout: 5                    # o Cognito só espera 5 s pela resposta
+      Environment:
+        Variables:
+          SITE_URL: !Sub https://${Distribution.DomainName}
+
+  # Autoriza o Cognito (só esta user pool) a chamar a função do convite
+  CustomMessagePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt CustomMessageFunction.Arn
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt UserPool.Arn
+
+  # Separador Utilizadores (função app.admin), só para o grupo "admin": lista as contas e os logins,
+  # cria contas normais (com convite por email), desativa / reativa contas, repõe passwords e apaga
+  # contas desativadas com todos os dados. Função à parte para a API normal não ter acesso ao Cognito.
+  # Não consegue ler os dados financeiros de ninguém (lê as partições dos logins e, nas outras, só as
+  # chaves, para apagar) nem mudar o grupo admin (isso só com o make-admin).
+  AdminFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/
+      Handler: app.admin
+      Timeout: 30                   # o API Gateway desiste ao fim de 30 s
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref EntriesTable
+          USER_POOL_ID: !Ref UserPool
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: dynamodb:Query
+              Resource: !GetAtt EntriesTable.Arn
+              Condition:
+                ForAllValues:StringEquals:
+                  dynamodb:LeadingKeys: [LOGIN, LAST_LOGIN]
+            # Apagar uma conta: nas outras partições só lê as chaves (nunca os valores, por isso continua
+            # sem ver os dados financeiros de ninguém) e só apaga itens (nunca escreve nem devolve o conteúdo).
+            - Effect: Allow
+              Action: dynamodb:Query
+              Resource: !GetAtt EntriesTable.Arn
+              Condition:
+                ForAllValues:StringEquals:
+                  dynamodb:Attributes: [user_id, sk]
+                StringEquals:
+                  dynamodb:Select: SPECIFIC_ATTRIBUTES
+            - Effect: Allow
+              Action: dynamodb:DeleteItem
+              Resource: !GetAtt EntriesTable.Arn
+              Condition:
+                StringEqualsIfExists:
+                  dynamodb:ReturnValues: NONE
+            # Listar os utilizadores e quem está no grupo admin; criar contas (com convite), desativar /
+            # reativar, repor a password, terminar as sessões e apagar contas. Nenhuma permissão sobre os grupos.
+            - Effect: Allow
+              Action:
+                - cognito-idp:ListUsers
+                - cognito-idp:ListUsersInGroup
+                - cognito-idp:AdminCreateUser
+                - cognito-idp:AdminDisableUser
+                - cognito-idp:AdminEnableUser
+                - cognito-idp:AdminSetUserPassword
+                - cognito-idp:AdminUserGlobalSignOut
+                - cognito-idp:AdminDeleteUser
+              Resource: !GetAtt UserPool.Arn
+            # Pedir ao SES a verificação do email de uma conta nova (como o create-user), para o backup diário,
+            # e retirá-lo quando a conta é apagada. Só identidades de email (têm @), nunca domínios.
+            - Effect: Allow
+              Action:
+                - ses:CreateEmailIdentity
+                - ses:DeleteEmailIdentity
+              Resource: !Sub arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*@*
+            # O remetente dos backups (BackupSender) nunca pode ser apagado por esta função.
+            - Effect: Deny
+              Action: ses:DeleteEmailIdentity
+              Resource: !Sub arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/${AlertEmail}
+      Events:
+        GetUsers:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: /admin/users, Method: GET }
+        CreateUser:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: /admin/users/create, Method: POST }
+        ResendInvite:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: /admin/users/resend-invite, Method: POST }
+        DisableUser:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: /admin/users/disable, Method: POST }
+        EnableUser:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: /admin/users/enable, Method: POST }
+        ResetPassword:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: /admin/users/reset-password, Method: POST }
+        DeleteUser:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: /admin/users/delete, Method: POST }
+
+  # Remetente dos emails de backup no Amazon SES. Ao ser criado, a AWS envia um email de
+  # verificação para este endereço: só depois de carregar no link é que o SES envia emails.
+  # Enquanto a conta SES estiver em modo de testes ("sandbox"), cada destinatário também tem
+  # de ser verificado (o create-user trata disso). Custo: ~0,10 $ por 1000 emails.
+  BackupSender:
+    Type: AWS::SES::EmailIdentity
+    Properties:
+      EmailIdentity: !Ref AlertEmail
+
+  # Grupos de logs das Lambdas no CloudWatch (criados aqui para definir a retenção)
+  ApiFunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ApiFunction}
+      RetentionInDays: 14          # apaga logs com mais de 14 dias: armazenamento mínimo
+  DailyBackupFunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${DailyBackupFunction}
+      RetentionInDays: 14
+  PostLoginFunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${PostLoginFunction}
+      RetentionInDays: 14
+  CustomMessageFunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${CustomMessageFunction}
+      RetentionInDays: 14
+  AdminFunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AdminFunction}
+      RetentionInDays: 14
+
+  # ── SITE (bucket S3 privado, servido pelo CloudFront com HTTPS) ──────────
+  # Bucket com os ficheiros do frontend. Totalmente privado: só o CloudFront lê.
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:   # bloqueia qualquer forma de acesso público
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # OAC (Origin Access Control): o CloudFront assina os pedidos ao S3 para provar quem é
+  FrontendOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub ${AWS::StackName}-oac
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # Distribuição CloudFront (CDN): dá o URL https://xxxx.cloudfront.net e guarda cópias em cache
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: Ledger frontend
+        DefaultRootObject: index.html   # abrir o URL sem caminho mostra o index.html
+        PriceClass: PriceClass_100      # só pontos de presença da Europa e América do Norte (mais barato)
+        HttpVersion: http2
+        Origins:                        # de onde vêm os ficheiros: o bucket S3, através do OAC
+          - Id: s3-frontend
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ""  # vazio porque se usa OAC (o sistema novo), não OAI
+            OriginAccessControlId: !GetAtt FrontendOAC.Id
+        DefaultCacheBehavior:
+          TargetOriginId: s3-frontend
+          ViewerProtocolPolicy: redirect-to-https   # http:// é redirecionado para https://
+          AllowedMethods: [GET, HEAD]   # o site é só de leitura
+          CachedMethods: [GET, HEAD]
+          Compress: true                # envia os ficheiros comprimidos (gzip/brotli)
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6   # política gerida "CachingOptimized"
+          ResponseHeadersPolicyId: !Ref SecurityHeaders   # cabeçalhos de segurança (abaixo)
+
+  # Cabeçalhos de segurança que o CloudFront junta a todas as respostas do site (grátis):
+  #   CSP              o browser só corre scripts do próprio site, só usa estilos e tipos de letra do próprio
+  #                    site e só fala com o Cognito e com a API (se alguém conseguisse meter HTML na página,
+  #                    o script não corria nem enviava dados)
+  #   HSTS             o browser passa a usar sempre HTTPS neste endereço, durante 1 ano
+  #   X-Frame-Options  a app não pode ser aberta dentro de outra página (proteção contra clickjacking)
+  #   nosniff          o browser não "adivinha" o tipo dos ficheiros
+  #   Referrer-Policy  o endereço da app não é enviado a outros sites
+  #   Permissions-Policy  sem câmara, microfone, localização...
+  # Na CSP, a API aparece como *.execute-api: o endereço exato criaria uma dependência circular
+  # (a API já depende do CloudFront por causa do CORS). 'unsafe-inline' nos estilos é preciso porque
+  # o HTML gerado pelo JavaScript usa style="..."; nos scripts não há exceções.
+  SecurityHeaders:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub ${AWS::StackName}-security-headers
+        Comment: Ledger security headers
+        SecurityHeadersConfig:
+          ContentSecurityPolicy:
+            Override: true
+            ContentSecurityPolicy: !Join
+              - "; "
+              - - "default-src 'self'"
+                - "script-src 'self'"
+                - "style-src 'self' 'unsafe-inline'"
+                - "font-src 'self'"
+                - "img-src 'self' data: blob:"
+                - !Sub "connect-src 'self' https://cognito-idp.${AWS::Region}.amazonaws.com https://*.execute-api.${AWS::Region}.amazonaws.com"
+                - "object-src 'none'"
+                - "base-uri 'self'"
+                - "form-action 'self'"
+                - "frame-ancestors 'none'"
+          StrictTransportSecurity:
+            Override: true
+            AccessControlMaxAgeSec: 31536000
+            IncludeSubdomains: true
+          FrameOptions:
+            Override: true
+            FrameOption: DENY
+          ContentTypeOptions:
+            Override: true
+          ReferrerPolicy:
+            Override: true
+            ReferrerPolicy: no-referrer
+        CustomHeadersConfig:
+          Items:
+            - Header: Permissions-Policy
+              Value: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+              Override: true
+
+  # Política do bucket: só o serviço CloudFront, e só ESTA distribuição, pode ler os ficheiros
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub ${FrontendBucket.Arn}/*
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}
+
+  # ── ALERTA DE CUSTOS ─────────────────────────────────────────────────────
+  # Envia email quando o custo real passa 50% do limite ou quando a previsão do mês passa 100%
+  CostBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Sub ${AWS::StackName}-monthly-cost
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetUSD
+          Unit: USD
+      NotificationsWithSubscribers:
+        - Notification:               # gasto real acima de 50% (0,50 USD com o limite de 1)
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 50
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+        - Notification:               # previsão para o fim do mês acima do limite
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+
+# ── OUTPUTS: valores que a stack publica depois do deploy ──
+# O deploy.sh lê-os para gerar o frontend/config.js, enviar o site e limpar a cache.
+Outputs:
+  WebsiteUrl:
+    Description: Open this in your browser
+    Value: !Sub https://${Distribution.DomainName}
+  ApiUrl:
+    Value: !Sub https://${Api}.execute-api.${AWS::Region}.amazonaws.com
+  UserPoolId:
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Value: !Ref UserPoolClient
+  FrontendBucketName:
+    Value: !Ref FrontendBucket
+  DistributionId:
+    Value: !Ref Distribution
+  TableName:
+    Value: !Ref EntriesTable

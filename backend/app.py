@@ -1,0 +1,1477 @@
+"""
+Backend do Ledger - código das cinco funções AWS Lambda:
+    handler        API chamada pelo API Gateway (HTTP API, formato de evento v2)
+    daily_backup   backup diário por email, chamado pelo EventBridge Scheduler à meia-noite (hora de Portugal)
+    post_login     regista cada login, chamado pelo Cognito (trigger "Post authentication")
+    custom_message texto do email de convite das contas novas, chamado pelo Cognito (trigger "Custom message")
+    admin          separador Utilizadores (contas e logins), só para o grupo "admin" do Cognito
+
+Sem dependências externas: só usa a biblioteca padrão do Python + boto3
+(que já vem incluído no runtime Python da Lambda, por isso não é preciso empacotar nada).
+
+Todos os dados vivem numa ÚNICA tabela DynamoDB ("single-table design"):
+    user_id (partition key) = "sub" do utilizador no Cognito -> cada utilizador só vê os seus dados
+    sk      (sort key)      = "<TIPO>_..."                    -> o prefixo diz que tipo de item é
+
+    ACC_<hex>                    conta bancária
+    TX_<AAAA-MM-DD>_<hex>        movimento de dinheiro (entrada / saída / transferência entre contas)
+    INV_<hex>                    investimento (ETF, PPR, cripto...)
+    IMV_<AAAA-MM-DD>_<hex>       movimento de investimento (aporte / resgate)
+    VAL_<invhex>_<AAAA-MM>       valor de um investimento no fim do mês (um por mês)
+    LOAN_<hex>                   crédito / empréstimo
+    LBAL_<loanhex>_<AAAA-MM>     saldo em dívida de um crédito no fim do mês (um por mês),
+                                 com a prestação paga e a amortização extraordinária desse mês
+    PROP_<hex>                   imóvel (casa, terreno...) com o valor atual
+    BFMT_<hex>                   colunas escolhidas para os CSV de um banco (importar extratos)
+    BUD_<hex>                    orçamento de uma categoria de saídas (limite por mês)
+    GOAL_<hex>                   meta de poupança (quanto juntar, até quando e se conta com reservas ou com o património)
+    GRES_<AAAA-MM-DD>_<hex>      reserva para uma meta: parte do saldo de uma conta ou investimento posta de lado (ou tirada)
+    ALT_<hex>                    alvo da alocação dos investimentos: a percentagem da carteira para um tipo (ETF, PPR...)
+
+Além das partições dos utilizadores há partições do sistema:
+    user_id = "DAILY_BACKUP", sk = <sub>               um item por utilizador que ativou o backup diário por email
+    user_id = "LOGIN",        sk = <data e hora>_<sub> um item por login (quem e quando), apagado ao fim de
+                                                       90 dias pelo TTL da tabela (atributo "expires")
+    user_id = "LAST_LOGIN",   sk = <sub>               último login e número de logins de cada utilizador
+
+Como a data faz parte da sort key, uma Query com begins_with("TX_") devolve os
+movimentos já ordenados por data, sem ser preciso ordenar no código.
+
+Rotas:
+    GET    /data          tudo o que pertence ao utilizador autenticado (os cálculos são feitos no browser)
+    POST   /items         criar / atualizar muitos itens de uma vez  {"items": [...], "delete": [...]}
+    DELETE /items/{id}    apagar um item (+ os "filhos" no caso de contas / investimentos / créditos)
+    GET    /settings      definições do utilizador ({"daily_backup": true/false})
+    POST   /settings      mudar as definições  {"daily_backup": true/false} (ao ligar, pode trazer um "warning")
+    GET    /admin/users   (função admin, só para o grupo "admin") utilizadores, último login e logins recentes
+    POST   /admin/users/create | resend-invite | disable | enable | reset-password | delete  {"email": ...}
+                          (função admin) criar uma conta normal com convite por email, reenviar o convite,
+                          desativar / reativar uma conta, repor a password e apagar uma conta desativada
+                          com todos os dados (nunca em contas de administrador)
+"""
+
+import base64
+import html
+import json
+import os
+import re
+import secrets
+import traceback
+import unicodedata
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
+from email.mime.application import MIMEApplication
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+
+import boto3
+from boto3.dynamodb.conditions import Key
+from botocore.config import Config
+
+# ── LIMITES ──────────────────────────────────────────────────────────────────
+MAX_ITEMS_PER_REQUEST = 300   # máximo de itens (gravar + apagar) num único POST /items
+MAX_NAME = 60                 # comprimento máximo de nomes (conta, investimento, categoria...)
+MAX_TEXT = 500                # comprimento máximo de descrições e notas
+MAX_BACKUP_BYTES = 6_000_000  # tamanho total dos CSV num email (o SES aceita até 10 MB com os anexos)
+
+# Partição do sistema com quem ativou o backup diário (sk = sub do utilizador; ver o início do ficheiro)
+DAILY_BACKUP_PK = "DAILY_BACKUP"
+# Partições dos logins (ver o início do ficheiro) e quanto tempo fica cada login
+LOGIN_PK = "LOGIN"
+LAST_LOGIN_PK = "LAST_LOGIN"
+LOGIN_KEEP_DAYS = 90
+# Grupo do Cognito dos administradores e quantos logins recentes mostra o separador Utilizadores
+ADMIN_GROUP = "admin"
+MAX_LOGINS_SHOWN = 200
+# Letras e números das passwords temporárias, sem os que se confundem ao ditar ou copiar à mão (0/O, 1/l/I)
+TEMP_PASSWORD_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+# Email com aspecto válido (algo@algo.algo), sem espaços nem aspas (vai dentro do filtro do ListUsers)
+EMAIL_RE = re.compile(r'^[^@\s"\\]+@[^@\s"\\]+\.[^@\s"\\]+$')
+
+# Tipo de item (nome usado pelo frontend) -> prefixo da sort key no DynamoDB
+KIND_PREFIX = {
+    "account": "ACC",
+    "transaction": "TX",
+    "investment": "INV",
+    "inv_move": "IMV",
+    "valuation": "VAL",
+    "loan": "LOAN",
+    "loan_balance": "LBAL",
+    "property": "PROP",
+    "bank_format": "BFMT",
+    "budget": "BUD",
+    "goal": "GOAL",
+    "reservation": "GRES",
+    "alloc_target": "ALT",
+}
+# O mesmo mapa ao contrário: prefixo -> tipo (para descobrir o tipo a partir da sk)
+PREFIX_KIND = {v: k for k, v in KIND_PREFIX.items()}
+# Tipo de item -> nome da lista onde aparece na resposta de GET /data
+COLLECTION = {
+    "account": "accounts",
+    "transaction": "transactions",
+    "investment": "investments",
+    "inv_move": "inv_moves",
+    "valuation": "valuations",
+    "loan": "loans",
+    "loan_balance": "loan_balances",
+    "property": "properties",
+    "bank_format": "bank_formats",
+    "budget": "budgets",
+    "goal": "goals",
+    "reservation": "reservations",
+    "alloc_target": "alloc_targets",
+}
+
+# Expressões regulares que validam o formato de cada id (= sort key).
+# O grupo ( ) captura o identificador hexadecimal de 12 caracteres.
+HEX = r"[0-9a-f]{12}"
+ID_RE = {
+    "account": re.compile(rf"^ACC_({HEX})$"),
+    "transaction": re.compile(rf"^TX_\d{{4}}-\d{{2}}-\d{{2}}_({HEX})$"),
+    "investment": re.compile(rf"^INV_({HEX})$"),
+    "inv_move": re.compile(rf"^IMV_\d{{4}}-\d{{2}}-\d{{2}}_({HEX})$"),
+    "valuation": re.compile(rf"^VAL_({HEX})_\d{{4}}-\d{{2}}$"),
+    "loan": re.compile(rf"^LOAN_({HEX})$"),
+    "loan_balance": re.compile(rf"^LBAL_({HEX})_\d{{4}}-\d{{2}}$"),
+    "property": re.compile(rf"^PROP_({HEX})$"),
+    "bank_format": re.compile(rf"^BFMT_({HEX})$"),
+    "budget": re.compile(rf"^BUD_({HEX})$"),
+    "goal": re.compile(rf"^GOAL_({HEX})$"),
+    "reservation": re.compile(rf"^GRES_\d{{4}}-\d{{2}}-\d{{2}}_({HEX})$"),
+    "alloc_target": re.compile(rf"^ALT_({HEX})$"),
+}
+# Formato das chaves da primeira versão da app ("AAAA-MM-DD_<16 hex>"), para as migrar
+LEGACY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_[0-9a-f]{16}$")
+
+# Ligação à tabela, criada só uma vez por contentor Lambda e reutilizada entre pedidos
+_table = None
+_login_table = None
+_ses = None
+_cognito = None
+
+
+def table():
+    """Devolve o objeto da tabela DynamoDB (criado na primeira chamada e depois reutilizado).
+
+    Criar o cliente fora de cada pedido poupa tempo: a Lambda reaproveita o mesmo
+    contentor para vários pedidos seguidos ("warm start").
+    As tentativas "adaptive" repetem automaticamente pedidos recusados por excesso de
+    capacidade (a tabela tem só 25 unidades de leitura/escrita).
+    O nome da tabela vem da variável de ambiente TABLE_NAME, definida no template.yaml.
+    """
+    global _table
+    if _table is None:
+        ddb = boto3.resource("dynamodb", config=Config(retries={"max_attempts": 10, "mode": "adaptive"}))
+        _table = ddb.Table(os.environ["TABLE_NAME"])
+    return _table
+
+
+def login_table():
+    """A mesma tabela, para o registo dos logins: com tempos curtos e sem repetir pedidos.
+
+    O Cognito espera no máximo 5 s pelo trigger de login, e se a função não responder o login falha.
+    Mais vale perder o registo de um login do que deixar alguém à porta.
+    """
+    global _login_table
+    if _login_table is None:
+        cfg = Config(connect_timeout=1, read_timeout=1, retries={"total_max_attempts": 1})
+        _login_table = boto3.resource("dynamodb", config=cfg).Table(os.environ["TABLE_NAME"])
+    return _login_table
+
+
+def ses():
+    """Cliente do Amazon SES (envio do backup; na API, só ver se um email está verificado), criado na primeira chamada."""
+    global _ses
+    if _ses is None:
+        _ses = boto3.client("sesv2")
+    return _ses
+
+
+def cognito():
+    """Cliente do Cognito (lista de utilizadores: backup diário e separador Utilizadores), criado na primeira chamada."""
+    global _cognito
+    if _cognito is None:
+        _cognito = boto3.client("cognito-idp")
+    return _cognito
+
+
+# ── FUNÇÕES AUXILIARES ───────────────────────────────────────────────────────
+class ApiError(Exception):
+    """Erro "esperado" que deve chegar ao browser com um código HTTP (ex.: 400 pedido inválido)."""
+
+    def __init__(self, status, detail):
+        super().__init__(detail)
+        self.status = status   # código HTTP a devolver
+        self.detail = detail   # mensagem mostrada ao utilizador
+
+
+def _json_default(o):
+    """Ensina o json.dumps a converter Decimal (tipo numérico do DynamoDB) em número JSON."""
+    if isinstance(o, Decimal):
+        return float(o)
+    raise TypeError(f"Not serializable: {type(o)}")
+
+
+def response(status, body=None):
+    """Monta a resposta no formato que o API Gateway espera (código, cabeçalhos e corpo em texto)."""
+    return {
+        "statusCode": status,
+        "headers": {"Content-Type": "application/json"},
+        "body": "" if body is None else json.dumps(body, default=_json_default),
+    }
+
+
+def read_body(event):
+    """Lê o corpo JSON de um pedido (o API Gateway pode enviá-lo codificado em base64). Tem de ser um objeto."""
+    raw_body = event.get("body") or "{}"
+    if event.get("isBase64Encoded"):
+        raw_body = base64.b64decode(raw_body).decode("utf-8")
+    try:
+        body = json.loads(raw_body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise ApiError(400, "O corpo do pedido tem de ser JSON")
+    if not isinstance(body, dict):
+        raise ApiError(400, "O corpo do pedido tem de ser um objeto JSON")
+    return body
+
+
+def now_iso():
+    """Data e hora atuais em UTC, formato ISO (ex.: 2026-09-30T09:00:00+00:00). Vai para "updated_at"."""
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def new_hex():
+    """Gera um identificador aleatório de 12 caracteres hexadecimais (a parte única de cada id)."""
+    return uuid.uuid4().hex[:12]
+
+
+def kind_of(sk):
+    """Descobre o tipo de item pelo prefixo da sort key ("TX_2026-..." -> "transaction"). None se não conhecer."""
+    return PREFIX_KIND.get(sk.split("_", 1)[0])
+
+
+def hex_of(item_id, kind):
+    """Extrai a parte hexadecimal de um id do tipo indicado ("INV_ab12..." -> "ab12..."). None se não bater certo."""
+    m = ID_RE[kind].match(item_id or "")
+    return m.group(1) if m else None
+
+
+# ── VALIDADORES ──────────────────────────────────────────────────────────────
+# Cada v_* recebe um valor vindo do browser e devolve-o limpo e no tipo certo,
+# ou lança ValueError com uma mensagem em português que chega ao utilizador.
+
+def v_date(value, field="date"):
+    """Valida uma data no formato AAAA-MM-DD (rejeita, por exemplo, 2026-02-30)."""
+    try:
+        return datetime.strptime(str(value).strip(), "%Y-%m-%d").strftime("%Y-%m-%d")
+    except (ValueError, TypeError):
+        raise ValueError(f"{field}: data inválida '{value}' (use AAAA-MM-DD)")
+
+
+def v_month(value, field="month"):
+    """Valida um mês no formato AAAA-MM."""
+    try:
+        return datetime.strptime(str(value).strip(), "%Y-%m").strftime("%Y-%m")
+    except (ValueError, TypeError):
+        raise ValueError(f"{field}: mês inválido '{value}' (use AAAA-MM)")
+
+
+def v_num(value, field, minimum=None, positive=False, optional=False):
+    """Valida um valor em euros e arredonda-o a 2 casas decimais.
+
+    Usa Decimal (e não float) porque o DynamoDB exige Decimal e porque evita erros
+    de arredondamento com dinheiro (0.1 + 0.2 != 0.3 em float).
+      minimum  -> valor mínimo permitido (ex.: 0 para saldos)
+      positive -> tem de ser maior que zero (ex.: montante de um movimento)
+      optional -> campo vazio devolve None em vez de dar erro
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        if optional:
+            return None
+        raise ValueError(f"{field}: valor em falta")
+    # Em Python, True/False também são números (1/0): rejeitar explicitamente
+    if isinstance(value, bool):
+        raise ValueError(f"{field}: valor inválido")
+    try:
+        d = Decimal(str(value).strip()).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError):
+        raise ValueError(f"{field}: valor inválido '{value}'")
+    # Recusa infinito/NaN e valores absurdos (mais de mil milhões)
+    if not d.is_finite() or abs(d) > Decimal("1000000000"):
+        raise ValueError(f"{field}: valor inválido '{value}'")
+    if positive and d <= 0:
+        raise ValueError(f"{field}: tem de ser maior que 0")
+    if minimum is not None and d < minimum:
+        raise ValueError(f"{field}: tem de ser >= {minimum}")
+    return d
+
+
+def v_rate(value):
+    """Valida uma taxa de juro em % (0 a 100, 3 casas decimais). Vazio devolve None (taxa opcional)."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    try:
+        d = Decimal(str(value).strip()).quantize(Decimal("0.001"))
+    except (InvalidOperation, ValueError):
+        raise ValueError(f"rate: taxa inválida '{value}'")
+    if not d.is_finite() or d < 0 or d > 100:
+        raise ValueError("rate: taxa entre 0 e 100")
+    return d
+
+
+def v_text(value, field, max_len, required=False):
+    """Limpa um texto (tira espaços nas pontas) e corta-o ao comprimento máximo. required -> não pode ficar vazio."""
+    s = str(value if value is not None else "").strip()[:max_len]
+    if required and not s:
+        raise ValueError(f"{field}: obrigatório")
+    return s
+
+
+def v_ref(value, kind, field):
+    """Valida uma referência a outro item (ex.: account_id de um movimento tem de ser um id ACC_ válido)."""
+    if not ID_RE[kind].match(str(value or "")):
+        raise ValueError(f"{field}: referência inválida")
+    return str(value)
+
+
+def v_choice(value, field, choices):
+    """Valida que o valor é uma das opções permitidas (ex.: direction em "in", "out", "transfer")."""
+    v = str(value or "").strip()
+    if v not in choices:
+        raise ValueError(f"{field}: tem de ser {', '.join(choices)}")
+    return v
+
+
+# ── CONSTRUÇÃO / VALIDAÇÃO DE ITENS ──────────────────────────────────────────
+def build(user, raw):
+    """Valida um item enviado pelo browser e converte-o no formato guardado no DynamoDB.
+
+    Devolve (item_dynamodb, id_antigo_a_apagar_ou_None).
+
+    O id_antigo existe porque a data faz parte da sort key: se editares a data de um
+    movimento, a chave muda (TX_2026-01-01_x -> TX_2026-01-05_x), por isso grava-se o
+    item novo e apaga-se o antigo. O mesmo hex é mantido para o id continuar reconhecível.
+    O user_id vem sempre do token (parâmetro user), nunca do que o browser envia.
+    """
+    if not isinstance(raw, dict):
+        raise ValueError("item inválido")
+    kind = raw.get("kind")
+    if kind not in KIND_PREFIX:
+        raise ValueError(f"kind desconhecido '{kind}'")
+    old_id = raw.get("id") or None
+    if old_id is not None and not ID_RE[kind].match(str(old_id)):
+        raise ValueError("id inválido")
+    # Ao editar, reaproveita o hex do id existente; ao criar, gera um novo.
+    # (valuation e loan_balance não têm hex próprio: a chave é o investimento/crédito + o mês)
+    h = hex_of(old_id, kind) if old_id and kind in ("account", "transaction", "investment", "inv_move", "loan", "property", "bank_format", "budget", "goal", "reservation", "alloc_target") else None
+    h = h or new_hex()
+
+    item = {"user_id": user, "updated_at": now_iso()}
+
+    if kind == "account":
+        # Conta bancária: nome, tipo, saldo inicial e data a partir da qual o saldo conta
+        item.update(
+            sk=f"ACC_{h}",
+            name=v_text(raw.get("name"), "name", MAX_NAME, required=True),
+            acc_type=v_text(raw.get("acc_type") or "Conta à ordem", "acc_type", 30),
+            opening_balance=v_num(raw.get("opening_balance", 0), "opening_balance"),
+            opening_date=v_date(raw.get("opening_date"), "opening_date"),
+            archived=bool(raw.get("archived", False)),
+        )
+    elif kind == "transaction":
+        # Movimento: entrada, saída ou transferência entre duas contas
+        date = v_date(raw.get("date"))
+        direction = v_choice(raw.get("direction"), "direction", ("in", "out", "transfer"))
+        item.update(
+            sk=f"TX_{date}_{h}",
+            date=date,
+            account_id=v_ref(raw.get("account_id"), "account", "account_id"),
+            direction=direction,
+            category=v_text(raw.get("category") or ("Transferência" if direction == "transfer" else "Outros"), "category", MAX_NAME),
+            description=v_text(raw.get("description"), "description", MAX_TEXT),
+            amount=v_num(raw.get("amount"), "amount", positive=True),
+            approx=bool(raw.get("approx", False)),   # True = total aproximado ("Histórico por mês")
+        )
+        if direction == "transfer":
+            # Uma transferência precisa da conta de destino, diferente da de origem
+            item["to_account_id"] = v_ref(raw.get("to_account_id"), "account", "to_account_id")
+            if item["to_account_id"] == item["account_id"]:
+                raise ValueError("transferência: as contas têm de ser diferentes")
+    elif kind == "investment":
+        # Investimento (o ISIN, se existir, fica guardado nas notas: "ISIN: ...")
+        item.update(
+            sk=f"INV_{h}",
+            name=v_text(raw.get("name"), "name", MAX_NAME, required=True),
+            inv_type=v_text(raw.get("inv_type") or "Outro", "inv_type", 30),
+            notes=v_text(raw.get("notes"), "notes", MAX_TEXT),
+            archived=bool(raw.get("archived", False)),
+        )
+    elif kind == "inv_move":
+        # Aporte (dinheiro que entra no investimento) ou resgate (dinheiro que sai)
+        date = v_date(raw.get("date"))
+        item.update(
+            sk=f"IMV_{date}_{h}",
+            date=date,
+            investment_id=v_ref(raw.get("investment_id"), "investment", "investment_id"),
+            move=v_choice(raw.get("move"), "move", ("contribution", "withdrawal")),
+            amount=v_num(raw.get("amount"), "amount", positive=True),
+            description=v_text(raw.get("description"), "description", MAX_TEXT),
+            approx=bool(raw.get("approx", False)),
+        )
+    elif kind == "valuation":
+        # Valor de mercado de um investimento no fim de um mês.
+        # A chave é investimento + mês, por isso gravar o mesmo mês outra vez substitui o valor.
+        inv = v_ref(raw.get("investment_id"), "investment", "investment_id")
+        month = v_month(raw.get("month"))
+        item.update(
+            sk=f"VAL_{hex_of(inv, 'investment')}_{month}",
+            investment_id=inv,
+            month=month,
+            value=v_num(raw.get("value"), "value", minimum=0),
+        )
+    elif kind == "loan":
+        # Crédito: montante inicial, taxa e prestação (estes dois são opcionais)
+        item.update(
+            sk=f"LOAN_{h}",
+            name=v_text(raw.get("name"), "name", MAX_NAME, required=True),
+            loan_type=v_text(raw.get("loan_type") or "Outro", "loan_type", 30),
+            lender=v_text(raw.get("lender"), "lender", MAX_NAME),
+            principal=v_num(raw.get("principal"), "principal", minimum=0),
+            start_date=v_date(raw.get("start_date"), "start_date"),
+            notes=v_text(raw.get("notes"), "notes", MAX_TEXT),
+            archived=bool(raw.get("archived", False)),
+        )
+        rate = v_rate(raw.get("rate"))
+        payment = v_num(raw.get("payment"), "payment", minimum=0, optional=True)
+        # Os campos opcionais só são gravados se tiverem valor
+        if rate is not None:
+            item["rate"] = rate
+        if payment is not None:
+            item["payment"] = payment
+        # Data da última prestação prevista no contrato (opcional). Com taxa variável, o banco ajusta
+        # a prestação para manter este prazo, por isso é a melhor resposta a "quando acabo de pagar?"
+        if str(raw.get("end_date") or "").strip():
+            item["end_date"] = v_date(raw.get("end_date"), "end_date")
+            if item["end_date"] <= item["start_date"]:
+                raise ValueError("end_date: o fim do contrato tem de ser depois do início")
+    elif kind == "loan_balance":
+        # Saldo em dívida de um crédito no fim de um mês (chave = crédito + mês, tal como VAL_)
+        loan = v_ref(raw.get("loan_id"), "loan", "loan_id")
+        month = v_month(raw.get("month"))
+        item.update(
+            sk=f"LBAL_{hex_of(loan, 'loan')}_{month}",
+            loan_id=loan,
+            month=month,
+            balance=v_num(raw.get("balance"), "balance", minimum=0),
+        )
+        # Prestação paga nesse mês e amortização extraordinária (ambas opcionais).
+        # Com a prestação, o saldo anterior e a amortização extra, o browser calcula os juros do mês.
+        payment = v_num(raw.get("payment"), "payment", minimum=0, optional=True)
+        if payment is not None:
+            item["payment"] = payment
+        extra = v_num(raw.get("extra"), "extra", minimum=0, optional=True)
+        if extra:   # 0 ou vazio não se grava
+            item["extra"] = extra
+    elif kind == "property":
+        # Imóvel: valor atual (conta para o património líquido) e, opcionalmente, compra e crédito associado
+        item.update(
+            sk=f"PROP_{h}",
+            name=v_text(raw.get("name"), "name", MAX_NAME, required=True),
+            prop_type=v_text(raw.get("prop_type") or "Habitação própria", "prop_type", 30),
+            value=v_num(raw.get("value"), "value", minimum=0),
+            notes=v_text(raw.get("notes"), "notes", MAX_TEXT),
+            archived=bool(raw.get("archived", False)),
+        )
+        # Os campos opcionais só são gravados se tiverem valor
+        purchase_price = v_num(raw.get("purchase_price"), "purchase_price", minimum=0, optional=True)
+        if purchase_price is not None:
+            item["purchase_price"] = purchase_price
+        if str(raw.get("purchase_date") or "").strip():
+            item["purchase_date"] = v_date(raw.get("purchase_date"), "purchase_date")
+        # Crédito que financiou o imóvel: serve para mostrar quanto da casa já é teu (valor − dívida)
+        if str(raw.get("loan_id") or "").strip():
+            item["loan_id"] = v_ref(raw.get("loan_id"), "loan", "loan_id")
+
+    elif kind == "bank_format":
+        # Colunas de um formato de CSV de outro banco (a assinatura é o cabeçalho do ficheiro, normalizado).
+        # columns: posição de cada coluna (0, 1, 2...) ou -1 se não houver; é preciso a data e um valor.
+        raw_cols = raw.get("columns")
+        if not isinstance(raw_cols, dict):
+            raise ValueError("columns: inválido")
+        cols = {}
+        for k in ("date", "desc", "amount", "debit", "credit", "balance"):
+            v = raw_cols.get(k, -1)
+            if isinstance(v, bool) or not isinstance(v, int) or not -1 <= v <= 99:
+                raise ValueError(f"columns.{k}: inválido")
+            cols[k] = v
+        if cols["date"] < 0 or max(cols["amount"], cols["debit"], cols["credit"]) < 0:
+            raise ValueError("columns: falta a data ou o valor")
+        item.update(
+            sk=f"BFMT_{h}",
+            name=v_text(raw.get("name"), "name", MAX_NAME, required=True),
+            signature=v_text(raw.get("signature"), "signature", MAX_TEXT, required=True),
+            columns=cols,
+        )
+        # Conta da app onde estes extratos foram importados da última vez (para a escolher sozinha)
+        if str(raw.get("account_id") or "").strip():
+            item["account_id"] = v_ref(raw.get("account_id"), "account", "account_id")
+
+    elif kind == "budget":
+        # Orçamento de uma categoria de saídas: quanto se quer gastar por mês, no máximo.
+        # O browser compara-o com o que se gastou nessa categoria (um orçamento por categoria: o browser
+        # atualiza o que já existe em vez de criar outro).
+        item.update(
+            sk=f"BUD_{h}",
+            category=v_text(raw.get("category"), "category", MAX_NAME, required=True),
+            amount=v_num(raw.get("amount"), "amount", positive=True),
+        )
+
+    elif kind == "goal":
+        # Meta de poupança: quanto se quer juntar e, opcionalmente, até que mês. Conta com as reservas feitas para ela
+        # ("reserve", itens GRES_) ou com o património líquido todo ("networth"). O browser calcula quanto já há, o que
+        # falta e a que ritmo lá se chega.
+        item.update(
+            sk=f"GOAL_{h}",
+            name=v_text(raw.get("name"), "name", MAX_NAME, required=True),
+            target=v_num(raw.get("target"), "target", positive=True),
+            source=v_choice(raw.get("source"), "source", ("reserve", "networth")),
+        )
+        if str(raw.get("deadline") or "").strip():
+            item["deadline"] = v_month(raw.get("deadline"), "deadline")
+        # Reserva mensal planeada (opcional, só nas metas com reservas): quanto reservar todos os meses e de que conta ou
+        # investimento. No início de cada mês, a página inicial pergunta se se quer fazer essa reserva.
+        monthly = v_num(raw.get("monthly"), "monthly", positive=True, optional=True)
+        if monthly is not None and item["source"] == "reserve":
+            src = raw.get("monthly_source")
+            if not isinstance(src, str) or not (ID_RE["account"].match(src) or ID_RE["investment"].match(src)):
+                raise ValueError("monthly_source: referência inválida")
+            item.update(monthly=monthly, monthly_source=src)
+
+    elif kind == "reservation":
+        # Reserva para uma meta: parte do saldo de uma conta (ou do valor de um investimento) posta de lado para a meta
+        # ("reserve") ou tirada dela ("release"). O dinheiro não sai da conta: só fica a saber-se que já tem destino.
+        # Não reservar mais do que há livre é confirmado no browser, que é quem calcula os saldos.
+        date = v_date(raw.get("date"))
+        source = raw.get("source_id")
+        if not isinstance(source, str) or not (ID_RE["account"].match(source) or ID_RE["investment"].match(source)):
+            raise ValueError("source_id: referência inválida")
+        item.update(
+            sk=f"GRES_{date}_{h}",
+            date=date,
+            goal_id=v_ref(raw.get("goal_id"), "goal", "goal_id"),
+            source_id=source,
+            move=v_choice(raw.get("move"), "move", ("reserve", "release")),
+            amount=v_num(raw.get("amount"), "amount", positive=True),
+        )
+
+    elif kind == "alloc_target":
+        # Alvo da alocação: que percentagem da carteira se quer num tipo de investimento (o mesmo texto do inv_type).
+        # O browser compara-o com o peso de hoje e grava um alvo por tipo (atualiza o que já existe em vez de criar outro).
+        pct = v_num(raw.get("pct"), "pct", positive=True)
+        if pct > 100:
+            raise ValueError("pct: entre 0 e 100")
+        item.update(
+            sk=f"ALT_{h}",
+            inv_type=v_text(raw.get("inv_type"), "inv_type", 30, required=True),
+            pct=pct,
+        )
+
+    # Se o id mudou (ex.: nova data), o antigo tem de ser apagado
+    stale = old_id if old_id and old_id != item["sk"] else None
+    return item, stale
+
+
+def to_public(item):
+    """Converte um item do DynamoDB no formato enviado ao browser: tira o user_id, "sk" passa a "id" e junta "kind"."""
+    out = {k: v for k, v in item.items() if k != "user_id"}
+    out["id"] = out.pop("sk")
+    out["kind"] = kind_of(out["id"])
+    return out
+
+
+def empty_collections():
+    """Resposta vazia de GET /data: uma lista vazia por cada tipo de item."""
+    return {c: [] for c in COLLECTION.values()}
+
+
+# ── ACESSO AOS DADOS ─────────────────────────────────────────────────────────
+def query_all(user, prefix=None):
+    """Lê todos os itens de um utilizador (opcionalmente só os que começam por um prefixo, ex.: "TX_").
+
+    Usa Query (e não Scan): só lê a partição deste utilizador, por isso é rápido e barato.
+    O DynamoDB devolve no máximo 1 MB por resposta; quando há mais, vem "LastEvaluatedKey"
+    e o ciclo pede a página seguinte a partir daí (paginação).
+    """
+    cond = Key("user_id").eq(user)
+    if prefix:
+        cond = cond & Key("sk").begins_with(prefix)
+    kwargs = {"KeyConditionExpression": cond}
+    items = []
+    while True:
+        r = table().query(**kwargs)
+        items.extend(r["Items"])
+        if not r.get("LastEvaluatedKey"):
+            return items
+        kwargs["ExclusiveStartKey"] = r["LastEvaluatedKey"]
+
+
+def write_and_delete(user, puts, deletes):
+    """Grava e apaga muitos itens de uma vez com o batch_writer do boto3.
+
+    O batch_writer agrupa os pedidos em lotes de 25 (limite do DynamoDB) e repete
+    automaticamente os que não foram processados. overwrite_by_pkeys evita erros se a
+    mesma chave aparecer duas vezes no mesmo lote.
+    """
+    with table().batch_writer(overwrite_by_pkeys=["user_id", "sk"]) as bw:
+        for it in puts:
+            bw.put_item(Item=it)
+        for sk in deletes:
+            bw.delete_item(Key={"user_id": user, "sk": sk})
+
+
+# ── MIGRAÇÃO DOS DADOS ANTIGOS (registos da primeira versão da app) ─────────
+def migrate_legacy(user, items):
+    """Converte automaticamente os registos da versão antiga da app para o modelo atual.
+
+    Corre em cada GET /data, mas só faz alguma coisa se existirem chaves no formato antigo.
+    - despesas e receitas -> movimentos (TX_) numa conta "Conta principal" (criada se não houver contas)
+    - investimentos      -> aportes (IMV_) num investimento "Investimentos (importado)"
+    No fim apaga os registos antigos e devolve a lista de itens já atualizada.
+    """
+    legacy = [i for i in items if LEGACY_RE.match(i["sk"])]
+    if not legacy:
+        return items
+
+    accounts = [i for i in items if i["sk"].startswith("ACC_")]
+    investments = [i for i in items if i["sk"].startswith("INV_")]
+    puts = []
+
+    # Conta de destino: a primeira que já exista, ou uma nova "Conta principal"
+    if accounts:
+        acc_id = accounts[0]["sk"]
+    else:
+        first_date = min(i["date"] for i in legacy)
+        acc = {"user_id": user, "sk": f"ACC_{new_hex()}", "name": "Conta principal",
+               "acc_type": "Conta à ordem", "opening_balance": Decimal("0.00"),
+               "opening_date": first_date, "archived": False, "updated_at": now_iso()}
+        puts.append(acc)
+        acc_id = acc["sk"]
+
+    # Investimento de destino, só criado se houver registos antigos do tipo "investment"
+    inv_id = None
+    if any(i.get("type") == "investment" for i in legacy):
+        inv = {"user_id": user, "sk": f"INV_{new_hex()}", "name": "Investimentos (importado)",
+               "inv_type": "Outro", "notes": "Criado automaticamente a partir da versão antiga",
+               "archived": False, "updated_at": now_iso()}
+        puts.append(inv)
+        inv_id = inv["sk"]
+
+    for i in legacy:
+        amount = Decimal(i["amount"]).quantize(Decimal("0.01"))
+        desc = i.get("description", "") or ""
+        if i.get("type") == "investment":
+            # A categoria antiga passa para o início da descrição (ex.: "ETF: compra mensal")
+            if i.get("category"):
+                desc = f"{i['category']}: {desc}".strip(": ").strip()
+            puts.append({"user_id": user, "sk": f"IMV_{i['date']}_{new_hex()}", "date": i["date"],
+                         "investment_id": inv_id, "move": "contribution", "amount": amount,
+                         "description": desc, "approx": False, "updated_at": now_iso()})
+        else:
+            # "income" vira entrada; tudo o resto (despesa) vira saída
+            puts.append({"user_id": user, "sk": f"TX_{i['date']}_{new_hex()}", "date": i["date"],
+                         "account_id": acc_id, "direction": "in" if i.get("type") == "income" else "out",
+                         "category": i.get("category") or "Outros", "description": desc,
+                         "amount": amount, "approx": False, "updated_at": now_iso()})
+
+    write_and_delete(user, puts, [i["sk"] for i in legacy])
+    legacy_keys = {i["sk"] for i in legacy}
+    return [i for i in items if i["sk"] not in legacy_keys] + puts
+
+
+def _plain(s):
+    """Texto em minúsculas e sem acentos ("Transferências" -> "transferencias")."""
+    return "".join(c for c in unicodedata.normalize("NFD", str(s or "")) if unicodedata.category(c) != "Mn").lower().strip()
+
+
+def migrate_transfer_categories(user, items):
+    """Entradas e saídas na categoria "Transferências" passam a "Transferências in" / "Transferências out".
+
+    As transferências entre contas próprias (direction "transfer") ficam como estão.
+    Corre em cada GET /data, mas só grava alguma coisa se ainda houver categorias antigas.
+    """
+    puts = []
+    for i in items:
+        if i["sk"].startswith("TX_") and i.get("direction") in ("in", "out") \
+                and _plain(i.get("category")) in ("transferencia", "transferencias"):
+            i["category"] = "Transferências in" if i["direction"] == "in" else "Transferências out"
+            i["updated_at"] = now_iso()
+            puts.append(i)
+    if puts:
+        write_and_delete(user, puts, [])
+    return items
+
+
+# ── ROTAS ────────────────────────────────────────────────────────────────────
+def get_data(user):
+    """GET /data: devolve todos os itens do utilizador, agrupados por tipo ({"accounts": [...], ...})."""
+    items = migrate_transfer_categories(user, migrate_legacy(user, query_all(user)))
+    out = empty_collections()
+    for i in items:
+        kind = kind_of(i["sk"])
+        if kind:   # ignora itens com prefixos desconhecidos
+            out[COLLECTION[kind]].append(to_public(i))
+    return out
+
+
+def post_items(user, event):
+    """POST /items: valida e grava vários itens, e apaga os ids pedidos em "delete".
+
+    Tudo ou nada na validação: se algum item for inválido, não se grava nenhum e o
+    browser recebe um 400 com (até 10) mensagens de erro.
+    """
+    body = read_body(event)
+    raw_items = body.get("items") or []
+    raw_deletes = body.get("delete") or []
+    if not isinstance(raw_items, list) or not isinstance(raw_deletes, list):
+        raise ApiError(400, "items e delete têm de ser listas")
+    if len(raw_items) + len(raw_deletes) > MAX_ITEMS_PER_REQUEST:
+        raise ApiError(400, f"Máximo de {MAX_ITEMS_PER_REQUEST} itens por pedido")
+
+    # Valida tudo primeiro, juntando os erros (numerados a partir de 1, como as linhas de um CSV)
+    puts, deletes, errors = [], set(), []
+    for n, raw in enumerate(raw_items):
+        try:
+            item, stale = build(user, raw)
+            puts.append(item)
+            if stale:
+                deletes.add(stale)
+        except ValueError as e:
+            errors.append(f"Item {n + 1}: {e}")
+    for d in raw_deletes:
+        if not isinstance(d, str) or not kind_of(d) or not ID_RE[kind_of(d)].match(d):
+            errors.append(f"delete: id inválido '{d}'")
+        else:
+            deletes.add(d)
+    if errors:
+        raise ApiError(400, "; ".join(errors[:10]))
+
+    # Nunca apagar uma chave que vai ser gravada neste mesmo pedido
+    put_keys = {p["sk"] for p in puts}
+    deletes -= put_keys
+    # Remove repetidos com a mesma chave (fica o último)
+    unique = {p["sk"]: p for p in puts}
+    write_and_delete(user, list(unique.values()), sorted(deletes))
+    return {"saved": [to_public(p) for p in unique.values()], "deleted": sorted(deletes)}
+
+
+def delete_item(user, item_id):
+    """DELETE /items/{id}: apaga um item e, em cascata, os itens que dependem dele.
+
+    conta        -> também os movimentos dessa conta (como origem ou destino) e as reservas para metas feitas nela
+    investimento -> também os aportes/resgates, os valores mensais e as reservas para metas feitas nele
+    crédito      -> também os saldos mensais
+    meta         -> também as reservas dela (o dinheiro fica livre)
+    (um imóvel não tem filhos; se o crédito associado for apagado, o imóvel fica sem crédito)
+    """
+    kind = kind_of(item_id or "")
+    if not kind or not ID_RE[kind].match(item_id):
+        raise ApiError(400, "id inválido")
+
+    to_delete = {item_id}
+    if kind == "account":
+        for t in query_all(user, "TX_"):
+            if t.get("account_id") == item_id or t.get("to_account_id") == item_id:
+                to_delete.add(t["sk"])
+    elif kind == "investment":
+        h = hex_of(item_id, "investment")
+        to_delete.update(m["sk"] for m in query_all(user, "IMV_") if m.get("investment_id") == item_id)
+        to_delete.update(v["sk"] for v in query_all(user, f"VAL_{h}_"))
+    elif kind == "loan":
+        h = hex_of(item_id, "loan")
+        to_delete.update(b["sk"] for b in query_all(user, f"LBAL_{h}_"))
+    # reservas para metas: as da meta apagada, ou as feitas na conta / no investimento apagado
+    if kind in ("account", "investment", "goal"):
+        field = "goal_id" if kind == "goal" else "source_id"
+        to_delete.update(r["sk"] for r in query_all(user, "GRES_") if r.get(field) == item_id)
+
+    write_and_delete(user, [], sorted(to_delete))
+    return {"deleted": sorted(to_delete)}
+
+
+def get_settings(user):
+    """GET /settings: definições do utilizador. Por agora só uma: se o backup diário por email está ativo."""
+    r = table().get_item(Key={"user_id": DAILY_BACKUP_PK, "sk": user})
+    return {"daily_backup": "Item" in r}
+
+
+def backup_email_warning(claims):
+    """Ao ligar o backup diário: um aviso (texto) se o email da conta ainda não pode receber os CSV; senão None.
+
+    - Email por verificar no Cognito (claim "email_verified" do token): o envio da meia-noite salta a conta.
+    - Email por verificar no SES: enquanto a conta SES estiver em modo de testes ("sandbox"), o SES só envia
+      para endereços (ou domínios) verificados, e o envio falhava todas as noites (MessageRejected).
+      É o link que a AWS envia quando o create-user cria a conta.
+    Só lê o estado no SES (ses:GetEmailIdentity). Se essa consulta falhar por outro motivo, não avisa
+    (fica só o código do erro no log). Se a conta SES sair do modo de testes, esta verificação deixa de ser
+    precisa (os destinatários deixam de ter de estar verificados) e deve ser revista.
+    """
+    if str(claims.get("email_verified", "")).lower() != "true":
+        return ("Backup diário ligado, mas o email da tua conta não está verificado: os CSV só começam "
+                "a chegar depois de ele ser verificado. Fala com o administrador.")
+    email = claims["email"]
+    for identity in (email, email.rsplit("@", 1)[-1]):   # o endereço ou o domínio inteiro
+        try:
+            r = ses().get_email_identity(EmailIdentity=identity)
+        except Exception as e:
+            code = getattr(e, "response", {}).get("Error", {}).get("Code") or type(e).__name__
+            if code == "NotFoundException":
+                continue
+            print(json.dumps({"settings_ses_error": code}))   # só o código: a mensagem pode ter o email
+            return None
+        if r.get("VerifiedForSendingStatus") or r.get("VerificationStatus") == "SUCCESS":
+            return None
+    return ("Backup diário ligado, mas ainda não vais receber os emails: confirma o teu endereço no link "
+            "do email que a Amazon Web Services te enviou (vê também no spam). Se não o encontrares, "
+            "pede ao administrador para o enviar outra vez.")
+
+
+def post_settings(user, claims, event):
+    """POST /settings: ativa ou desativa o backup diário por email  {"daily_backup": true/false}.
+
+    Ativar grava um item na partição DAILY_BACKUP (com o sub do utilizador); desativar apaga-o.
+    O email não é guardado: o backup diário vai sempre para o email atual da conta no Cognito.
+    Ao ativar, se o email ainda não puder receber os CSV, a resposta traz também um "warning" para a app mostrar.
+    """
+    body = read_body(event)
+    daily = body.get("daily_backup")
+    if not isinstance(daily, bool):
+        raise ApiError(400, "daily_backup: tem de ser true ou false")
+    if not daily:
+        table().delete_item(Key={"user_id": DAILY_BACKUP_PK, "sk": user})
+        return {"daily_backup": False}
+    if not claims.get("email"):
+        raise ApiError(400, "A tua conta não tem email associado")
+    table().put_item(Item={"user_id": DAILY_BACKUP_PK, "sk": user, "since": now_iso()})
+    warning = backup_email_warning(claims)
+    return {"daily_backup": True, **({"warning": warning} if warning else {})}
+
+
+# ── BACKUP DIÁRIO POR EMAIL ──────────────────────────────────────────────────
+# Os mesmos 5 CSV do botão "Backup" da app (exportRows/toCSV no frontend/js/csv.js), gerados aqui
+# a partir do DynamoDB. Os cabeçalhos têm de ser iguais aos do FORMATS do csv.js (há um teste que
+# o confirma), para o backup se poder recuperar com "Importar".
+BACKUP_FORMATS = {
+    "contas": ["Conta", "Tipo de conta", "Saldo inicial", "Data do saldo inicial"],
+    "movimentos": ["Data", "Conta", "Tipo", "Categoria", "Descrição", "Valor", "Conta destino", "Aproximado"],
+    "investimentos": ["Data", "Investimento", "Tipo de investimento", "Operação", "Valor", "Descrição"],
+    "creditos": ["Mês", "Crédito", "Tipo de crédito", "Saldo em dívida", "Prestação", "Montante inicial",
+                 "Data de início", "Taxa (%)", "Banco", "Amortização extra", "Fim do contrato"],
+    "patrimonio": ["Imóvel", "Tipo de imóvel", "Valor atual", "Preço de compra", "Data de compra",
+                   "Crédito associado", "Notas"],
+}
+DIRECTION_LABEL = {"in": "Entrada", "out": "Saída", "transfer": "Transferência"}
+
+
+def csv_cell(v):
+    """Uma célula do CSV: valores (Decimal) com 2 casas e vírgula decimal; ; aspas ou quebras de linha vão entre aspas.
+
+    Um texto começado por = + - @, tab ou retorno do carro (CR) seria lido pelo Excel como fórmula: leva
+    uma ' à frente, que o Excel não mostra e que o "Importar" da app tira (como o toCSV/parseCSV do csv.js).
+    """
+    if v is None:
+        return ""
+    s = f"{v:.2f}".replace(".", ",") if isinstance(v, Decimal) else str(v)
+    if not isinstance(v, Decimal) and re.match(r"[=+\-@\t\r]", s):
+        s = "'" + s
+    return '"' + s.replace('"', '""') + '"' if re.search(r'[";\n\r]', s) else s
+
+
+def to_csv(header, rows):
+    """Texto de um CSV com ";" (como o toCSV do frontend, para abrir bem no Excel em português)."""
+    return "\r\n".join(";".join(csv_cell(c) for c in r) for r in [header, *rows])
+
+
+def rate_text(rate):
+    """Taxa de juro sem zeros a mais e com vírgula (3.125 -> "3,125"; 3.500 -> "3,5"); vazio se não houver."""
+    return "" if rate is None else format(Decimal(rate).normalize(), "f").replace(".", ",")
+
+
+def backup_rows(items):
+    """Itens de um utilizador (como vêm do DynamoDB) -> {formato: linhas}, como o exportRows do csv.js."""
+    by = {}
+    for i in items:
+        by.setdefault(kind_of(i["sk"]), []).append(i)
+    names = {k: {x["sk"]: x.get("name", "") for x in by.get(k, [])} for k in ("account", "investment", "loan")}
+
+    def by_name(xs):   # ordem alfabética sem ligar a acentos nem maiúsculas (como o sortByName do calc.js)
+        return sorted(xs, key=lambda x: (_plain(x.get("name")), x.get("name", "")))
+
+    def acc(i):
+        return names["account"].get(i, "(conta apagada)")
+
+    def inv(i):
+        return names["investment"].get(i, "(apagado)")
+
+    # contas: tipo e saldo inicial (os movimentos só têm o nome da conta)
+    accounts = [[a.get("name", ""), a.get("acc_type", ""), a.get("opening_balance"), a.get("opening_date", "")]
+                for a in by_name(by.get("account", []))]
+
+    mov = [[t["date"], acc(t.get("account_id")), DIRECTION_LABEL.get(t.get("direction"), ""), t.get("category", ""),
+            t.get("description", ""), t.get("amount"), acc(t.get("to_account_id")) if t.get("direction") == "transfer" else "",
+            "sim" if t.get("approx") else "não"]
+           for t in sorted(by.get("transaction", []), key=lambda t: t["date"])]
+
+    inv_type = {x["sk"]: x.get("inv_type", "") for x in by.get("investment", [])}
+    invs = [[m["date"], inv(m.get("investment_id")), inv_type.get(m.get("investment_id"), ""),
+             "Aporte" if m.get("move") == "contribution" else "Resgate", m.get("amount"), m.get("description", "")]
+            for m in by.get("inv_move", [])]
+    invs += [[v["month"], inv(v.get("investment_id")), inv_type.get(v.get("investment_id"), ""), "Valor", v.get("value"), ""]
+             for v in by.get("valuation", [])]
+    # uma linha sem operação declara o investimento, com as notas na descrição: para os que não têm registos e para os
+    # que têm notas, para não se perder nada
+    used = {r[1] for r in invs}
+    invs += [["", i.get("name", ""), i.get("inv_type", ""), "", None, i.get("notes", "")]
+             for i in by_name(by.get("investment", [])) if i.get("notes") or i.get("name", "") not in used]
+    invs.sort(key=lambda r: (str(r[0]), _plain(r[1]), r[1]))   # por data e, no mesmo dia ou mês, por investimento
+
+    loans = []
+    for l in by_name(by.get("loan", [])):
+        meta = [l.get("principal"), l.get("start_date", ""), rate_text(l.get("rate")), l.get("lender", "")]
+        bs = sorted((b for b in by.get("loan_balance", []) if b.get("loan_id") == l["sk"]), key=lambda b: b["month"])
+        # a primeira linha (sem mês) cria o crédito ao importar, com a prestação dele; nos meses, só a que foi registada
+        loans.append(["", l.get("name", ""), l.get("loan_type", ""), None, l.get("payment"), *meta, None, l.get("end_date", "")])
+        for b in bs:
+            loans.append([b["month"], l.get("name", ""), l.get("loan_type", ""), b.get("balance"),
+                          b.get("payment"), *meta, b.get("extra") or None, l.get("end_date", "")])
+
+    props = [[p.get("name", ""), p.get("prop_type", ""), p.get("value"), p.get("purchase_price"), p.get("purchase_date", ""),
+              names["loan"].get(p["loan_id"], "(apagado)") if p.get("loan_id") else "", p.get("notes", "")]
+             for p in by_name(by.get("property", []))]
+    return {"contas": accounts, "movimentos": mov, "investimentos": invs, "creditos": loans, "patrimonio": props}
+
+
+def backup_files(user, day):
+    """Os CSV do backup de um utilizador: [(nome do ficheiro, texto)], só dos formatos com dados."""
+    rows = backup_rows(query_all(user))
+    return [(f"ledger-{fmt}-{day}.csv", to_csv(BACKUP_FORMATS[fmt], rows[fmt])) for fmt in BACKUP_FORMATS if rows[fmt]]
+
+
+def backup_day(now=None):
+    """Dia a que o backup diz respeito: o que acabou de terminar quando o envio corre à meia-noite.
+
+    Meia-noite em Portugal é 23:00 UTC no verão e 00:00 UTC no inverno; recuar 12 horas dá sempre
+    o dia anterior, sem precisar de tabelas de fusos horários.
+    """
+    return ((now or datetime.now(timezone.utc)) - timedelta(hours=12)).strftime("%Y-%m-%d")
+
+
+def send_backup(sender, email, day, files):
+    """Envia um email com os CSV em anexo (com BOM, para o Excel abrir bem os acentos)."""
+    if sum(len(c.encode("utf-8")) for _, c in files) > MAX_BACKUP_BYTES:
+        raise ValueError("backup demasiado grande para enviar por email")
+    shown = datetime.strptime(day, "%Y-%m-%d").strftime("%d/%m/%Y")
+    msg = MIMEMultipart()
+    msg["Subject"] = f"BACKUP Ledger dia {shown}"
+    msg["From"] = f"Ledger <{sender}>"
+    msg["To"] = email
+    names = "\n".join(f"  - {name}" for name, _ in files)
+    msg.attach(MIMEText(
+        f"Backup automático dos teus dados do Ledger, até ao fim do dia {shown}.\n\nFicheiros em anexo:\n{names}\n\n"
+        "Para recuperar os dados, usa \"Importar\" no separador certo da app.\n"
+        "Para deixares de receber este email, desliga o \"Backup diário\" na barra lateral da app\n"
+        "(no telemóvel, no ☰ e em \"Definições\").\n", "plain", "utf-8"))
+    for name, content in files:
+        part = MIMEApplication(("\ufeff" + content).encode("utf-8"), _subtype="csv")
+        part.add_header("Content-Disposition", "attachment", filename=name)
+        msg.attach(part)
+    ses().send_email(FromEmailAddress=sender, Destination={"ToAddresses": [email]},
+                     Content={"Raw": {"Data": msg.as_bytes()}})
+
+
+def account_emails():
+    """{sub: email} dos utilizadores ativos do Cognito com o email verificado (uma só listagem, de 60 em 60).
+
+    Só emails verificados: o create-user cria as contas já com email_verified=true; ninguém muda o próprio
+    email (WriteAttributes do app client) e, se um administrador o mudar pela AWS, o novo fica por verificar
+    e o backup deixa de ir para lá.
+    """
+    out = {}
+    kwargs = {"UserPoolId": os.environ["USER_POOL_ID"], "AttributesToGet": ["sub", "email", "email_verified"]}
+    while True:
+        r = cognito().list_users(**kwargs)
+        for u in r["Users"]:
+            attrs = {a["Name"]: a["Value"] for a in u.get("Attributes", [])}
+            if u.get("Enabled", True) and attrs.get("sub") and attrs.get("email") and attrs.get("email_verified") == "true":
+                out[attrs["sub"]] = attrs["email"]
+        if not r.get("PaginationToken"):
+            return out
+        kwargs["PaginationToken"] = r["PaginationToken"]
+
+
+def daily_backup(event=None, context=None):
+    """Função Lambda do backup diário (configurada como "app.daily_backup" no template.yaml).
+
+    O EventBridge Scheduler chama-a todos os dias à meia-noite, hora de Portugal. Para cada
+    utilizador que ativou o backup diário, gera os CSV e envia-os para o email da conta no Cognito.
+    Contas apagadas ou desativadas no Cognito e contas sem dados são saltadas.
+    Um erro num utilizador não impede os outros. Os logs só têm contagens (nem emails nem dados).
+
+    Teste à mão (workflow "Test daily backup" no GitHub): o evento {"only_email": "..."} envia só para
+    esse email, e só se for de alguém que ativou o backup. O agendamento não manda nada no evento.
+
+    Se falhar antes de chegar aos utilizadores (ex.: sem acesso à tabela ou ao Cognito), regista só o código
+    do erro e lança um erro sem a mensagem da AWS: essa mensagem pode ter ids (da user pool, de uma role) e
+    os logs desta função aparecem no workflow "Test daily backup", que é público.
+    """
+    try:
+        return run_daily_backup(event)
+    except Exception as e:
+        print(json.dumps({"daily_backup_error": error_code(e)}))
+        raise RuntimeError(f"daily_backup falhou: {error_code(e)}") from None
+
+
+def run_daily_backup(event):
+    """O trabalho do backup diário (ver daily_backup, acima). Um erro num utilizador não impede os outros."""
+    only = str(event.get("only_email") or "").strip().lower() if isinstance(event, dict) else ""
+    subs, kwargs = [], {"KeyConditionExpression": Key("user_id").eq(DAILY_BACKUP_PK)}
+    while True:
+        r = table().query(**kwargs)
+        subs.extend(i["sk"] for i in r["Items"])
+        if not r.get("LastEvaluatedKey"):
+            break
+        kwargs["ExclusiveStartKey"] = r["LastEvaluatedKey"]
+    result = {"sent": 0, "skipped": 0, "failed": 0}
+    if subs:
+        sender, emails, day = os.environ["SENDER_EMAIL"], account_emails(), backup_day()
+        if only:
+            subs = [sub for sub in subs if emails.get(sub, "").lower() == only]
+        for sub in subs:
+            try:
+                files = backup_files(sub, day) if sub in emails else []
+                if not files:
+                    result["skipped"] += 1
+                    continue
+                send_backup(sender, emails[sub], day, files)
+                result["sent"] += 1
+            except Exception as e:
+                # só o tipo de erro (ex.: MessageRejected = email por verificar no SES): a mensagem pode ter o email
+                print(json.dumps({"daily_backup_error": getattr(e, "response", {}).get("Error", {}).get("Code") or type(e).__name__}))
+                result["failed"] += 1
+    print(json.dumps({"daily_backup": result}))
+    return result
+
+
+# ── LOGINS E ADMINISTRAÇÃO ───────────────────────────────────────────────────
+def record_login(sub, email, now=None):
+    """Grava um login: um item na partição LOGIN (apagado pelo TTL ao fim de 90 dias) e, na LAST_LOGIN,
+    a data do último login e mais 1 no número de logins deste utilizador."""
+    now = now or datetime.now(timezone.utc)
+    at = now.isoformat(timespec="seconds")
+    expires = int((now + timedelta(days=LOGIN_KEEP_DAYS)).timestamp())
+    login_table().put_item(Item={"user_id": LOGIN_PK, "sk": f"{at}_{sub}", "sub": sub, "email": email,
+                                 "at": at, "expires": expires})
+    # "at" é palavra reservada do DynamoDB: nas expressões usa-se o nome alternativo #at
+    login_table().update_item(
+        Key={"user_id": LAST_LOGIN_PK, "sk": sub},
+        UpdateExpression="SET #at = :at, #email = :email ADD #logins :one",
+        ExpressionAttributeNames={"#at": "at", "#email": "email", "#logins": "logins"},
+        ExpressionAttributeValues={":at": at, ":email": email, ":one": 1},
+    )
+
+
+def post_login(event, context=None):
+    """Função Lambda do registo de logins (configurada como "app.post_login" no template.yaml).
+
+    O Cognito chama-a depois de cada login com sucesso (trigger "Post authentication"), incluindo o
+    primeiro login com password temporária. Renovar a sessão com o refresh token não conta como login.
+    Nunca lança erros: se a função falhasse, o Cognito recusava o login. O registo perde-se, a pessoa entra.
+    Tem de devolver o evento que recebeu.
+    """
+    try:
+        attrs = (event.get("request") or {}).get("userAttributes") or {}
+        if attrs.get("sub"):
+            record_login(attrs["sub"], attrs.get("email", ""))
+    except Exception as e:
+        # só o tipo de erro, como no backup diário: a mensagem pode ter o email
+        print(json.dumps({"post_login_error": getattr(e, "response", {}).get("Error", {}).get("Code") or type(e).__name__}))
+    return event
+
+
+# Email de convite de uma conta nova. O Cognito troca {username} pelo utilizador e {####} pela password
+# temporária, e só aceita o texto se tiver os dois (senão envia o convite por omissão, em inglês).
+INVITE_SUBJECT = "Convite para o Ledger"
+INVITE_MESSAGE = """Olá!<br><br>
+Foi criada uma conta para ti no <b>Ledger</b>, uma app de finanças pessoais.<br><br>
+Entra em <a href="{site}">{site}</a> com:<br>
+&nbsp;&nbsp;Email: <b>{email}</b><br>
+&nbsp;&nbsp;Password temporária: <b>{code}</b><br><br>
+No primeiro login escolhes a tua password. A password temporária é válida durante 7 dias.<br><br>
+Vais receber também um email da Amazon Web Services a pedir para confirmares este endereço:
+só é preciso se quiseres receber o backup diário por email.<br><br>
+<small>Referência da conta: {username}</small>"""
+
+
+def custom_message(event, context=None):
+    """Função Lambda do texto do convite (configurada como "app.custom_message" no template.yaml).
+
+    O Cognito chama-a antes de enviar uma mensagem (trigger "Custom message"). Só muda o convite das
+    contas criadas no separador Utilizadores (ou o seu reenvio): em português e com o endereço do site.
+    As outras mensagens ficam como estão. Nunca lança erros: se falhar, o Cognito envia o convite por omissão.
+    Tem de devolver o evento que recebeu.
+    """
+    try:
+        if event.get("triggerSource") == "CustomMessage_AdminCreateUser":
+            req = event["request"]
+            message = INVITE_MESSAGE.format(
+                site=html.escape(os.environ["SITE_URL"]), email=html.escape(req["userAttributes"].get("email", "")),
+                code=req["codeParameter"], username=req["usernameParameter"])
+            event["response"].update(emailSubject=INVITE_SUBJECT, emailMessage=message)
+    except Exception as e:
+        print(json.dumps({"custom_message_error": type(e).__name__}))
+    return event
+
+
+def is_admin(claims):
+    """True se o token for de alguém do grupo "admin" do Cognito.
+
+    O Cognito põe os grupos no ID token como uma lista (claim "cognito:groups"), mas o API Gateway
+    entrega-a como texto: "[admin outro]" ou "admin,outro". Aceita os três formatos.
+    O token é assinado pelo Cognito e o grupo só se muda com credenciais AWS (make-admin.ps1),
+    por isso ninguém se consegue pôr no grupo sozinho.
+    """
+    groups = claims.get("cognito:groups") or []
+    if isinstance(groups, str):
+        groups = groups.strip("[]").replace(",", " ").split()
+    return ADMIN_GROUP in [str(g).strip("\"'") for g in groups]
+
+
+def _iso(dt):
+    """datetime do Cognito -> texto ISO em UTC (ex.: 2026-10-07T09:00:00+00:00)."""
+    return dt.astimezone(timezone.utc).isoformat(timespec="seconds") if isinstance(dt, datetime) else None
+
+
+def admin_users():
+    """GET /admin/users: todos os utilizadores do Cognito, com o último login e quantos logins fizeram,
+    e os logins mais recentes (no máximo MAX_LOGINS_SHOWN, do mais recente para o mais antigo).
+
+    Não devolve o "sub" de ninguém, só os emails. Os logins de contas já apagadas ficam com o email
+    que tinham na altura.
+    """
+    pool = os.environ["USER_POOL_ID"]
+    users = {}
+    kwargs = {"UserPoolId": pool}
+    while True:
+        r = cognito().list_users(**kwargs)
+        for u in r["Users"]:
+            attrs = {a["Name"]: a["Value"] for a in u.get("Attributes", [])}
+            if attrs.get("sub"):
+                users[attrs["sub"]] = {"email": attrs.get("email", ""), "status": u.get("UserStatus", ""),
+                                       "enabled": u.get("Enabled", True), "created": _iso(u.get("UserCreateDate")),
+                                       "admin": False, "last_login": None, "logins": 0}
+        if not r.get("PaginationToken"):
+            break
+        kwargs["PaginationToken"] = r["PaginationToken"]
+
+    for sub in admin_subs():
+        if sub in users:
+            users[sub]["admin"] = True
+
+    for item in query_all(LAST_LOGIN_PK):
+        if item["sk"] in users:
+            users[item["sk"]].update(last_login=item.get("at"), logins=int(item.get("logins", 0)))
+
+    r = table().query(KeyConditionExpression=Key("user_id").eq(LOGIN_PK), ScanIndexForward=False,
+                      Limit=MAX_LOGINS_SHOWN)
+    logins = [{"at": i["at"], "email": users.get(i.get("sub"), {}).get("email") or i.get("email", "")}
+              for i in r["Items"]]
+    return {"users": sorted(users.values(), key=lambda u: u["email"].lower()), "logins": logins}
+
+
+def admin_subs():
+    """Os "sub" de quem está no grupo admin do Cognito."""
+    subs = set()
+    kwargs = {"UserPoolId": os.environ["USER_POOL_ID"], "GroupName": ADMIN_GROUP}
+    while True:
+        r = cognito().list_users_in_group(**kwargs)
+        subs.update(a["Value"] for u in r["Users"] for a in u.get("Attributes", []) if a["Name"] == "sub")
+        if not r.get("NextToken"):
+            return subs
+        kwargs["NextToken"] = r["NextToken"]
+
+
+def error_code(e):
+    """Código de um erro da AWS (ex.: "UsernameExistsException"); noutros erros, o nome da classe."""
+    return getattr(e, "response", {}).get("Error", {}).get("Code") or type(e).__name__
+
+
+def temp_password(length=14):
+    """Password temporária aleatória que cumpre as regras da user pool (maiúsculas, minúsculas e números)."""
+    while True:
+        pw = "".join(secrets.choice(TEMP_PASSWORD_CHARS) for _ in range(length))
+        if any(c.islower() for c in pw) and any(c.isupper() for c in pw) and any(c.isdigit() for c in pw):
+            return pw
+
+
+def admin_email(body):
+    """O email de um pedido de administração ({"email": ...}), sem espaços à volta. 400 se não servir."""
+    email = body.get("email")
+    if not isinstance(email, str) or len(email.strip()) > 254 or not EMAIL_RE.match(email.strip()):
+        raise ApiError(400, "Email inválido")
+    return email.strip()
+
+
+def users_with_email(email):
+    """As contas do Cognito com este email (no máximo uma)."""
+    return cognito().list_users(UserPoolId=os.environ["USER_POOL_ID"], Filter=f'email = "{email}"', Limit=1)["Users"]
+
+
+def admin_target(claims, email):
+    """A conta em que o administrador vai mexer: (Username, sub, utilizador do Cognito).
+
+    404 se não existir. 403 se for a própria conta ou uma conta do grupo admin: essas só se mudam com a
+    AWS CLI (create-user / make-admin), para ninguém ficar trancado por engano.
+    """
+    found = users_with_email(email)
+    if not found:
+        raise ApiError(404, "Não existe nenhuma conta com este email")
+    u = found[0]
+    sub = next((a["Value"] for a in u.get("Attributes", []) if a["Name"] == "sub"), None)
+    if sub == claims["sub"] or sub in admin_subs():
+        raise ApiError(403, "As contas de administrador só se mudam pela AWS (create-user / make-admin)")
+    return u["Username"], sub, u
+
+
+def log_admin_action(action, claims, sub):
+    """Uma linha no CloudWatch por ação de administração: o quê, quem fez e a quem (só os "sub", sem emails)."""
+    print(json.dumps({"admin_action": action, "by": claims["sub"], "user": sub}))
+
+
+def sign_out_everywhere(username):
+    """Anula os refresh tokens da conta (as sessões abertas acabam quando o ID token expirar, no máximo 60 min).
+
+    Se falhar, a ação principal já foi feita: fica só o código do erro no log.
+    """
+    try:
+        cognito().admin_user_global_sign_out(UserPoolId=os.environ["USER_POOL_ID"], Username=username)
+    except Exception as e:
+        print(json.dumps({"admin_sign_out_error": error_code(e)}))
+
+
+def send_invite(**kwargs):
+    """AdminCreateUser com envio do convite por email (conta nova ou reenvio). 429 se o Cognito já não
+    puder enviar mais emails hoje (o email do próprio Cognito tem um limite diário)."""
+    try:
+        return cognito().admin_create_user(UserPoolId=os.environ["USER_POOL_ID"], DesiredDeliveryMediums=["EMAIL"],
+                                           **kwargs)
+    except Exception as e:
+        if error_code(e) == "LimitExceededException":
+            raise ApiError(429, "O Cognito já enviou hoje o máximo de emails. Tenta amanhã ou cria a conta com o create-user.")
+        raise
+
+
+def admin_create_user(claims, email):
+    """POST /admin/users/create: cria uma conta normal (nunca de administrador) e o Cognito envia o convite.
+
+    O convite (texto em custom_message, acima) leva o endereço do site e uma password temporária,
+    válida 7 dias; no primeiro login a pessoa escolhe a dela. Tal como o create-user, também pede ao SES
+    a verificação do email (a AWS envia um link), precisa para o backup diário enquanto o SES estiver em testes.
+    """
+    email = email.lower()
+    if users_with_email(email):
+        raise ApiError(409, "Já existe uma conta com este email")
+    try:
+        user = send_invite(Username=email, UserAttributes=[{"Name": "email", "Value": email},
+                                                           {"Name": "email_verified", "Value": "true"}])["User"]
+    except Exception as e:
+        if error_code(e) == "UsernameExistsException":
+            raise ApiError(409, "Já existe uma conta com este email")
+        raise
+    log_admin_action("create", claims, next((a["Value"] for a in user.get("Attributes", []) if a["Name"] == "sub"), None))
+    try:
+        ses().create_email_identity(EmailIdentity=email)
+    except Exception as e:
+        if error_code(e) != "AlreadyExistsException":
+            print(json.dumps({"admin_ses_error": error_code(e)}))   # só o código: a mensagem pode ter o email
+            return {"ok": True, "warning": "Conta criada e convite enviado, mas a AWS não enviou o email de verificação "
+                                           "do endereço (só é preciso para o backup diário)."}
+    return {"ok": True}
+
+
+def admin_resend_invite(claims, email):
+    """POST /admin/users/resend-invite: envia outra vez o convite, com uma password temporária nova.
+
+    Só para contas que ainda não escolheram a password (o convite expira ao fim de 7 dias).
+    """
+    _, sub, user = admin_target(claims, email)
+    if user.get("UserStatus") != "FORCE_CHANGE_PASSWORD":
+        raise ApiError(409, "Esta conta já escolheu a password: usa \"Repor password\"")
+    if user.get("Enabled") is False:
+        raise ApiError(409, "Esta conta está desativada: reativa-a primeiro")
+    send_invite(Username=email, MessageAction="RESEND")
+    log_admin_action("resend-invite", claims, sub)
+    return {"ok": True}
+
+
+def admin_set_enabled(claims, email, enabled):
+    """POST /admin/users/enable e /admin/users/disable: reativa ou desativa uma conta.
+
+    Uma conta desativada não consegue entrar nem renovar a sessão; os dados ficam guardados.
+    """
+    username, sub, _ = admin_target(claims, email)
+    pool = os.environ["USER_POOL_ID"]
+    if enabled:
+        cognito().admin_enable_user(UserPoolId=pool, Username=username)
+    else:
+        sign_out_everywhere(username)
+        cognito().admin_disable_user(UserPoolId=pool, Username=username)
+    log_admin_action("enable" if enabled else "disable", claims, sub)
+    return {"ok": True}
+
+
+def admin_reset_password(claims, email):
+    """POST /admin/users/reset-password: põe uma password temporária nova e devolve-a (só esta vez).
+
+    O administrador dá-a à pessoa, que escolhe a dela no login seguinte (a conta fica em "Password temporária",
+    tal como com o create-user --temporaria). As sessões abertas da conta terminam.
+    """
+    username, sub, _ = admin_target(claims, email)
+    password = temp_password()
+    cognito().admin_set_user_password(UserPoolId=os.environ["USER_POOL_ID"], Username=username,
+                                      Password=password, Permanent=False)
+    sign_out_everywhere(username)
+    log_admin_action("reset-password", claims, sub)
+    return {"temporary_password": password}
+
+
+def user_keys(sub):
+    """As sort keys de todos os itens de um utilizador, e só elas.
+
+    A função admin só tem permissão para ler as chaves das partições dos utilizadores (template.yaml:
+    Select = SPECIFIC_ATTRIBUTES e só user_id / sk), por isso nunca vê os valores de ninguém.
+    """
+    keys = []
+    kwargs = {"KeyConditionExpression": Key("user_id").eq(sub), "Select": "SPECIFIC_ATTRIBUTES",
+              "ProjectionExpression": "sk"}
+    while True:
+        r = table().query(**kwargs)
+        keys.extend(i["sk"] for i in r["Items"])
+        if not r.get("LastEvaluatedKey"):
+            return keys
+        kwargs["ExclusiveStartKey"] = r["LastEvaluatedKey"]
+
+
+def delete_user_data(sub):
+    """Apaga todos os dados de um utilizador e os itens dele no backup diário e no último login.
+
+    Os logins dele ficam no registo até o TTL os apagar (90 dias). Os pedidos vão em paralelo para caberem
+    nos 30 s do API Gateway mesmo com milhares de registos; o cliente da tabela pode ser usado por várias threads.
+    """
+    keys = [(sub, sk) for sk in user_keys(sub)] + [(DAILY_BACKUP_PK, sub), (LAST_LOGIN_PK, sub)]
+    client, name = table().meta.client, os.environ["TABLE_NAME"]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda k: client.delete_item(TableName=name, Key={"user_id": k[0], "sk": k[1]}), keys))
+
+
+def admin_delete_user(claims, email):
+    """POST /admin/users/delete: apaga de vez uma conta desativada e todos os dados dela.
+
+    Só contas desativadas (primeiro desativar, depois apagar), para não se apagar nada por engano.
+    Também retira o email do SES (a verificação para o backup diário). A conta do Cognito é apagada no fim:
+    se alguma coisa falhar pelo caminho, a conta continua na lista (desativada) e apagar outra vez
+    continua onde parou.
+    """
+    username, sub, user = admin_target(claims, email)
+    if user.get("Enabled") is not False:
+        raise ApiError(409, "Desativa a conta primeiro")
+    delete_user_data(sub)
+    result = {"ok": True}
+    address = next((a["Value"] for a in user.get("Attributes", []) if a["Name"] == "email"), None)
+    try:
+        if address:
+            ses().delete_email_identity(EmailIdentity=address)
+    except Exception as e:
+        if error_code(e) != "NotFoundException":
+            print(json.dumps({"admin_ses_error": error_code(e)}))   # só o código: a mensagem pode ter o email
+            result["warning"] = "Conta apagada, mas o email ficou na lista do SES (Amazon SES → Identities)."
+    cognito().admin_delete_user(UserPoolId=os.environ["USER_POOL_ID"], Username=username)
+    log_admin_action("delete", claims, sub)
+    return result
+
+
+def admin(event, context=None):
+    """Função Lambda do separador Utilizadores (configurada como "app.admin" no template.yaml).
+
+    É uma função à parte da API normal: só ela mexe nas contas do Cognito, e só lê as partições
+    dos logins (nas outras, só as chaves, para apagar uma conta: as permissões no template.yaml não a
+    deixam ler os dados de ninguém nem mudar o grupo admin). Quem não estiver no grupo "admin" recebe 403.
+    """
+    try:
+        claims = event["requestContext"]["authorizer"]["jwt"]["claims"]
+        claims["sub"]
+    except (KeyError, TypeError):
+        return response(401, {"detail": "Unauthorized"})
+    if not is_admin(claims):
+        return response(403, {"detail": "Só os administradores têm acesso aos utilizadores"})
+
+    route = event.get("routeKey", "")
+    try:
+        if route == "GET /admin/users":
+            return response(200, admin_users())
+        if route == "POST /admin/users/create":
+            return response(200, admin_create_user(claims, admin_email(read_body(event))))
+        if route == "POST /admin/users/resend-invite":
+            return response(200, admin_resend_invite(claims, admin_email(read_body(event))))
+        if route == "POST /admin/users/disable":
+            return response(200, admin_set_enabled(claims, admin_email(read_body(event)), False))
+        if route == "POST /admin/users/enable":
+            return response(200, admin_set_enabled(claims, admin_email(read_body(event)), True))
+        if route == "POST /admin/users/reset-password":
+            return response(200, admin_reset_password(claims, admin_email(read_body(event))))
+        if route == "POST /admin/users/delete":
+            return response(200, admin_delete_user(claims, admin_email(read_body(event))))
+        return response(404, {"detail": f"Rota desconhecida: {route}"})
+    except ApiError as e:
+        return response(e.status, {"detail": e.detail})
+    except Exception:
+        traceback.print_exc()
+        return response(500, {"detail": "Erro interno do servidor"})
+
+
+# ── PONTO DE ENTRADA ─────────────────────────────────────────────────────────
+def handler(event, context):
+    """Função que a Lambda chama em cada pedido (configurada como "app.handler" no template.yaml).
+
+    1. Lê o "sub" do utilizador das claims do JWT. O API Gateway já validou o token antes de
+       chamar a Lambda, por isso este valor é de confiança (o browser não o consegue falsificar).
+    2. Encaminha para a função certa conforme a rota ("routeKey", ex.: "GET /data").
+    3. Converte erros em respostas HTTP: ApiError -> o código indicado; qualquer outro erro -> 500
+       (e o traceback vai para os logs do CloudWatch).
+    """
+    try:
+        claims = event["requestContext"]["authorizer"]["jwt"]["claims"]
+        user = claims["sub"]
+    except (KeyError, TypeError):
+        return response(401, {"detail": "Unauthorized"})
+
+    route = event.get("routeKey", "")
+    path = event.get("pathParameters") or {}
+    try:
+        if route == "GET /data":
+            return response(200, get_data(user))
+        if route == "POST /items":
+            return response(200, post_items(user, event))
+        if route == "DELETE /items/{id}":
+            return response(200, delete_item(user, path.get("id")))
+        if route == "GET /settings":
+            return response(200, get_settings(user))
+        if route == "POST /settings":
+            return response(200, post_settings(user, claims, event))
+        return response(404, {"detail": f"Rota desconhecida: {route}"})
+    except ApiError as e:
+        return response(e.status, {"detail": e.detail})
+    except Exception:
+        traceback.print_exc()   # aparece no CloudWatch Logs
+        return response(500, {"detail": "Erro interno do servidor"})

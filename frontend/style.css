@@ -1,0 +1,682 @@
+/*
+  Estilos do Ledger.
+  As cores, os tipos de letra e as formas (cantos, sombras, rótulos) estão definidos como variáveis CSS e usados
+  em todo o lado com var(--nome), também nos gráficos (charts.js). Ficam em dois sítios: o :root (tema claro:
+  cores, letra e formas) e o :root[data-theme="dark"] (tema escuro: só as cores). O tema em uso é escolhido
+  pelo js/theme.js (automático, claro ou escuro).
+*/
+
+/* Tipo de letra servido pelo próprio site (pasta fonts/; sem pedidos ao Google): Plus Jakarta Sans, no texto
+   e nos números. Licença SIL Open Font License (fonts/OFL-*.txt). O browser só descarrega o ficheiro
+   "latin-ext" se a página tiver caracteres desse conjunto (unicode-range). */
+@font-face { font-family: 'Plus Jakarta Sans'; font-style: normal; font-weight: 400; font-display: swap;
+  src: url(fonts/plus-jakarta-sans-latin-ext-400-normal.woff2) format('woff2'); unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+@font-face { font-family: 'Plus Jakarta Sans'; font-style: normal; font-weight: 400; font-display: swap;
+  src: url(fonts/plus-jakarta-sans-latin-400-normal.woff2) format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: 'Plus Jakarta Sans'; font-style: normal; font-weight: 600; font-display: swap;
+  src: url(fonts/plus-jakarta-sans-latin-ext-600-normal.woff2) format('woff2'); unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+@font-face { font-family: 'Plus Jakarta Sans'; font-style: normal; font-weight: 600; font-display: swap;
+  src: url(fonts/plus-jakarta-sans-latin-600-normal.woff2) format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: 'Plus Jakarta Sans'; font-style: normal; font-weight: 700; font-display: swap;
+  src: url(fonts/plus-jakarta-sans-latin-ext-700-normal.woff2) format('woff2'); unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+@font-face { font-family: 'Plus Jakarta Sans'; font-style: normal; font-weight: 700; font-display: swap;
+  src: url(fonts/plus-jakarta-sans-latin-700-normal.woff2) format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: 'Plus Jakarta Sans'; font-style: normal; font-weight: 800; font-display: swap;
+  src: url(fonts/plus-jakarta-sans-latin-ext-800-normal.woff2) format('woff2'); unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+@font-face { font-family: 'Plus Jakarta Sans'; font-style: normal; font-weight: 800; font-display: swap;
+  src: url(fonts/plus-jakarta-sans-latin-800-normal.woff2) format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+
+/* Tira margens por omissão e faz width/height incluírem o padding e a borda */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* Paleta de cores, tipos de letra e formas (tema claro, em lilás e violeta, com cantos redondos; o escuro vem a seguir) */
+:root {
+  color-scheme: light;     /* campos, calendários e barras de deslocamento do browser no tema claro */
+  --bg: #f5f3fb;           /* fundo da página */
+  --surface: #ffffff;      /* cartões, painéis, barra lateral no PC e topo do telemóvel */
+  --surface2: #f3f0fa;     /* botões, linhas ao passar o rato */
+  --field: #faf9fe;        /* fundo dos campos */
+  --border: #ebe7f5;
+  --border2: #d9d3ea;
+  --text: #1e1b2e;
+  --muted: #68628a;        /* texto secundário */
+  --accent: #6d4aff;       /* cor de destaque */
+  --accent2: #5935ec;      /* destaque ao passar o rato */
+  --on-accent: #ffffff;    /* texto em cima da cor de destaque (botão principal) */
+  --pos: #0b7550;          /* dinheiro positivo, sempre acompanhado de um sinal + */
+  --neg: #c42b55;          /* dinheiro negativo, sempre acompanhado de um sinal − */
+  --info: #2f5fc4;         /* selo "transferência" */
+  --extra: #0e7268;        /* selo "amortização extra" */
+  --warn: #b45309;         /* orçamento perto do limite, meta que não chega a tempo (laranja) */
+  --series-1: #2a78d6;     /* série 1 dos gráficos (azul)       */
+  --series-2: #e0602c;     /* série 2 dos gráficos (laranja)    */
+  --series-3: #16936a;     /* série 3 dos gráficos (verde-água) */
+  --series-4: #c08400;     /* série 4 dos gráficos (amarelo)    */
+  --zero-line: #b9b3d1;    /* linha do zero no gráfico do ganho / perda */
+  --menu-bg: #261c5c;      /* barra lateral aberta no telemóvel (violeta escuro) */
+  --menu-text: #f4f1ff;    /* texto nessa barra */
+  --menu-strong: #ffffff;  /* nome Ledger, património e separador escolhido nessa barra */
+  --menu-muted: #bcb2ea;   /* texto secundário nessa barra (números dos separadores) */
+  --menu-neg: #ffb3c4;     /* "Sair" ao passar o rato nessa barra */
+  --menu-line: rgba(255, 255, 255, .12);   /* linhas a separar os grupos nessa barra */
+  --menu-hover: rgba(255, 255, 255, .08);  /* fundo ao passar o rato e dos ícones nessa barra */
+  --menu-tint: rgba(255, 255, 255, .14);   /* fundo do separador escolhido, da inicial e do interruptor desligado */
+  --overlay: rgba(30, 27, 46, .35);                                               /* fundo por trás das janelas */
+  --shadow: 0 2px 10px rgba(70, 50, 140, .06), 0 1px 2px rgba(70, 50, 140, .05);  /* cartões e painéis */
+  --shadow-pop: 0 16px 40px rgba(70, 50, 140, .18);                               /* menus e listas que abrem por cima */
+  --radius: 18px;          /* cartões e painéis */
+  --radius-sm: 12px;       /* campos */
+  --radius-lg: 22px;       /* janelas e login */
+  --side-w: 248px;         /* largura da barra lateral no PC */
+  --pill: 999px;           /* botões */
+  --font: 'Plus Jakarta Sans', system-ui, sans-serif;  /* texto */
+  --font-num: var(--font);                             /* números */
+  --font-title: var(--font);                           /* nome Ledger, títulos dos cartões, total */
+  --title-weight: 800;
+  --title-color: var(--text);                          /* títulos dos cartões da página inicial */
+  --caps: none;            /* rótulos pequenos (títulos dos painéis, colunas, campos): uppercase para maiúsculas */
+  --caps-spacing: 0;
+  --label-size: 12px;
+}
+
+/* Tema escuro: as mesmas cores em versão noturna. Vale quando o js/theme.js põe data-theme="dark" no <html>
+   (escolha "Escuro", ou "Automático" com o telemóvel ou o PC em modo escuro). Só mudam as cores; o charts.js
+   volta a ler estas variáveis quando o tema muda (ver applyChartTheme). */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #13111b;
+  --surface: #1d1a2a;
+  --surface2: #272338;
+  --field: #17151f;
+  --border: #2c2840;
+  --border2: #3b3655;
+  --text: #ece9f7;
+  --muted: #a39ec0;
+  --accent: #a68fff;
+  --accent2: #bba9ff;
+  --on-accent: #13111b;
+  --pos: #4fd69a;
+  --neg: #ff7d9a;
+  --info: #86acf7;
+  --extra: #4fc9b6;
+  --warn: #f0a24b;
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --zero-line: #4f4970;
+  --menu-bg: #221c3d;
+  --menu-muted: #b3aad8;
+  --overlay: rgba(5, 4, 10, .65);
+  --shadow: 0 1px 0 rgba(255, 255, 255, .03) inset, 0 2px 10px rgba(0, 0, 0, .25);
+  --shadow-pop: 0 16px 40px rgba(0, 0, 0, .55);
+}
+
+body {
+  background: var(--bg); color: var(--text); font-family: var(--font); min-height: 100vh; font-size: 14px;
+  font-variant-numeric: tabular-nums;   /* algarismos todos da mesma largura: as colunas de valores alinham */
+}
+button, input, select, textarea { font: inherit; }
+/* Classe usada pelo JavaScript para esconder elementos */
+.hidden { display: none !important; }
+
+/* ── BARRA LATERAL ─────────────────────────── */
+/* No PC fica sempre à esquerda, clara (da cor dos cartões), com o nome de cada separador e as definições à vista.
+   Até 960 px abre por cima da página no ☰ do topo, em violeta escuro, com o património líquido, o número de cada separador
+   e as definições fechadas (ver o @media no fim desta secção). As cores da barra estão nas variáveis --side-*, que apontam
+   para as do :root e mudam no telemóvel para as --menu-*. */
+body { padding-left: var(--side-w); }
+.sidebar {
+  --side-bg: var(--surface); --side-text: var(--text); --side-strong: var(--text); --side-muted: var(--muted);
+  --side-line: var(--border); --side-hover: var(--surface2); --side-neg: var(--neg);
+  --side-active: color-mix(in srgb, var(--accent) 11%, transparent); --side-active-text: var(--accent);
+  --switch-off: var(--border2); --switch-knob: var(--muted); --side-focus: var(--accent);
+  position: fixed; top: 0; left: 0; bottom: 0; z-index: 60; width: var(--side-w);
+  display: flex; flex-direction: column; gap: 4px; padding: 20px 14px 14px; overflow-y: auto;
+  background: var(--side-bg); color: var(--side-text); border-right: 1px solid var(--side-line);
+}
+.logo { font-family: var(--font-title); font-size: 19px; font-weight: var(--title-weight); letter-spacing: -.02em; color: var(--accent); white-space: nowrap; }
+.logo span { color: var(--muted); font-weight: 400; }
+/* O nome é um botão que leva à página inicial */
+.logo-btn { background: none; border: none; padding: 0; cursor: pointer; }
+.logo-btn:hover span { color: var(--text); }
+.side-logo { text-align: left; padding: 2px 10px 16px; font-size: 20px; }
+/* " / Finanças" ao passar o rato: a cor do texto da barra (no telemóvel, a cor escura do resto da app não se via no violeta) */
+.side-logo:hover span { color: var(--side-text); }
+/* Contorno ao andar com o Tab: no telemóvel é branco, porque a cor de destaque mal se via no violeta */
+.sidebar :focus-visible { outline: 2px solid var(--side-focus); outline-offset: -2px; }
+
+/* Património líquido (só no telemóvel) */
+.side-total { padding: 2px 10px 18px; }
+.side-total-label { font-size: 12px; font-weight: 600; color: var(--side-muted); }
+.side-total-value { font-family: var(--font-title); font-size: 27px; font-weight: 800; letter-spacing: -.03em; margin-top: 4px; color: var(--side-strong); }
+
+/* Separadores: o atual fica destacado (ver showTab no app.js) */
+.side-nav { display: flex; flex-direction: column; gap: 2px; }
+.side-link, .side-settings-btn {
+  --ico: var(--accent);
+  align-items: center; gap: 12px; width: 100%; padding: 7px 10px; border: none; border-radius: 12px;
+  background: transparent; color: var(--side-text); font-size: 14px; font-weight: 600; text-align: left; cursor: pointer;
+}
+.side-link { display: flex; }
+.side-link:hover, .side-settings-btn:hover { background: var(--side-hover); }
+.side-link.active { background: var(--side-active); color: var(--side-active-text); }
+.side-link[data-go="mov"] { --ico: var(--series-1); }
+.side-link[data-go="inv"] { --ico: var(--series-3); }
+.side-link[data-go="loan"] { --ico: var(--series-2); }
+.side-link[data-go="prop"] { --ico: var(--series-4); }
+.side-link[data-go="year"] { --ico: var(--info); }
+/* Ícone de cor de cada separador, o mesmo dos cartões da página inicial (só decoração) */
+.side-ico {
+  flex: none; display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 9px;
+  font-size: 15px; font-weight: 800; color: var(--ico); background: color-mix(in srgb, var(--ico) 14%, transparent);
+}
+.side-text { flex: 1 1 auto; min-width: 0; }
+/* Número principal de cada separador, por baixo do nome (só no telemóvel) */
+.side-num { font-size: 12px; font-weight: 600; color: var(--side-muted); }
+
+/* Definições: backup, aspeto e conta, no fundo da barra */
+.side-settings { margin-top: auto; padding-top: 12px; }
+.side-group { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; border-top: 1px solid var(--side-line); }
+.side-label { font-size: 11px; font-weight: 700; color: var(--side-muted); padding: 4px 10px; }
+.side-row { display: flex; gap: 4px; }
+.side-row .side-btn { flex: 1 1 0; min-width: 0; }
+/* Os botões da barra são linhas simples, sem a borda dos outros botões */
+.sidebar .side-btn {
+  width: 100%; justify-content: flex-start; gap: 10px; padding: 8px 10px; border-color: transparent; border-radius: 12px;
+  background: transparent; color: var(--side-text); font-size: 13px;
+}
+.sidebar .side-btn:hover { background: var(--side-hover); border-color: transparent; color: var(--side-text); }
+.sidebar .side-btn.danger:hover { color: var(--side-neg); }
+.side-btn-ico { flex: none; width: 20px; text-align: center; }
+.side-btn-text { flex: 1 1 auto; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; }
+/* Interruptor "Backup diário": fica com a cor de destaque quando está ligado */
+.toggle { cursor: pointer; user-select: none; }
+.toggle:has(input:disabled) { opacity: .6; cursor: default; }
+.toggle input {
+  appearance: none; flex: none; position: relative; width: 30px; height: 18px; margin: 0; border-radius: var(--pill);
+  background: var(--switch-off); cursor: pointer; transition: background .15s;
+}
+.toggle input::before {
+  content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--switch-knob); transition: transform .15s;
+}
+.toggle input:checked { background: var(--accent); }
+.toggle input:checked::before { background: var(--on-accent); transform: translateX(12px); }
+.toggle input:disabled { cursor: default; }
+.toggle input:focus-visible { outline: 2px solid var(--side-focus); outline-offset: 2px; }
+/* Conta: inicial do email, com a bolinha do estado da ligação no canto, o email e o selo Admin */
+.side-user { position: relative; display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 10px 6px; font-size: 12px; color: var(--side-muted); }
+.side-avatar {
+  flex: none; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%;
+  font-size: 13px; font-weight: 800; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.status-dot.ok { background: var(--pos); }
+.status-dot.err { background: var(--neg); }
+.side-user .status-dot { position: absolute; left: 30px; top: 2px; width: 9px; height: 9px; border: 2px solid var(--side-bg); box-sizing: content-box; }
+.side-email { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Só no telemóvel: o topo com o ☰, o fundo escuro, o património, os números e o botão das definições */
+.mobile-bar, .side-overlay, .side-total, .side-num, .side-settings-btn { display: none; }
+
+@media (max-width: 960px) {   /* a 961 px o conteúdo ao lado da barra ainda cabe nas grelhas de 2 colunas */
+  body { padding-left: 0; }
+  /* quando a app desce até um painel (aviso das metas, despesas fixas → tabela), o título fica por baixo do topo preso */
+  html { scroll-padding-top: 68px; }
+  .mobile-bar {
+    display: flex; align-items: center; gap: 10px; position: sticky; top: 0; z-index: 50; min-height: 56px; padding: 8px 16px;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+  }
+  .menu-btn {
+    flex: none; width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--border2); background: var(--surface2);
+    color: var(--text); font-size: 18px; cursor: pointer;
+  }
+  .menu-btn:hover { border-color: var(--accent); }
+  .mobile-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 700; color: var(--muted); }
+  .mobile-title:not(:empty)::before { content: '· '; }
+  .menu-open .side-overlay { display: block; position: fixed; inset: 0; z-index: 180; background: var(--overlay); }
+  /* A barra abre da esquerda, por cima da página (escondida, os botões não recebem o Tab) */
+  .sidebar {
+    --side-bg: var(--menu-bg); --side-text: var(--menu-text); --side-strong: var(--menu-strong); --side-muted: var(--menu-muted);
+    --side-line: var(--menu-line); --side-hover: var(--menu-hover); --side-neg: var(--menu-neg);
+    --side-active: var(--menu-tint); --side-active-text: var(--menu-strong); --switch-off: var(--menu-tint); --switch-knob: var(--menu-muted);
+    --side-focus: var(--menu-strong);
+    z-index: 190; width: min(300px, 86vw); border-right: none; box-shadow: var(--shadow-pop);
+    transform: translateX(-102%); visibility: hidden; transition: transform .2s ease, visibility 0s linear .2s;
+  }
+  .menu-open .sidebar { transform: none; visibility: visible; transition: transform .2s ease; }
+  .side-logo { color: var(--side-strong); }
+  .side-logo span { color: var(--side-muted); }
+  .side-total { display: block; }
+  /* o número de cada separador fica por baixo do nome */
+  .side-link { display: grid; grid-template-columns: 30px 1fr; column-gap: 12px; row-gap: 1px; padding: 8px 10px; }
+  .side-link:has(.side-num:not(:empty)) .side-ico { grid-row: span 2; }
+  .side-num { display: block; }
+  .side-num:empty { display: none; }
+  .side-link.active .side-num { color: var(--side-text); }
+  .side-ico { color: color-mix(in srgb, var(--ico) 30%, var(--side-strong)); background: var(--side-hover); }
+  .side-link.active .side-ico { color: var(--side-strong); background: color-mix(in srgb, var(--ico) 75%, transparent); }
+  /* Definições fechadas: abrem no botão "⚙ Definições" (ver o app.js) */
+  .side-settings { border-top: 1px solid var(--side-line); padding-top: 6px; }
+  .side-settings-btn { display: flex; margin-bottom: 4px; }
+  .side-settings-btn::after { content: '▸'; margin-left: auto; color: var(--side-muted); }
+  .side-settings-btn[aria-expanded="true"]::after { content: '▾'; }
+  .side-settings-body { display: none; }
+  .side-settings.open .side-settings-body { display: block; }
+  .side-settings .side-group:first-child { border-top: none; }
+  .side-avatar, .sidebar .badge.admin { color: var(--side-strong); background: var(--side-active); }
+}
+
+/* ── DISPOSIÇÃO (grelhas de colunas) ───────── */
+.main { max-width: 1200px; margin: 0 auto; padding: 24px 16px 64px; display: flex; flex-direction: column; gap: 16px; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.grid-3-1 { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
+.grid-1-2 { display: grid; grid-template-columns: 1fr 2fr; gap: 16px; }
+
+/* ── PÁGINA INICIAL: património líquido e um cartão por separador ── */
+.home-total { text-align: center; padding: 8px 0 4px; }
+.nw-label { font-size: var(--label-size); font-weight: 600; letter-spacing: var(--caps-spacing); text-transform: var(--caps); color: var(--muted); }
+.home-total-value { font-family: var(--font-title); font-size: 42px; font-weight: 800; letter-spacing: -.03em; color: var(--text); margin-top: 6px; }
+.home-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 20px; }
+.home-card {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-height: 150px; padding: 22px 24px;
+  background: var(--surface); border: 1px solid transparent; border-radius: var(--radius); box-shadow: var(--shadow);
+  color: var(--text); text-align: left; cursor: pointer; transition: border-color .15s;
+}
+.home-card:hover, .home-card:focus-visible { border-color: var(--accent); outline: none; }
+.home-card-title { font-family: var(--font-title); font-size: 16px; font-weight: var(--title-weight); letter-spacing: var(--caps-spacing); text-transform: var(--caps); color: var(--title-color); }
+.home-card-desc { font-size: 13px; color: var(--muted); }
+.home-card-value { font-family: var(--font-num); font-size: 24px; font-weight: 700; letter-spacing: -.02em; margin-top: auto; padding-top: 12px; }
+.home-card-sub { font-size: var(--label-size); font-weight: 600; letter-spacing: var(--caps-spacing); text-transform: var(--caps); color: var(--muted); }
+.home-card-admin, .home-card-wide { grid-column: span 2; min-height: 0; }
+.home-card-extra { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.home-card-extra:empty { display: none; }
+/* Ícone de cor no canto de cada cartão (só decoração: o texto do cartão diz o que é) */
+.home-card::before {
+  content: '€'; display: flex; align-items: center; justify-content: center; width: 38px; height: 38px; margin-bottom: 6px;
+  border-radius: 12px; font-size: 18px; font-weight: 800; color: var(--series-1);
+  background: color-mix(in srgb, var(--series-1) 14%, transparent);
+}
+.home-card[data-go="inv"]::before { content: '↗'; color: var(--series-3); background: color-mix(in srgb, var(--series-3) 16%, transparent); }
+.home-card[data-go="loan"]::before { content: '%'; color: var(--series-2); background: color-mix(in srgb, var(--series-2) 14%, transparent); }
+.home-card[data-go="prop"]::before { content: '⌂'; color: var(--series-4); background: color-mix(in srgb, var(--series-4) 18%, transparent); }
+.home-card[data-go="admin"]::before { content: '@'; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.home-card[data-go="year"]::before { content: '∑'; color: var(--info); background: color-mix(in srgb, var(--info) 14%, transparent); }
+
+/* ── BARRA DE FERRAMENTAS (período, filtros, botões) ── */
+.toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.toolbar-left, .toolbar-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.period-picker { display: flex; align-items: center; gap: 8px; }
+.period-label { min-width: 150px; text-align: center; font-family: var(--font-num); font-size: 13px; }
+.seg { display: flex; background: var(--field); border: 1px solid var(--border); border-radius: var(--pill); padding: 2px; }
+.seg button {
+  padding: 5px 12px; border: none; background: transparent; color: var(--muted);
+  border-radius: var(--pill); cursor: pointer; font-size: 12px; font-weight: 600;
+}
+.seg button.active { background: var(--surface2); color: var(--text); }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px;
+  background: var(--surface2); border: 1px solid var(--border2); border-radius: var(--pill);
+  color: var(--text); font-size: 12px; font-weight: 600;
+  cursor: pointer; transition: all .15s; white-space: nowrap;
+}
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn.primary:hover { background: var(--accent2); border-color: var(--accent2); color: var(--on-accent); }
+.btn.danger:hover { border-color: var(--neg); color: var(--neg); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.icon-btn {
+  background: none; border: 1px solid transparent; color: var(--muted); cursor: pointer;
+  width: 30px; height: 30px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 14px; transition: all .15s;
+}
+.icon-btn:hover { background: var(--surface2); color: var(--text); border-color: var(--border2); }
+.icon-btn.del:hover { color: var(--neg); }
+.nav-btn { width: 32px; height: 32px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); border-radius: var(--pill); cursor: pointer; font-size: 16px; }
+.nav-btn:hover { border-color: var(--accent); color: var(--accent); }
+.nav-btn:disabled { opacity: .4; cursor: default; border-color: var(--border); color: var(--text); }   /* no Resumo do ano: sem mais anos para esse lado */
+
+select.inline, input.inline {
+  background: var(--field); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);
+  padding: 7px 10px; font-size: 12px; outline: none; max-width: 200px;
+}
+select.inline:focus, input.inline:focus { border-color: var(--accent); }
+input.search { width: 170px; }
+
+/* Filtro de categorias com escolha múltipla (um <details> que abre uma lista de caixas) */
+details.multi { position: relative; }
+details.multi > summary {
+  list-style: none; cursor: pointer; white-space: nowrap; font-size: 12px; color: var(--text);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 7px 28px 7px 10px;
+}
+details.multi > summary::-webkit-details-marker { display: none; }
+details.multi > summary::after { content: '▾'; position: absolute; right: 10px; color: var(--muted); }
+details.multi[open] > summary { border-color: var(--accent); }
+.multi-panel {
+  position: absolute; z-index: 60; top: calc(100% + 4px); left: 0; min-width: 220px; max-height: 320px; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border2); border-radius: 10px; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 8px; box-shadow: var(--shadow-pop);
+}
+.multi-panel .link-btn { align-self: flex-start; }
+/* A mesma lista nos formulários (campo "pick", ex.: categoria de um movimento): parece um campo e
+   abre por baixo dele, dentro da janela (uma lista a flutuar podia ficar cortada) */
+.field details.pick > summary { background: var(--field); font-size: 13px; padding: 9px 28px 9px 12px; white-space: normal; text-align: left; }
+.field details.pick.pick-empty > summary { color: var(--muted); }
+.field details.pick .multi-panel { position: static; margin-top: 6px; min-width: 0; max-height: 240px; box-shadow: none; }
+.field details.pick label.check {   /* desfaz o estilo dos rótulos dos campos (.field label) */
+  display: flex; margin: 0; font-size: 13px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--text); cursor: pointer;
+}
+.field details.pick .multi-panel input.inline { max-width: none; width: 100%; }
+
+/* Seleção de movimentos e barra para mudar a categoria de vários */
+table.data .sel { width: 1%; padding-right: 0; }
+table.data .sel input { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+table.data tr.selected td { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.bulk { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--text); }
+.bulk .err { color: var(--neg); }
+.bulk .multi-panel { left: auto; right: 0; }
+.bulk .multi-panel input.inline { width: 100%; }
+
+/* ── CARTÕES (resumos e caixas dos gráficos) ─ */
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+.stat { background: var(--surface); border: 1px solid transparent; border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px 18px; }
+.stat-label { font-size: var(--label-size); font-weight: 600; letter-spacing: var(--caps-spacing); text-transform: var(--caps); color: var(--muted); margin-bottom: 8px; }
+.stat-value { font-family: var(--font-num); font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
+.stat-sub { font-family: var(--font-num); font-size: 11px; color: var(--muted); margin-top: 6px; }
+.stat-cmp { font-family: var(--font-num); font-size: 11px; color: var(--muted); margin-top: 4px; line-height: 1.5; }
+.pos { color: var(--pos); }
+.neg { color: var(--neg); }
+
+.panel { background: var(--surface); border: 1px solid transparent; border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; min-width: 0; }
+.panel-header {
+  padding: 14px 18px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+}
+.panel-title { font-size: 13px; font-weight: 600; letter-spacing: var(--caps-spacing); text-transform: var(--caps); color: var(--muted); }
+.panel-body { padding: 16px 18px; }
+.chart-box { position: relative; height: 260px; }
+.chart-box.tall { height: 320px; }
+.chart-note { margin-top: 12px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.chart-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 13px; text-align: center; padding: 20px; }
+
+/* ── TABELAS ───────────────────────────────── */
+.table-wrap { overflow-x: auto; max-height: 520px; overflow-y: auto; }
+table.data { width: 100%; border-collapse: collapse; }
+table.data th {
+  position: sticky; top: 0; background: var(--surface); z-index: 1;
+  font-size: var(--label-size); font-weight: 600; letter-spacing: var(--caps-spacing); text-transform: var(--caps);
+  color: var(--muted); text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+table.data td { padding: 10px 14px; font-size: 13px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+table.data tr:last-child td { border-bottom: none; }
+table.data tr:hover td { background: var(--surface2); }
+table.data .num { font-family: var(--font-num); text-align: right; white-space: nowrap; }
+table.data th.num { text-align: right; font-family: inherit; }   /* os títulos das colunas de números ficam como os outros */
+table.data .actions { text-align: right; white-space: nowrap; width: 1%; }
+table.data .muted { color: var(--muted); }
+table.data .date { font-family: var(--font-num); font-size: 12px; color: var(--muted); white-space: nowrap; }
+.desc { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.chip { display: inline-block; padding: 2px 8px; background: var(--surface2); border: 1px solid var(--border2); border-radius: 4px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.badge { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: var(--caps); }
+.badge.in { background: color-mix(in srgb, var(--pos) 12%, transparent); color: var(--pos); }
+.badge.out { background: color-mix(in srgb, var(--neg) 12%, transparent); color: var(--neg); }
+.badge.transfer { background: color-mix(in srgb, var(--info) 15%, transparent); color: var(--info); }
+.badge.approx { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); margin-left: 6px; }
+.badge.extra { background: color-mix(in srgb, var(--extra) 15%, transparent); color: var(--extra); margin-left: 6px; }
+/* Selo "Admin": ao lado do email na barra lateral e na lista do separador Utilizadores (só administradores) */
+.badge.admin { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+/* Linha de total de cada ano no histórico de prestações */
+table.data tr.year-row td { background: var(--surface2); font-weight: 700; font-size: 12px; }
+table.data tr.year-row td.num { color: var(--text); }
+
+.empty { padding: 40px 20px; text-align: center; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.empty .btn { margin-top: 12px; }
+
+/* ── LISTAS DE CONTAS / CRÉDITOS ───────────── */
+.list-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 18px; border-bottom: 1px solid var(--border); }
+.list-item:last-child { border-bottom: none; }
+.li-name { font-weight: 600; font-size: 13px; color: var(--text); text-decoration: none; }
+a.li-name:hover { color: var(--accent); }
+.li-sub { font-size: 11px; color: var(--muted); margin-top: 2px; font-weight: 400; }
+.li-value { font-family: var(--font-num); font-size: 14px; text-align: right; }
+
+.loan-card { padding: 16px 18px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
+.loan-card:last-child { border-bottom: none; }
+.loan-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.loan-meta { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.loan-meta .k { font-size: var(--label-size); letter-spacing: var(--caps-spacing); text-transform: var(--caps); color: var(--muted); }
+.loan-meta .v { font-family: var(--font-num); font-size: 13px; margin-top: 3px; }
+.loan-actions { display: flex; justify-content: flex-end; }
+table.sim-table th.num { white-space: normal; }   /* "Reduzir a prestação" pode partir em duas linhas */
+table.budget-edit td.budget-limit { width: 140px; }   /* campo do limite na janela dos orçamentos (mais estreito no telemóvel) */
+.progress { height: 8px; background: var(--field); border-radius: 4px; overflow: hidden; }
+.progress > div { height: 100%; background: var(--series-1); border-radius: 4px; }
+.progress-label { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); font-family: var(--font-num); }
+/* Orçamentos (Movimentos): barra verde, laranja a partir de 80% e vermelha quando passa do limite */
+.budget-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px 28px; padding: 16px 18px; }
+.budget { display: flex; flex-direction: column; gap: 6px; }
+.budget-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.budget-nums { font-family: var(--font-num); font-size: 12px; white-space: nowrap; }
+/* Um nome comprido parte em várias linhas: a barra desce para o fundo, para ficar à altura das dos vizinhos na grelha */
+.budget-bar { margin-top: auto; }
+.budget-bar.ok > div { background: var(--pos); }
+.budget-bar.near > div { background: var(--warn); }
+.budget-bar.over > div { background: var(--neg); }
+/* Metas de poupança (página inicial): barra verde quando já se chegou ou o ritmo chega para o prazo, laranja quando não
+   chega, vermelha quando o prazo passou; sem prazo, a cor normal das barras */
+.goal-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 22px 28px; padding: 16px 18px; }
+.goal { display: flex; flex-direction: column; gap: 6px; }
+.goal-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: -4px; }
+.goal-nums { font-family: var(--font-num); font-size: 13px; font-weight: 600; margin-top: 2px; }
+.goal-text { font-size: 12px; line-height: 1.5; color: var(--text); }
+.goal-actions { margin-top: auto; padding-top: 4px; }
+/* Avisos da página inicial ("A ver"): uma linha por aviso, com uma bola da cor da gravidade, o texto e os botões */
+.alert { display: flex; align-items: center; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--border); font-size: 13px; line-height: 1.5; }
+.alert:last-child { border-bottom: none; }
+.alert-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.alert.warn .alert-dot { background: var(--warn); }
+.alert.bad .alert-dot { background: var(--neg); }
+.alert-text { flex: 1; min-width: 0; color: var(--text); }
+.alert-actions { flex: none; display: flex; align-items: center; gap: 4px; }
+/* Previsão para o fim do mês (Movimentos): uma linha por parcela, o valor à direita */
+.forecast-total { font-family: var(--font-num); font-size: 20px; font-weight: 700; }
+.forecast-body { padding: 8px 18px 14px; }
+.forecast-row { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; padding: 6px 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.forecast-row b { font-family: var(--font-num); font-weight: 600; color: var(--text); white-space: nowrap; }
+.forecast-row span b { color: var(--text); }
+.forecast-row b.pos { color: var(--pos); }
+.forecast-row b.neg { color: var(--neg); }
+/* Alocação por tipo (Investimentos): nome, barra do peso (com uma marca no alvo), valor, % e quanto falta para o alvo */
+.alloc-list { padding: 10px 18px 14px; display: flex; flex-direction: column; }
+.alloc-row { display: grid; grid-template-columns: minmax(90px, 160px) 1fr 110px 90px 110px; align-items: center; gap: 14px; padding: 7px 0; font-size: 13px; }
+.alloc-row .num { text-align: right; font-family: var(--font-num); white-space: nowrap; }
+.alloc-bar { position: relative; overflow: visible; }
+.alloc-bar > div { border-radius: 4px; }
+.alloc-target { position: absolute; top: -3px; width: 2px; height: 14px; margin-left: -1px; background: var(--text); border-radius: 1px; }
+.goal-free { padding: 12px 18px 0; font-size: 12px; color: var(--muted); line-height: 1.6; }
+.goal-free b { font-family: var(--font-num); color: var(--text); font-weight: 600; }
+.goal-free.neg, .goal-free b.neg { color: var(--neg); }
+/* Últimas reservas de uma meta (na janela "Reservas") */
+.res-list { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; }
+.res-row { display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 10px; font-size: 12px; color: var(--text); }
+.res-row .num { font-family: var(--font-num); white-space: nowrap; }
+.goal-bar.done > div, .goal-bar.ok > div { background: var(--pos); }
+.goal-bar.behind > div { background: var(--warn); }
+.goal-bar.late > div { background: var(--neg); }
+.warn { color: var(--warn); }
+/* Resumo do ano: título e período, destaques, barras das entradas e dos gastos de cada mês, peso de cada categoria e
+   linhas de total das tabelas */
+.year-report { display: flex; flex-direction: column; gap: 16px; margin-top: 16px; }
+.year-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 6px 16px; flex-wrap: wrap; }
+.year-title { font-family: var(--font-title); font-size: 28px; font-weight: 800; letter-spacing: -.02em; color: var(--text); }
+.year-period { font-size: 13px; color: var(--muted); margin-top: 4px; line-height: 1.5; }
+.year-made { font-size: 12px; color: var(--muted); }
+.year-highlights { list-style: none; padding: 8px 18px 12px; }
+.year-highlights li { position: relative; padding: 6px 0 6px 18px; font-size: 13px; line-height: 1.5; }
+.year-highlights li::before { content: ''; position: absolute; left: 2px; top: 13px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.year-highlights b { font-family: var(--font-num); font-weight: 700; }
+.year-bars { display: grid; grid-template-columns: repeat(12, 1fr); gap: 6px; height: 120px; align-items: end; }
+.year-bar { display: flex; justify-content: center; align-items: flex-end; gap: 3px; height: 100%; }
+.year-bar span { width: 38%; max-width: 16px; border-radius: 3px 3px 0 0; background: var(--series-1); }
+.year-bar span.out { background: var(--series-2); }
+.year-bar-labels { display: grid; grid-template-columns: repeat(12, 1fr); gap: 6px; margin-top: 6px; font-size: 11px; color: var(--muted); text-align: center; }
+.year-bar-labels .later { opacity: .5; }   /* os meses que ainda não chegaram (no ano atual) */
+.year-legend { display: flex; justify-content: flex-end; gap: 16px; margin-top: 8px; font-size: 11px; color: var(--muted); }
+.year-legend .key { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 2px; vertical-align: -1px; background: var(--series-1); }
+.year-legend .key.out { background: var(--series-2); }
+.year-share { display: flex; align-items: center; gap: 8px; min-width: 110px; }
+.year-share .progress { flex: 1; height: 6px; }
+.year-share span { width: 32px; text-align: right; font-family: var(--font-num); font-size: 11px; color: var(--muted); }
+table.data tr.year-total td { font-weight: 700; border-top: 1px solid var(--border2); }
+.year-note { margin: 12px 18px 14px; }
+
+/* ── FORMULÁRIOS / JANELAS ─────────────────── */
+.modal-overlay {
+  position: fixed; inset: 0; background: var(--overlay); z-index: 200;
+  display: flex; align-items: flex-start; justify-content: center; padding: 40px 16px; overflow-y: auto;
+  opacity: 0; pointer-events: none; transition: opacity .15s;
+}
+.modal-overlay.open { opacity: 1; pointer-events: all; }
+.modal { background: var(--surface); border: 1px solid var(--border2); border-radius: var(--radius-lg); box-shadow: var(--shadow-pop); width: 480px; max-width: 100%; }
+.modal.wide { width: 760px; }
+.modal-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+.modal-title { font-size: 13px; font-weight: 700; letter-spacing: .06em; text-transform: var(--caps); }
+.modal-body { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+.modal-footer { padding: 14px 20px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 8px; }
+.modal-hint { font-size: 12px; color: var(--muted); line-height: 1.6; }
+.form-error { font-size: 12px; color: var(--neg); min-height: 16px; }
+
+.field label { display: block; font-size: var(--label-size); font-weight: 600; letter-spacing: var(--caps-spacing); text-transform: var(--caps); color: var(--muted); margin-bottom: 6px; }
+.field .hint { font-size: 11px; color: var(--muted); margin-top: 5px; }
+.field input, .field select, .field textarea {
+  width: 100%; background: var(--field); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text); padding: 9px 12px; font-size: 13px; outline: none; transition: border-color .15s;
+}
+.field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent); }
+.field textarea { resize: vertical; min-height: 60px; }
+.field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+/* Importar extratos de outros bancos: as colunas de cada ficheiro, numa grelha de 3 (1 no telemóvel) */
+.bank-map { margin: 8px 0 12px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.map-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; }
+.check input { accent-color: var(--accent); width: 15px; height: 15px; }
+
+.seg-field { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; }
+.seg-field button {
+  padding: 9px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 700; cursor: pointer;
+  border: 1px solid var(--border); background: var(--field); color: var(--muted); transition: all .15s;
+}
+.seg-field button.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--accent); }
+
+/* grelha editável usada no histórico e nos valores mensais */
+table.grid-edit { width: 100%; border-collapse: collapse; }
+table.grid-edit th { font-size: var(--label-size); font-weight: 700; letter-spacing: var(--caps-spacing); text-transform: var(--caps); color: var(--muted); text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+table.grid-edit td { padding: 6px 8px; border-bottom: 1px solid var(--border); font-size: 13px; }
+table.grid-edit input {
+  width: 100%; background: var(--field); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text); padding: 7px 9px; font-family: var(--font-num); font-size: 13px; outline: none; text-align: right;
+}
+table.grid-edit input:focus { border-color: var(--accent); }
+table.grid-edit .num { font-family: var(--font-num); text-align: right; color: var(--muted); white-space: nowrap; }
+.grid-scroll { max-height: 50vh; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.grid-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.grid-section-title { font-size: 11px; font-weight: 700; letter-spacing: var(--caps-spacing); text-transform: var(--caps); margin-bottom: 8px; }
+
+.drop-zone {
+  border: 2px dashed var(--border2); border-radius: 10px; padding: 28px 20px; text-align: center;
+  cursor: pointer; transition: border-color .15s, background .15s; position: relative; color: var(--muted); font-size: 13px;
+}
+.drop-zone:hover, .drop-zone.dragover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 4%, transparent); }
+.drop-zone input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.drop-zone strong { color: var(--accent); }
+.drop-filename { font-family: var(--font-num); font-size: 12px; color: var(--pos); margin-top: 8px; }
+.preview-box { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 14px; font-size: 12px; line-height: 1.7; }
+.preview-box .err { color: var(--neg); font-size: 11px; }
+.templates { display: flex; gap: 8px; flex-wrap: wrap; }
+.link-btn { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; text-decoration: underline; padding: 0; }
+
+/* ── LOGIN ─────────────────────────────────── */
+.login-screen { position: fixed; inset: 0; background: var(--bg); z-index: 300; display: flex; align-items: center; justify-content: center; padding: 16px; }
+.login-card { width: 360px; max-width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow); padding: 28px; display: flex; flex-direction: column; gap: 16px; }
+.login-card .logo { font-size: 18px; }
+.login-sub { font-size: 13px; color: var(--muted); margin-top: -8px; }
+/* Aviso do primeiro login */
+.notice { font-size: 13px; line-height: 1.5; color: var(--text); background: var(--surface2); border: 1px solid var(--accent); border-radius: 10px; padding: 12px 14px; }
+.notice b { color: var(--accent); }
+
+/* ── MENSAGENS / BARRA DE CARREGAMENTO ────── */
+.toast {
+  position: fixed; bottom: 24px; right: 24px; max-width: 420px; background: var(--surface);
+  border: 1px solid var(--pos); border-radius: var(--radius-sm); padding: 12px 18px; font-size: 13px; color: var(--pos);
+  font-weight: 600; z-index: 400; box-shadow: var(--shadow-pop); transform: translateY(120px); opacity: 0; transition: all .25s; pointer-events: none;
+}
+.toast.show { transform: translateY(0); opacity: 1; }
+.toast.err { border-color: var(--neg); color: var(--neg); }
+.loading-bar { position: fixed; top: 0; left: 0; height: 2px; background: var(--accent); z-index: 500; width: 0; transition: width .3s; }
+.loading-bar.active { width: 70%; }
+
+/* Barras de deslocamento discretas (Chrome, Edge, Safari) */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
+
+/* Ecrãs pequenos: tablets (até 900px) e telemóveis (até 520px) passam a uma coluna */
+@media (max-width: 900px) {
+  .grid-2, .grid-3-1, .grid-1-2, .grid-cols { grid-template-columns: 1fr; }
+  .stats { grid-template-columns: 1fr 1fr; }
+  .loan-meta { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 520px) {
+  /* Página inicial: um cartão por linha, mais baixos */
+  .home-grid { grid-template-columns: 1fr; gap: 12px; margin-top: 12px; }
+  .home-card { min-height: 0; padding: 18px 20px; }
+  .home-card-admin, .home-card-wide { grid-column: auto; }
+  .home-total-value { font-size: 34px; }
+  .stat-value { font-size: 18px; }
+  .field-row, .map-grid { grid-template-columns: 1fr; }
+  .alert { flex-wrap: wrap; row-gap: 6px; }   /* avisos: os botões passam para baixo do texto */
+  .alert-actions { width: 100%; padding-left: 20px; }
+  .alloc-row { grid-template-columns: 1fr auto auto; row-gap: 4px; }   /* alocação: a barra passa para baixo do nome */
+  .alloc-row .alloc-bar { grid-column: 1 / -1; grid-row: 2; }
+  .alloc-row .alloc-value { display: none; }   /* sem a coluna do valor (fica o % e o que falta) */
+  table.sim-table th, table.sim-table td { padding: 8px 6px; font-size: 12px; }   /* simulador: as 4 colunas cabem no ecrã */
+  /* orçamentos: os títulos das colunas partem em duas linhas e o campo encolhe, para a tabela caber no ecrã */
+  table.budget-edit th.num { white-space: normal; }
+  table.budget-edit th, table.budget-edit td { padding: 6px 5px; }
+  table.budget-edit td.budget-limit { width: 92px; }
+  .year-title { font-size: 22px; }
+  .year-bars, .year-bar-labels { gap: 3px; }
+  .year-bars { height: 100px; }
+  .year-bar { gap: 2px; }
+  .year-bar span { width: 42%; }
+  .year-share { min-width: 0; }
+  .year-share .progress { display: none; }   /* categorias: só a percentagem do peso, para a tabela caber melhor */
+}
+
+/* ── IMPRIMIR ──────────────────────────────── */
+/* Ao imprimir (ou guardar em PDF) sai só o conteúdo da página aberta, sem a barra lateral, os botões nem as janelas, com o tema claro
+   (posto pelo app.js antes de imprimir), sem sombras e com as tabelas inteiras. Pensado para o Resumo do ano. */
+@media print {
+  @page { margin: 12mm; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }   /* as barras e as cores saem no papel */
+  body { background: var(--surface); padding-left: 0; }
+  .sidebar, .mobile-bar, .side-overlay, .loading-bar, .toast, .modal-overlay, .no-print { display: none !important; }
+  .main { max-width: none; padding: 0; }
+  .stat, .panel { box-shadow: none; border-color: var(--border); }
+  .table-wrap { max-height: none; overflow: visible; }
+  table.data th { position: static; }
+  table.data tr:hover td { background: none; }
+  table.data tr, .stat, .year-head, .year-bars, .year-highlights li { break-inside: avoid; }
+  .panel-header { break-after: avoid; }
+  .year-report { display: block; margin-top: 0; }
+  .year-report > * + * { margin-top: 12px; }
+  .year-section { break-inside: avoid; }   /* cada secção numa página só, quando cabe (as maiores partem-se na mesma) */
+  .year-report .stats { grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .year-report .stat { padding: 12px 14px; }
+  .year-report .stat-value { font-size: 17px; }
+  .year-report table.data th, .year-report table.data td { padding: 6px 10px; font-size: 11px; }
+}

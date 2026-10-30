@@ -1,0 +1,2177 @@
+// ── app.js: ecrãs, formulários e ligação dos botões ─────────────────────
+// É o último ficheiro a carregar: usa as funções de todos os outros e arranca a app (init, no fim).
+
+// Estado da interface (o que está escolhido no ecrã, não os dados):
+// página aberta ('home' = página inicial, ou um separador), período e filtros de Movimentos, investimento filtrado
+const S = {
+  tab: 'home',
+  movMode: 'month',
+  movAnchor: thisMonth(),
+  movAccount: '',
+  movCatIn: [],      // categorias de entrada escolhidas no filtro (vazio = todas)
+  movCatOut: [],     // categorias de saída escolhidas no filtro (vazio = todas)
+  movSel: new Set(), // ids dos movimentos selecionados na tabela (para mudar a categoria de vários)
+  movBulkCat: '',    // categoria escolhida para os selecionados
+  movSearch: '',     // texto da caixa de pesquisa dos Movimentos
+  invFilter: '',
+  loanHistory: '',   // crédito mostrado no histórico de prestações
+  adminUser: '',     // utilizador escolhido no filtro dos logins (separador Utilizadores)
+  year: '',          // ano mostrado no Resumo do ano (vazio = o atual)
+};
+
+// ════════ LOGIN / ARRANQUE ════════
+// Mostrar / esconder o ecrã de login (volta sempre ao cartão de email + password)
+function showLogin(msg = '') {
+  $('#login-screen').classList.remove('hidden');
+  $('#login-form').classList.remove('hidden');
+  $('#newpw-form').classList.add('hidden');
+  $('#login-error').textContent = msg;
+  $('#login-password').value = '';
+}
+function hideLogin() {
+  $('#login-screen').classList.add('hidden');
+  const email = store.get('email') || '';
+  $('#user-email').textContent = email;
+  $('#user-email').title = email;   // na barra lateral o email pode aparecer cortado
+  $('#side-avatar').textContent = email.charAt(0).toUpperCase();
+  updateAdminUi();
+}
+// Selo "Admin" e separador Utilizadores (cartão na página inicial e opção da barra lateral): só para contas do
+// grupo admin (ver isAdmin no auth.js). Quem não é administrador e abriu o endereço #admin vai para a página inicial.
+function updateAdminUi() {
+  const on = isAdmin();
+  $('#admin-badge').classList.toggle('hidden', !on);
+  $$('[data-admin-only]').forEach(el => el.classList.toggle('hidden', !on));
+  if (!on && S.tab === 'admin') goHomeNow();
+}
+// Bolinha de estado na barra lateral: verde (ligado à API), vermelha (erro) ou neutra
+function setStatus(ok) {
+  $('#status-dot').className = 'status-dot' + (ok === true ? ' ok' : ok === false ? ' err' : '');
+}
+// Sair: apaga os tokens, limpa os dados da memória e volta ao login
+function logout() {
+  revokeSession();
+  store.clear();
+  D = emptyData();
+  setStatus(null);
+  $('#daily-backup').checked = false;
+  $('#daily-backup').disabled = true;
+  clearAdmin();
+  goHomeNow();       // quem entrar a seguir começa na página inicial
+  renderNetWorth();  // com os dados já vazios: tira os números, as metas e os avisos de quem saiu (cartões e barra lateral)
+  updateAdminUi();   // já sem sessão: esconde o selo e o separador Utilizadores
+  modal.close();
+  showLogin();
+}
+// Quando o auth.js não consegue renovar a sessão, faz logout
+onSessionExpired = () => logout();
+
+// Formulário de login: autentica no Cognito e carrega os dados
+$('#login-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const btn = $('#login-btn');
+  btn.disabled = true; btn.textContent = 'A entrar…';
+  $('#login-error').textContent = '';
+  try {
+    const challenge = await login($('#login-email').value.trim(), $('#login-password').value);
+    if (challenge) return showNewPassword(challenge);   // primeiro login: escolher a password
+    goHomeNow();       // depois do login entra-se sempre na página inicial
+    hideLogin();
+    await loadData();
+  } catch (err) {
+    $('#login-error').textContent = err.message;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Entrar';
+  }
+});
+// ── primeiro login: aviso + escolher a password definitiva ──
+// O pedido do Cognito (challenge) fica guardado aqui até se submeter o formulário
+let pendingChallenge = null;
+function showNewPassword(challenge) {
+  pendingChallenge = challenge;
+  $('#login-form').classList.add('hidden');
+  $('#newpw-form').classList.remove('hidden');
+  $('#newpw-error').textContent = '';
+  $('#login-password').value = '';
+  $('#newpw-1').focus();
+}
+$('#newpw-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const pw = $('#newpw-1').value, err = $('#newpw-error');
+  const problem = passwordProblem(pw, $('#newpw-2').value);
+  if (problem) return (err.textContent = problem);
+  const btn = $('#newpw-btn');
+  btn.disabled = true; btn.textContent = 'A guardar…';
+  err.textContent = '';
+  try {
+    await completeNewPassword(pendingChallenge.email, pendingChallenge.session, pw);
+    pendingChallenge = null;
+    $('#newpw-1').value = $('#newpw-2').value = '';
+    goHomeNow();
+    hideLogin();
+    toast('Password guardada. Bem-vindo!');
+    await loadData();
+  } catch (x) {
+    err.textContent = x.message;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Guardar e entrar';
+  }
+});
+
+// ── mudar a password (botão 🔑 na barra lateral; só para a própria conta) ──
+function passwordForm() {
+  formModal({
+    title: 'Mudar password',
+    intro: `Conta: <b>${esc(store.get('email') || '')}</b>. A password nova tem de ter ${PASSWORD_RULES}.`,
+    submitLabel: 'Mudar password',
+    values: {},
+    fields: [
+      { name: 'old', label: 'Password atual', type: 'password', required: true, autocomplete: 'current-password' },
+      { name: 'pw', label: 'Nova password', type: 'password', required: true, autocomplete: 'new-password' },
+      { name: 'pw2', label: 'Repete a nova password', type: 'password', required: true, autocomplete: 'new-password' },
+    ],
+    onSubmit: async v => {
+      const problem = passwordProblem(v.pw, v.pw2);
+      if (problem) throw new Error(problem);
+      if (v.pw === v.old) throw new Error('A password nova tem de ser diferente da atual');
+      await changePassword(v.old, v.pw);
+      toast('Password alterada');
+    },
+  });
+}
+
+// Botões fixos da barra lateral
+$('#logout-btn').addEventListener('click', logout);
+$('#export-all-btn').addEventListener('click', exportAll);
+$('#password-btn').addEventListener('click', passwordForm);
+
+// Interruptor "Backup diário": liga/desliga o email automático com os CSV (todos os dias à meia-noite,
+// hora de Portugal; o envio é feito pelo backend). Se a gravação falhar, volta ao estado anterior.
+// Se o email da conta ainda não puder receber os CSV (por verificar), o backend liga na mesma e devolve
+// um "warning", que aparece numa janela (é longo demais para a mensagem rápida do fundo do ecrã).
+$('#daily-backup').addEventListener('change', async e => {
+  const box = e.target, on = box.checked;
+  box.disabled = true;
+  try {
+    const res = await api.saveSettings({ daily_backup: on });
+    if (on && res?.warning) {
+      modal.open({
+        title: 'Backup diário',
+        body: `<div class="modal-hint" style="font-size:14px;color:var(--text)">${esc(res.warning)}</div>`,
+        footer: [{ label: 'OK', cls: 'primary', onClick: () => modal.close() }],
+      });
+    } else {
+      toast(on ? 'Backup diário ligado: vais receber os CSV por email todos os dias à meia-noite' : 'Backup diário desligado');
+    }
+  } catch (err) {
+    box.checked = !on;
+    toast(err.message, true);
+  }
+  box.disabled = false;
+});
+// Mostra no interruptor se o backup diário está ligado (fica bloqueado se não for possível saber)
+async function loadSettings() {
+  try {
+    $('#daily-backup').checked = (await api.getSettings()).daily_backup;
+    $('#daily-backup').disabled = false;
+  } catch {
+    $('#daily-backup').disabled = true;
+  }
+}
+
+// Carrega tudo da API (GET /data) para D e desenha o ecrã (e, em paralelo, as definições)
+async function loadData() {
+  loadSettings();
+  try {
+    D = { ...emptyData(), ...(await api.loadAll()) };
+    setStatus(true);
+    renderAll();
+  } catch (e) {
+    setStatus(false);
+    toast(e.message, true);
+  }
+}
+
+/** Usado por todos os formulários: envia para a API, junta a resposta a D e redesenha o ecrã. */
+async function saveItems(items, deletes = []) {
+  const res = await api.save(items, deletes);
+  applyChanges(res);
+  renderAll();
+  return res;
+}
+// Apaga um item na API e mostra quantos registos associados também foram apagados (cascata)
+async function removeItem(id, done) {   // done: a mensagem, ex.: 'Conta apagada'
+  const res = await api.remove(id);
+  applyChanges(res);
+  renderAll();
+  toast(`${done}${res.deleted.length > 1 ? ` (+${res.deleted.length - 1} registos associados)` : ''}`);
+}
+
+// ════════ PÁGINA INICIAL E SEPARADORES ════════
+// A página inicial ('home', endereço #inicio) tem um cartão por separador. A barra lateral tem a página inicial e todos
+// os separadores (no telemóvel abre no ☰ do topo). O endereço guarda onde se está (#inicio, #mov, #inv, #loan,
+// #prop, #year, #admin), e o "voltar" do browser / telemóvel leva de um separador à página inicial.
+const TABS = { mov: 'Movimentos', inv: 'Investimentos', loan: 'Créditos', prop: 'Património', year: 'Resumo do ano', admin: 'Utilizadores' };
+
+// A página que o endereço pede ('home' se não for um separador; #admin só para administradores)
+function tabFromHash() {
+  const tab = location.hash.slice(1);
+  return Object.hasOwn(TABS, tab) && (tab !== 'admin' || isAdmin()) ? tab : 'home';
+}
+// Mostra a página escolhida e esconde as outras; na barra lateral fica destacada e, no topo do telemóvel, aparece o nome
+// do separador (na página inicial, só "Ledger")
+function showTab(tab) {
+  $$('.tab-panel').forEach(p => p.classList.toggle('hidden', p.id !== 'tab-' + tab));
+  $$('.side-link').forEach(b => {
+    b.classList.toggle('active', b.dataset.go === tab);
+    if (b.dataset.go === tab) b.setAttribute('aria-current', 'page');
+    else b.removeAttribute('aria-current');
+  });
+  $('#mobile-title').textContent = TABS[tab] || '';
+  closeSidebar();
+}
+// Muda de página e desenha-a (render = false: só muda, sem desenhar). Não mexe no endereço: ver go().
+function setTab(tab, render = true) {
+  const changed = tab !== S.tab;
+  S.tab = tab;
+  showTab(tab);
+  if (changed) window.scrollTo(0, 0);
+  if (render) renderAll();
+}
+// Vai para a página inicial ou para um separador (cartões, barra lateral e o nome Ledger).
+// Da página inicial para um separador junta-se uma entrada ao histórico do browser; entre separadores só se
+// troca a atual. Assim, "voltar" num separador leva sempre à página inicial, e na página inicial sai do site.
+function go(tab) {
+  if (tab === S.tab) return closeSidebar();
+  if (tab === 'home') {
+    if (history.state?.ledgerTab) return history.back();   // a entrada de baixo é a página inicial (o popstate desenha-a)
+    history.replaceState(null, '', '#inicio');
+  } else if (S.tab === 'home') {
+    history.pushState({ ledgerTab: true }, '', '#' + tab);
+  } else {
+    history.replaceState({ ledgerTab: true }, '', '#' + tab);
+  }
+  setTab(tab);
+}
+// Volta já à página inicial, sem passar pelo histórico (login, logout, #admin de quem não é administrador)
+function goHomeNow() {
+  history.replaceState(null, '', '#inicio');
+  setTab('home', false);
+}
+// Botões "voltar" / "avançar" do browser (e o endereço mudado à mão): fecha a janela aberta, se houver,
+// e mostra a página do endereço
+addEventListener('popstate', () => {
+  if ($('#modal').classList.contains('open')) modal.close();
+  setTab(tabFromHash());
+});
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-go]');
+  if (b) go(b.dataset.go);
+});
+
+// Barra lateral no telemóvel (até 960 px; no PC está sempre à vista): o ☰ do topo abre-a por cima da página. Fecha ao
+// escolher uma página, ao carregar fora, com Esc, ou ao abrir o backup ou a password. As definições começam fechadas.
+function closeSidebar() {
+  document.body.classList.remove('menu-open');
+  $('#menu-btn').setAttribute('aria-expanded', 'false');
+}
+$('#menu-btn').addEventListener('click', () => {
+  document.body.classList.add('menu-open');
+  $('#menu-btn').setAttribute('aria-expanded', 'true');
+  $('#side-settings').classList.remove('open');
+  $('#settings-btn').setAttribute('aria-expanded', 'false');
+});
+$('#side-overlay').addEventListener('click', closeSidebar);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSidebar(); });
+$('#settings-btn').addEventListener('click', () => {
+  const open = $('#side-settings').classList.toggle('open');
+  $('#settings-btn').setAttribute('aria-expanded', String(open));
+});
+$('#export-all-btn').addEventListener('click', closeSidebar);
+$('#password-btn').addEventListener('click', closeSidebar);
+
+// Redesenha os números da página inicial e o separador visível (os outros são desenhados quando se abrem)
+function renderAll() {
+  renderNetWorth();
+  if (S.tab === 'mov') renderMovements();
+  if (S.tab === 'inv') renderInvestments();
+  if (S.tab === 'loan') renderLoans();
+  if (S.tab === 'prop') renderProperties();
+  if (S.tab === 'year') renderYear();
+  if (S.tab === 'admin') renderAdmin();
+}
+
+// Os números da página inicial: contas, investimentos, imóveis, dívidas e o poupado este ano (nos cartões) e património líquido.
+// Os avisos, as metas de poupança e o gráfico da evolução só são desenhados com a página inicial à vista (como os gráficos
+// dos separadores).
+function renderNetWorth() {
+  const nw = netWorth();
+  $('#nw-accounts').textContent = eur(nw.accounts);
+  $('#nw-investments').textContent = eur(nw.investments);
+  $('#nw-properties').textContent = eur(nw.properties);
+  $('#nw-debt').textContent = nw.debt ? '−' + eur(nw.debt) : eur(0);
+  $('#nw-total').textContent = eur(nw.total);
+  // no cartão dos Movimentos: o saldo previsto no fim do mês (se for diferente do de hoje) e para quantos meses de gastos dá
+  const fc = monthForecast(), em = emergencyMonths();
+  const extra = [];
+  if (Math.abs(fc.total - fc.balance) >= 1) extra.push(`≈ ${eurShort(fc.total)} no fim do mês`);
+  if (em) extra.push(`dá para ${em.months.toFixed(1).replace('.', ',')} ${em.months >= 0.95 && em.months < 1.05 ? 'mês' : 'meses'} de gastos`);
+  $('#nw-accounts-extra').textContent = extra.join(' · ');
+  $('#nw-accounts-extra').title = em ? `Saldo em contas a dividir pela média dos gastos por mês dos últimos ${em.n} ${em.n === 1 ? 'mês' : 'meses'} `
+    + `(${eur(em.avg)}; sem investimentos nem amortizações). A previsão está nos Movimentos.` : '';
+  // no cartão do Resumo do ano: o que não se gastou este ano, até hoje (entradas − gastos, como na taxa de poupança)
+  const yp = yearPeriod(thisMonth().slice(0, 4)), yt = flowTotals(periodTx(yp));
+  $('#nw-year').textContent = yt.in || yt.out ? eurSigned(yt.saved) : '—';
+  $('#nw-year-sub').textContent = yt.saved < 0 ? `gastaste mais do que entrou em ${yp.year}`
+    : `poupado em ${yp.year}` + (yt.in > 0 ? ` · ${Math.round(yt.saved / yt.in * 100)}% do que entrou` : '');
+  // os mesmos números na barra lateral do telemóvel (data-copy = o id do número na página inicial)
+  $$('[data-copy]').forEach(el => { el.textContent = $('#' + el.dataset.copy).textContent; });
+  if (S.tab === 'home') { renderAlerts(); renderGoals(); renderNetWorthChart(); }
+}
+
+// Gráfico da página inicial: o património líquido no fim de cada mês; a tooltip mostra de que é feito
+// (por baixo do total, com a letra normal)
+function renderNetWorthChart() {
+  const s = netWorthSeries();
+  const enough = s.months.length > 1;   // com um só mês ainda não há evolução para mostrar
+  drawChart('chart-nw', {
+    type: 'line',
+    data: { labels: s.months.map(monthShort), datasets: [lineDataset('Património líquido', enough ? s.total : [], SERIES[0])] },
+    options: {
+      interaction: INDEX_HOVER,
+      scales: { x: catAxis(), y: moneyAxis({ grid: { color: c => (c.tick.value === 0 ? ZERO_LINE : GRID), drawTicks: false } }) },
+      plugins: { legend: { display: false }, tooltip: { callbacks: {
+        title: i => monthLabel(s.months[i[0].dataIndex]),
+        label: c => ` Património líquido: ${eur(c.parsed.y)}`,
+        afterBody: i => {
+          const k = i[0].dataIndex;
+          return [`Contas: ${eur(s.accounts[k])}`, `Investimentos: ${eur(s.investments[k])}`, `Imóveis: ${eur(s.properties[k])}`,
+            `Créditos: ${s.debt[k] ? '−' + eur(s.debt[k]) : eur(0)}`];
+        },
+      } } },
+    },
+  }, 'O gráfico aparece quando tiveres movimentos ou investimentos em mais de um mês.');
+  // os valores antigos dos imóveis são estimados (ver propertyValueAt): diz-se por baixo do gráfico
+  $('#nw-chart-note').classList.toggle('hidden', !enough || !D.properties.length);
+}
+
+// ── previsão para o fim do mês (painel dos Movimentos; monthForecast no calc.js) ──
+// Só no mês atual, com a conta escolhida no filtro (ou todas). As entradas e saídas habituais que ainda faltam vêm por nome;
+// os gastos do dia a dia são a média dos últimos meses menos o que já se gastou este mês.
+function renderForecast() {
+  const show = S.movMode === 'month' && S.movAnchor === thisMonth();
+  const f = show && monthForecast(S.movAccount);
+  const visible = f && (f.scheduled || f.incoming.length || f.outgoing.length || f.daily);
+  $('#forecast-panel').classList.toggle('hidden', !visible);
+  if (!visible) return;
+  const list = items => items.map(x => `${esc(x.description)} <b>${eur(x.amount)}</b>`).join(' · ');
+  $('#forecast-sub').textContent = `${S.movAccount ? accountName(S.movAccount) : 'todas as contas'} · a ${dateLabel(f.end)}, se tudo correr como costuma`;
+  $('#forecast-total').innerHTML = `<span class="${f.total < 0 ? 'neg' : ''}">${eur(f.total)}</span>`;
+  $('#forecast-body').innerHTML = [
+    `<div class="forecast-row"><span>Saldo hoje</span><b>${eur(f.balance)}</b></div>`,
+    f.scheduled ? `<div class="forecast-row"><span>Já registado para o resto do mês</span><b class="${signClass(f.scheduled)}">${eurSigned(f.scheduled)}</b></div>` : '',
+    f.incoming.length ? `<div class="forecast-row"><span>Entradas habituais por chegar: ${list(f.incoming)}</span>
+      <b class="pos">${eurSigned(f.incoming.reduce((s2, x) => s2 + x.amount, 0))}</b></div>` : '',
+    f.outgoing.length ? `<div class="forecast-row"><span>Saídas habituais por sair: ${list(f.outgoing)}</span>
+      <b class="neg">${eurSigned(-f.outgoing.reduce((s2, x) => s2 + x.amount, 0))}</b></div>` : '',
+    f.daily ? `<div class="forecast-row"><span>Gastos do dia a dia que ainda faltam (média dos últimos meses menos o que já gastaste)</span>
+      <b class="neg">${eurSigned(-f.daily)}</b></div>` : '',
+  ].join('');
+}
+
+// ── avisos (painel "A ver" da página inicial; homeAlerts no calc.js) ──
+// O que precisa de atenção, cada um com um botão para o resolver e ✕ para o dispensar. Um aviso dispensado fica guardado
+// neste aparelho (localStorage "ledger.dismissed", os últimos 100) e só volta se mudar (ex.: no mês seguinte). Sem avisos,
+// o painel não aparece.
+const DISMISSED_KEY = 'ledger.dismissed';
+function dismissedAlerts() {
+  try { const v = JSON.parse(localStorage.getItem(DISMISSED_KEY) || '[]'); return Array.isArray(v) ? v : []; } catch { return []; }
+}
+function dismissAlert(id) {
+  try { localStorage.setItem(DISMISSED_KEY, JSON.stringify([...dismissedAlerts().filter(x => x !== id), id].slice(-100))); } catch { /* sem armazenamento */ }
+  renderAlerts();
+}
+function renderAlerts() {
+  const hidden = new Set(dismissedAlerts());
+  const alerts = homeAlerts().filter(a => !hidden.has(a.id));
+  $('#alerts-panel').classList.toggle('hidden', !alerts.length);
+  $('#alerts').innerHTML = alerts.map(a => `<div class="alert ${a.level}">
+    <span class="alert-dot" aria-hidden="true"></span><span class="alert-text">${esc(a.text)}</span>
+    <span class="alert-actions"><button class="btn" data-alert-act="${esc(a.action.type)}" data-alert-arg="${esc(a.action.arg)}">${esc(a.action.label)}</button>
+      <button class="icon-btn" data-alert-dismiss="${esc(a.id)}" aria-label="Dispensar este aviso" title="Dispensar (volta se mudar)">✕</button></span>
+  </div>`).join('');
+}
+// O botão de cada aviso: abre o que resolve o aviso
+function alertAction(type, arg) {
+  if (type === 'inv-month') return investmentMonthGrid();
+  if (type === 'loan-month') return loanMonthGrid();
+  if (type === 'mov') return go('mov');
+  if (type === 'inv') return go('inv');
+  if (type === 'recurring') { go('mov'); return recurringModal(); }
+  if (type === 'goals') return $('#goals').closest('.panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  const goal = findById('goals', arg);
+  if (goal && type === 'goal-edit') return goalForm(goal);
+  if (goal && type === 'goal-monthly') return reserveMonthly(goal);
+}
+
+// ── metas de poupança (painel da página inicial; goalStatus e reserveSources no calc.js) ──
+// Cada meta: quanto já há e quanto falta, com uma barra, e a que ritmo se lá chega. Com prazo, quanto é preciso por mês
+// e a barra fica verde se o ritmo chega, laranja se não chega e vermelha se o prazo passou. Por cima, quanto ainda está
+// livre nas contas e investimentos onde há reservas (o aviso de se ter reservado mais do que lá há está no painel "A ver").
+function renderGoals() {
+  const goals = goalsStatus(), sources = reserveSources();
+  $('#goals').innerHTML = goals.length ? `
+    ${sources.length ? `<div class="goal-free">Livre para reservar: ${sources.map(x =>
+      `${esc(x.name)} <b class="${x.free < 0 ? 'neg' : ''}">${x.free < 0 ? '−' + eur(-x.free) : eur(x.free)}</b>`).join(' · ')}</div>` : ''}
+    <div class="goal-list">${goals.map(goalHtml).join('')}</div>`
+    : `<div class="empty">Ainda não tens metas de poupança.<br>Uma meta é um valor que queres juntar (fundo de emergência, entrada da casa,
+        férias…), com ou sem prazo. Vais reservando para ela partes da tua poupança, sem precisares de uma conta só para isso.<br>
+        <button class="btn primary" data-action="goal-new">+ Meta</button></div>`;
+}
+
+function goalHtml(g) {
+  const reserve = g.source === 'reserve';
+  const what = !reserve ? 'Património líquido'
+    : (g.sources.length ? 'Reservado em ' + g.sources.map(x => `${x.name} (${eurShort(x.amount)})`).join(', ') : 'Ainda sem reservas')
+      + (g.monthly ? ` · ${eurShort(g.monthly)}/mês planeados` : '');
+  const months = `${g.rateMonths} ${g.rateMonths === 1 ? 'mês' : 'meses'}`;
+  const rate = g.rate === null ? '' : `${eurSignedShort(g.rate)}/mês`;
+  let plan = '', pace = '';
+  if (g.done) {
+    plan = '<span class="pos">Meta atingida ✓</span>';
+  } else {
+    if (g.deadline) {
+      plan = g.monthsLeft < 0 ? `<span class="neg">O prazo acabou em ${monthLabel(g.deadline)}.</span>`
+        : g.monthsLeft === 0 ? `O prazo é este mês: faltam ${eurShort(g.left)}.`
+        : `Precisas de juntar <b>${eurShort(g.perMonth)}/mês</b> até ${monthLabel(g.deadline)}.`;
+    }
+    const cls = { ok: 'pos', behind: 'warn', late: 'neg' }[g.state] || '';
+    pace = g.fromPlan ? `<span class="${cls}">Com os ${eurShort(g.monthly)}/mês planeados ${g.far ? 'demoras mais de 50 anos' : `chegas lá em ${monthLabel(g.eta)}`}.</span>`
+      : g.rate === null ? (reserve && !g.sources.length ? 'Carrega em "+ Reservar" para pores dinheiro de parte para esta meta.'
+        : 'Ainda não há um mês completo para saber a que ritmo estás a juntar.')
+      : g.rate <= 0 ? `<span class="${g.deadline ? 'neg' : ''}">Nos últimos ${months} ${reserve ? 'não reservaste nada' : 'o valor não subiu'} (${rate}).</span>`
+      : g.far ? `<span class="${cls}">Ao ritmo atual (${rate}) demoras mais de 50 anos.</span>`
+      : `<span class="${cls}">Ao ritmo atual (${rate}) chegas lá em ${monthLabel(g.eta)}.</span>`;
+  }
+  const title = g.rate === null ? '' : `Ritmo: quanto ${reserve ? 'reservaste' : 'o património líquido subiu'} por mês, em média, nos últimos ${months} completos (o mês atual ainda não conta)`;
+  return `<div class="goal">
+    <div class="goal-top"><span class="li-name">${esc(g.name)}</span>
+      <button class="icon-btn" data-edit-goal="${esc(g.id)}" aria-label="Editar meta">✎</button></div>
+    <div class="li-sub">${esc(what)}${g.deadline ? ` · até ${monthLabel(g.deadline)}` : ''}</div>
+    <div class="goal-nums">${eur(g.current)} de ${eur(g.target)}</div>
+    <div class="progress goal-bar ${g.state}" role="progressbar" aria-label="${esc(g.name)}" aria-valuenow="${Math.round(g.ratio * 100)}"
+      aria-valuemin="0" aria-valuemax="100"><div style="width:${g.ratio * 100}%"></div></div>
+    <div class="progress-label"><span>${Math.round(g.ratio * 100)}%</span><span>${g.done ? '' : `faltam ${eur(g.left)}`}</span></div>
+    ${plan ? `<div class="goal-text">${plan}</div>` : ''}
+    ${pace ? `<div class="goal-text"${title ? ` title="${esc(title)}"` : ''}>${pace}</div>` : ''}
+    ${reserve ? `<div class="goal-actions"><button class="btn" data-goal-reserve="${esc(g.id)}">+ Reservar / tirar</button></div>` : ''}
+  </div>`;
+}
+
+// Sugestão para o valor de um fundo de emergência: 3 a 6 meses dos gastos médios (emergencyMonths)
+function emergencyHint() {
+  const em = emergencyMonths();
+  return em ? `Para um fundo de emergência costuma juntar-se 3 a 6 meses de gastos: com os teus (~${eurShort(em.avg)}/mês), `
+    + `${eurShort(em.avg * 3)} a ${eurShort(em.avg * 6)}.` : '';
+}
+
+// Formulário de uma meta de poupança (criar / editar / apagar). Uma meta que já tem reservas não pode passar para o
+// património líquido (as reservas ficavam a ocupar dinheiro sem se verem): primeiro tiram-se.
+function goalForm(goal = null) {
+  const hasReservations = !!goal && D.reservations.some(r => r.goal_id === goal.id);
+  const reserving = v => hasReservations || v.source === 'reserve';
+  const sourceOptions = reserveSources(true).map(x => ({ value: x.id, label: x.name }));
+  formModal({
+    title: goal ? 'Editar meta' : 'Nova meta de poupança',
+    values: goal ? { ...goal, deadline: goal.deadline || '', source: goal.source === 'networth' ? 'networth' : 'reserve',
+      monthly: goal.monthly ?? '', monthly_source: goal.monthly_source || sourceOptions[0]?.value || '' }
+      : { source: 'reserve', monthly_source: sourceOptions[0]?.value || '' },
+    fields: [
+      { name: 'name', label: 'Nome', type: 'text', required: true, placeholder: 'ex.: Fundo de emergência, Entrada da casa' },
+      { name: 'target', label: 'Valor a juntar (€)', type: 'money', required: true, positive: true, half: true,
+        hint: emergencyHint() },
+      { name: 'deadline', label: 'Até', type: 'month', half: true, hint: 'O mês em que queres lá chegar.' },
+      { name: 'source', label: 'Como se junta', type: 'seg', required: true, showIf: () => !hasReservations, options: [
+        { value: 'reserve', label: 'Com reservas' }, { value: 'networth', label: 'Património líquido' }] },
+      { name: 'monthly', label: 'Reservar por mês (€)', type: 'money', positive: true, half: true, showIf: reserving,
+        hint: 'No início de cada mês, a página inicial pergunta se queres fazer esta reserva.' },
+      { name: 'monthly_source', label: 'De onde', type: 'select', options: sourceOptions, half: true,
+        showIf: v => reserving(v) && String(v.monthly ?? '').trim() !== '' },
+    ],
+    intro: hasReservations ? 'Esta meta já tem reservas. Para a passares a acompanhar o património líquido, tira-as primeiro.'
+      : goal ? '' : 'Com reservas, pões de parte para a meta partes do saldo das tuas contas ou investimentos (em "+ Reservar / tirar"),'
+      + ' sem precisares de uma conta só para ela. Com o património líquido, a meta acompanha o total da página inicial'
+      + ' (ex.: "chegar aos 100 mil").',
+    onSubmit: async v => {
+      if (v.deadline && !/^\d{4}-\d{2}$/.test(v.deadline)) throw new Error('"Até" tem de ser um mês (AAAA-MM)');
+      const source = hasReservations ? 'reserve' : v.source;
+      if (source === 'reserve' && v.monthly && !v.monthly_source) throw new Error('Escolhe de onde vêm as reservas mensais');
+      await saveItems([{ kind: 'goal', id: goal?.id, name: v.name, target: v.target, deadline: v.deadline || '', source,
+        ...(source === 'reserve' && v.monthly ? { monthly: v.monthly, monthly_source: v.monthly_source } : {}) }]);
+      toast(goal ? 'Meta atualizada' : 'Meta criada');
+    },
+    danger: goal && { label: 'Apagar meta', onClick: async () => {
+      if (await confirmDialog(`Apagar a meta <b>${esc(goal.name)}</b>? As reservas dela também são apagadas e esse dinheiro fica livre.`
+        + ' As contas e os investimentos não mudam.')) {
+        try { await removeItem(goal.id, 'Meta apagada'); } catch (e) { toast(e.message, true); }
+      }
+    } },
+  });
+}
+
+// Reservar dinheiro para uma meta (de uma conta ou investimento, até ao que lá está livre) ou tirá-lo (até ao que a meta lá
+// tem). Por baixo, as últimas reservas da meta, com ✕ para apagar uma que esteja errada.
+function reserveModal(goal) {
+  const g = goalStatus(goal);
+  const all = reserveSources(true);
+  const reservedHere = id => reservedTotal({ goalId: goal.id, sourceId: id });
+  const optionsFor = move => (move === 'release' ? all.filter(x => reservedHere(x.id) > 0) : all).map(x => ({ value: x.id,
+    label: `${x.name} · ${move === 'release' ? `${eur(reservedHere(x.id))} reservados aqui` : `livre ${eur(x.free)}`}` }));
+  // por omissão, a conta onde a meta tem mais reservado; senão, a que tem mais dinheiro livre
+  const preferred = (g.sources[0] && all.find(x => x.id === g.sources[0].id)) || [...all].sort((a, b) => b.free - a.free)[0];
+  const history = D.reservations.filter(r => r.goal_id === goal.id).sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+  const list = history.length ? `<div class="res-list">${history.slice(0, 5).map(r => `<div class="res-row">
+      <span class="date">${dateLabel(r.date)}</span><span>${esc(sourceName(r.source_id))}</span>
+      <span class="num ${r.move === 'reserve' ? 'pos' : 'neg'}">${r.move === 'reserve' ? '+' : '−'}${eur(r.amount)}</span>
+      <button type="button" class="icon-btn del" data-del-gres="${esc(r.id)}" aria-label="Apagar esta reserva">✕</button></div>`).join('')}
+      ${history.length > 5 ? `<div class="li-sub">e mais ${history.length - 5} anteriores</div>` : ''}</div>` : '';
+  formModal({
+    title: `Reservas · ${goal.name}`,
+    intro: `Reservado: <b>${eur(g.current)}</b> de ${eur(g.target)}. O dinheiro fica na conta: só passa a ter destino.${list}`,
+    values: { move: 'reserve', date: todayISO(), source_id: preferred?.id || '' },
+    submitLabel: 'Guardar',
+    fields: [
+      { name: 'move', label: 'O que fazer', type: 'seg', required: true, options: [{ value: 'reserve', label: 'Reservar' }, { value: 'release', label: 'Tirar' }],
+        onChange: (move, state, api2) => api2.setOptions('source_id', optionsFor(move)) },
+      { name: 'amount', label: 'Valor (€)', type: 'money', required: true, positive: true, half: true },
+      { name: 'date', label: 'Data', type: 'date', required: true, half: true },
+      { name: 'source_id', label: 'Onde', type: 'select', required: true, options: optionsFor('reserve'),
+        hint: all.length ? 'Livre = saldo de hoje menos o que as metas já lá têm reservado.' : 'Ainda não tens contas nem investimentos.' },
+    ],
+    onSubmit: async v => {
+      const x = all.find(s2 => s2.id === v.source_id);
+      if (!x) throw new Error('Escolhe a conta ou o investimento');
+      if (v.move === 'reserve' && round2(v.amount) > x.free) throw new Error(`Em ${x.name} só tens ${eur(Math.max(0, x.free))} livres`);
+      if (v.move === 'release' && round2(v.amount) > reservedHere(x.id)) throw new Error(`Esta meta só tem ${eur(reservedHere(x.id))} reservados em ${x.name}`);
+      await saveItems([{ kind: 'reservation', goal_id: goal.id, source_id: x.id, move: v.move, amount: round2(v.amount), date: v.date }]);
+      toast(v.move === 'reserve' ? 'Reserva feita' : 'Dinheiro tirado da meta');
+    },
+  });
+}
+
+// Faz a reserva mensal planeada de uma meta (botão do aviso "ainda não reservaste…"): o valor do plano (ou o que falta),
+// hoje, da conta ou investimento do plano, se lá houver dinheiro livre que chegue
+async function reserveMonthly(goal) {
+  const g = goalStatus(goal), x = reserveSources(true).find(s2 => s2.id === g.monthlySource);
+  if (!g.monthlyDue) return;
+  if (!x) return toast('Escolhe de onde vêm as reservas mensais (✎ na meta)', true);
+  if (g.monthlyAmount > x.free) return toast(`Em ${x.name} só tens ${eur(Math.max(0, x.free))} livres`, true);
+  try {
+    await saveItems([{ kind: 'reservation', goal_id: goal.id, source_id: x.id, move: 'reserve', amount: g.monthlyAmount, date: todayISO() }]);
+    toast(`Reservados ${eur(g.monthlyAmount)} para ${goal.name}`);
+  } catch (e) { toast(e.message, true); }
+}
+
+// Aviso ao apagar uma conta ou um investimento com dinheiro reservado para metas (as reservas feitas lá também são apagadas)
+function reservationsNote(sourceId) {
+  const reserved = reservedTotal({ sourceId, upTo: '9999-12-31' });
+  return reserved > 0 ? ` As metas perdem os <b>${eur(reserved)}</b> que lá tinham reservados.` : '';
+}
+
+// Apaga uma reserva (✕ na janela das reservas) e volta a abrir a janela da meta. Uma reserva de onde depois já se tirou
+// dinheiro só se apaga se a meta continuar com reservado ≥ 0 nessa conta (senão, primeiro apaga-se o que se tirou).
+async function deleteReservation(id) {
+  const r = findById('reservations', id), goal = r && findById('goals', r.goal_id);
+  if (!r) return;
+  const sign = r.move === 'reserve' ? '+' : '−', where = esc(sourceName(r.source_id));
+  if (r.move === 'reserve' && reservedTotal({ goalId: r.goal_id, sourceId: r.source_id, upTo: '9999-12-31' }) < r.amount) {
+    toast(`Primeiro apaga o que tiraste desta meta em ${sourceName(r.source_id)}`, true);
+  } else if (await confirmDialog(`Apagar <b>${sign}${eur(r.amount)}</b> em ${where} (${dateLabel(r.date)})?`)) {
+    try { await saveItems([], [id]); toast('Reserva apagada'); } catch (e) { toast(e.message, true); }
+  }
+  if (goal) reserveModal(goal);
+}
+
+// ════════ MOVIMENTOS ════════
+// Controlos do período: Mês / Ano / Tudo e as setas ‹ › para andar para trás e para a frente
+$$('#mov-period-mode button').forEach(b => b.addEventListener('click', () => {
+  S.movMode = b.dataset.mode;
+  $$('#mov-period-mode button').forEach(x => x.classList.toggle('active', x === b));
+  renderMovements();
+}));
+$$('#mov-period-nav .nav-btn').forEach(b => b.addEventListener('click', () => {
+  S.movAnchor = addMonths(S.movAnchor, Number(b.dataset.step) * (S.movMode === 'year' ? 12 : 1));
+  renderMovements();
+}));
+// Filtros por conta e por categoria
+$('#mov-filter-account').addEventListener('change', e => { S.movAccount = e.target.value; renderMovements(); });
+// Pesquisa: redesenha 200 ms depois de se parar de escrever (para não redesenhar a cada tecla)
+let movSearchTimer;
+$('#mov-search').addEventListener('input', e => {
+  clearTimeout(movSearchTimer);
+  movSearchTimer = setTimeout(() => { S.movSearch = e.target.value; renderMovements(); }, 200);
+});
+
+// Filtro de categorias com escolha múltipla (um para entradas, outro para saídas).
+// É um <details>: o resumo mostra o que está escolhido e, aberto, uma lista de caixas para marcar.
+// key = 'movCatIn' ou 'movCatOut' (onde fica a escolha em S). Devolve a escolha, sem categorias que já não existam.
+// otherActive = o outro filtro tem categorias escolhidas: então este, vazio, não mostra nenhuma ("nenhuma").
+function renderCatFilter(el, key, label, cats, otherActive) {
+  const chosen = S[key].filter(c => cats.includes(c));
+  const summary = chosen.length > 1 ? chosen.length + ' categorias' : chosen.length ? esc(chosen[0]) : otherActive ? 'nenhuma' : 'todas';
+  el.innerHTML = `<summary>${esc(label)}: ${summary}</summary>
+    <div class="multi-panel">
+      ${cats.length ? cats.map(c => `<label class="check"><input type="checkbox" value="${esc(c)}" ${chosen.includes(c) ? 'checked' : ''}> ${esc(c)}</label>`).join('')
+        : '<div class="muted">Sem categorias</div>'}
+      ${chosen.length ? '<button class="link-btn" data-clear>Limpar</button>' : ''}
+    </div>`;
+  return chosen;
+}
+for (const [id, key] of [['#mov-filter-in', 'movCatIn'], ['#mov-filter-out', 'movCatOut']]) {
+  const el = $(id);
+  el.addEventListener('change', e => {
+    const v = e.target.value;
+    S[key] = e.target.checked ? [...S[key], v] : S[key].filter(c => c !== v);
+    renderMovements();
+  });
+  el.addEventListener('click', e => { if (e.target.matches('[data-clear]')) { e.preventDefault(); S[key] = []; renderMovements(); } });
+}
+// Clicar fora de um filtro aberto fecha-o
+document.addEventListener('click', e => $$('details.multi[open]').forEach(d => { if (!d.contains(e.target)) d.open = false; }));
+
+// Preenche uma lista de opções (com "Todas..." no topo) e mantém a escolha atual se ainda existir
+function fillSelect(sel, options, current, allLabel) {
+  sel.innerHTML = `<option value="">${allLabel}</option>` +
+    options.map(o => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('');
+  sel.value = options.some(o => o.value === current) ? current : '';
+  return sel.value;
+}
+
+// Desenha o separador Movimentos: totais, gráficos, lista de contas e tabela de movimentos
+function renderMovements() {
+  S.movAccount = fillSelect($('#mov-filter-account'), sortByName(D.accounts).map(a => ({ value: a.id, label: a.name })), S.movAccount, 'Todas as contas');
+  const catsOf = dir => [...new Set(D.transactions.filter(t => t.direction === dir).map(t => t.category))].sort((a, b) => a.localeCompare(b, 'pt'));
+  const catsIn = catsOf('in'), catsOut = catsOf('out');
+  const activeIn = S.movCatIn.some(c => catsIn.includes(c)), activeOut = S.movCatOut.some(c => catsOut.includes(c));
+  S.movCatIn = renderCatFilter($('#mov-filter-in'), 'movCatIn', 'Entradas', catsIn, activeOut);
+  S.movCatOut = renderCatFilter($('#mov-filter-out'), 'movCatOut', 'Saídas', catsOut, activeIn);
+
+  // Período escolhido e os movimentos que lhe pertencem
+  const { from, to } = periodBounds(S.movMode, S.movAnchor);
+  $('#mov-period-nav').classList.toggle('hidden', S.movMode === 'all');
+  $('#mov-period-label').textContent = S.movMode === 'month' ? monthLabel(S.movAnchor) : S.movAnchor.slice(0, 4);
+
+  const filters = { from, to, account: S.movAccount, catIn: S.movCatIn, catOut: S.movCatOut, text: S.movSearch };
+  const txs = filterTx(filters);
+  const tot = flowTotals(txs, S.movAccount);
+  const nMonths = monthRange(from, to).length;
+
+  // Cartões de resumo: entradas, saídas, saldo e taxa de poupança
+  $('#mov-in').textContent = eur(tot.in);
+  $('#mov-out').textContent = eur(tot.out);
+  $('#mov-net').textContent = eurSigned(tot.net);
+  $('#mov-net').className = 'stat-value ' + signClass(tot.net);
+  $('#mov-rate').textContent = tot.in > 0 ? pct(tot.saved / tot.in, 0) : '—';
+  $('#mov-rate').className = 'stat-value ' + (tot.in > 0 ? signClass(tot.saved) : '');
+  // o que saiu das contas mas não foi gasto: investimentos e amortizações de crédito
+  const putAside = [tot.invested > 0 && `${eurShort(tot.invested)} investidos`, tot.amortized > 0 && `${eurShort(tot.amortized)} amortizados`].filter(Boolean).join(' e ');
+  $('#mov-rate-sub').textContent = putAside ? `inclui ${putAside}` : 'do que entrou, quanto não foi gasto';
+  const countIn = txs.filter(t => txEffect(t, S.movAccount) > 0).length;
+  const countOut = txs.filter(t => txEffect(t, S.movAccount) < 0 && !isSavingOut(t)).length;
+  $('#mov-in-sub').textContent = `${countIn} movimento(s)` + (nMonths > 1 ? ` · média ${eurShort(tot.in / nMonths)}/mês` : '');
+  $('#mov-out-sub').textContent = `${countOut} movimento(s)` + (nMonths > 1 ? ` · média ${eurShort(tot.out / nMonths)}/mês` : '')
+    + (putAside ? ` · sem ${putAside}` : '');
+  $('#mov-net-sub').textContent = tot.net >= 0 ? 'ficou nas contas' : 'saiu mais das contas do que entrou';
+
+  // Comparação com a média dos meses anteriores e com o ano passado (movComparison; o título de cada linha diz com quê).
+  // Nos gastos, subir é mau (vermelho); nas entradas, no saldo e na taxa de poupança, subir é bom (verde).
+  const cmp = [movComparison(S.movMode, S.movAnchor, filters)].flatMap(c => [c.avg, c.lastYear]).filter(Boolean);
+  const change = (cur, base) => (base > 0 ? (cur - base) / base : NaN);
+  const cmpLines = f => cmp.map(c => {
+    const r = f(c.totals);
+    return r ? `<div title="${esc(c.title)}"><span class="${r.cls}">${r.text}</span> face ${esc(c.short)}</div>` : '';
+  }).join('');
+  $('#mov-in-cmp').innerHTML = cmpLines(b => { const x = change(tot.in, b.in); return isFinite(x) && { text: pct(x, 0), cls: signClass(x) }; });
+  $('#mov-out-cmp').innerHTML = cmpLines(b => { const x = change(tot.out, b.out); return isFinite(x) && { text: pct(x, 0), cls: signClass(-x) }; });
+  $('#mov-net-cmp').innerHTML = cmpLines(b => { const x = round2(tot.net - b.net); return { text: eurSignedShort(x), cls: signClass(x) }; });
+  $('#mov-rate-cmp').innerHTML = cmpLines(b => {
+    const x = tot.in > 0 && isFinite(b.rate) ? Math.round((tot.saved / tot.in - b.rate) * 100) : NaN;
+    return isFinite(x) && { text: `${x > 0 ? '+' : x < 0 ? '−' : ''}${Math.abs(x)} p.p.`, cls: signClass(x) };
+  });
+
+  // Orçamentos do período (budgetStatus): em todas as contas, sem os filtros de categoria nem a pesquisa
+  renderForecast();
+  const budgets = budgetStatus(from, to);
+  $('#budget-panel').classList.toggle('hidden', !budgets.length);
+  if (budgets.length) {
+    const n = budgets[0].months;
+    $('#budget-sub').textContent = `todas as contas${n > 1 ? ` · limite por mês × ${n} meses` : ''}`;
+    $('#budget-list').innerHTML = budgets.map(b => `<div class="budget">
+      <div class="budget-top"><span class="li-name">${esc(b.category)}</span><span class="budget-nums">${eur(b.spent)} de ${eur(b.limit)}</span></div>
+      <div class="progress budget-bar ${b.state}" role="progressbar" aria-label="${esc(b.category)}" aria-valuenow="${Math.round(b.ratio * 100)}"
+        aria-valuemin="0" aria-valuemax="100"><div style="width:${Math.min(100, b.ratio * 100)}%"></div></div>
+      <div class="progress-label"><span>${Math.round(b.ratio * 100)}%</span>
+        <span class="${b.state === 'over' ? 'neg' : ''}">${b.left >= 0 ? `sobram ${eur(b.left)}` : `${eur(-b.left)} acima do limite`}</span></div>
+    </div>`).join('');
+  }
+
+  // gráfico: entradas vs saídas por mês
+  let months;
+  if (S.movMode === 'month') months = monthRange(addMonths(S.movAnchor, -11), S.movAnchor);
+  else if (S.movMode === 'year') months = monthRange(from, to);
+  else months = monthRange(from, to);
+  $('#mov-chart-flow-title').textContent = S.movMode === 'month' ? 'Entradas e saídas (12 meses até ao mês escolhido)' : 'Entradas e saídas por mês';
+  let flows = monthlyFlows(months, { account: S.movAccount, catIn: S.movCatIn, catOut: S.movCatOut, text: S.movSearch });
+  let labels = months.map(monthShort), titles = months.map(monthLabel);
+  if (months.length > 36) {
+    // meses a mais para as barras se lerem: agrupa por ano
+    const years = [...new Set(months.map(m => m.slice(0, 4)))];
+    const sumBy = arr => years.map(y => round2(arr.reduce((s2, v, i) => (months[i].startsWith(y) ? s2 + v : s2), 0)));
+    flows = { in: sumBy(flows.in), out: sumBy(flows.out), invested: sumBy(flows.invested), amortized: sumBy(flows.amortized) };
+    labels = years; titles = years;
+    $('#mov-chart-flow-title').textContent = 'Entradas e saídas por ano';
+  }
+  drawChart('chart-mov-flow', {
+    type: 'bar',
+    data: { labels, datasets: [barDataset('Entradas', flows.in, SERIES[0]), barDataset('Gastos', flows.out, SERIES[1]),
+      ...(flows.invested.some(v => v > 0) ? [barDataset('Investido', flows.invested, SERIES[2])] : []),
+      ...(flows.amortized.some(v => v > 0) ? [barDataset('Amortizado', flows.amortized, SERIES[3])] : [])] },
+    options: {
+      interaction: INDEX_HOVER,
+      scales: { x: catAxis(), y: moneyAxis({ beginAtZero: true }) },
+      plugins: {
+        legend: { position: 'top', align: 'end' },
+        tooltip: { callbacks: { title: i => titles[i[0].dataIndex], label: tooltipMoney,
+          footer: i => { const k = i[0].dataIndex, e = flows.in[k] || 0, g = flows.out[k] || 0, v = (flows.invested[k] || 0) + (flows.amortized[k] || 0);
+            return [`Saldo: ${eurSigned(e - g - v)}`, ...(e > 0 ? [`Taxa de poupança: ${pct((e - g) / e, 0)}`] : [])]; } } },
+      },
+    },
+  }, 'Sem movimentos neste período. Adiciona um com "+ Movimento".');
+
+  // gráfico: gastos por categoria (as 8 maiores + "Outras")
+  let cat = categoryTotals(txs, 'out');
+  if (cat.length > 9) cat = [...cat.slice(0, 8), ['Outras', round2(cat.slice(8).reduce((s, c) => s + c[1], 0))]];
+  drawChart('chart-mov-cat', {
+    type: 'bar',
+    data: { labels: cat.map(c => c[0]), datasets: [barDataset('Gastos', cat.map(c => c[1]), SERIES[1], { maxBarThickness: 18, borderWidth: 0 })] },
+    options: {
+      indexAxis: 'y',
+      scales: { x: moneyAxis({ beginAtZero: true, ticks: { maxTicksLimit: 4, callback: v => compactEur(v) } }), y: { grid: { display: false }, border: { display: false }, ticks: { color: TEXT, font: { family: cssVar('--font'), size: 11 } } } },
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => ` ${eur(c.parsed.x)} · ${tot.out ? Math.round(c.parsed.x / tot.out * 100) : 0}%` } } },
+    },
+  }, 'Sem gastos neste período');
+
+  // lista de contas com o saldo de hoje
+  const accs = sortByName(D.accounts);
+  $('#acc-list').innerHTML = accs.length ? accs.map(a => {
+    const b = accountBalance(a.id, todayISO());
+    return `<div class="list-item">
+      <div><div class="li-name">${esc(a.name)}</div><div class="li-sub">${esc(a.acc_type)}</div></div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <div class="li-value ${b < 0 ? 'neg' : ''}">${eur(b)}</div>
+        <button class="icon-btn" data-edit-acc="${esc(a.id)}" aria-label="Editar conta ${esc(a.name)}">✎</button>
+      </div></div>`;
+  }).join('') + `<div class="list-item"><div class="li-name">Total</div><div class="li-value">${eur(totalAccountsBalance(todayISO()))}</div></div>`
+    : `<div class="empty">Ainda não tens contas.<br>Cria uma para começares a registar movimentos.<br><button class="btn primary" data-action="acc-new">+ Criar conta</button></div>`;
+
+  // gráfico do saldo no fim de cada mês
+  const bs = balanceSeries(S.movAccount);
+  drawChart('chart-mov-balance', {
+    type: 'line',
+    data: { labels: bs.months.map(monthShort), datasets: [lineDataset(S.movAccount ? accountName(S.movAccount) : 'Todas as contas', bs.values, SERIES[0])] },
+    options: {
+      interaction: INDEX_HOVER,
+      scales: { x: catAxis(), y: moneyAxis() },
+      plugins: { legend: { display: false }, tooltip: { callbacks: { title: i => monthLabel(bs.months[i[0].dataIndex]), label: c => ` Saldo no fim do mês: ${eur(c.parsed.y)}` } } },
+    },
+  }, 'O gráfico aparece quando registares movimentos');
+
+  // tabela de movimentos (mais recentes primeiro; no máximo 500 para a página não ficar lenta)
+  const rows = [...txs].sort((a, b) => b.date.localeCompare(a.date) || (b.updated_at || '').localeCompare(a.updated_at || ''));
+  $('#mov-table-title').textContent = `Movimentos (${rows.length})`;
+  const shown = rows.slice(0, 500);
+  // Só entradas e saídas se podem selecionar (as transferências entre contas não têm categoria).
+  // A seleção fica só com movimentos visíveis, para nunca mudar algo que os filtros escondem.
+  movSelectable = shown.filter(t => t.direction !== 'transfer').map(t => t.id);
+  S.movSel = new Set(movSelectable.filter(id => S.movSel.has(id)));
+  $('#mov-table').innerHTML = rows.length ? `<table class="data">
+    <thead><tr><th class="sel"><input type="checkbox" id="mov-sel-all" aria-label="Selecionar todos"></th><th>Data</th><th>Tipo</th><th>Conta</th><th>Categoria</th><th>Descrição</th><th class="num">Valor</th><th></th></tr></thead>
+    <tbody>${shown.map(t => {
+      const e = txEffect(t, S.movAccount);
+      const acct = t.direction === 'transfer' ? `${esc(accountName(t.account_id))} → ${esc(accountName(t.to_account_id))}` : esc(accountName(t.account_id));
+      const selected = S.movSel.has(t.id);
+      return `<tr class="${selected ? 'selected' : ''}">
+        <td class="sel">${t.direction === 'transfer' ? '' : `<input type="checkbox" data-sel="${esc(t.id)}" ${selected ? 'checked' : ''} aria-label="Selecionar">`}</td>
+        <td class="date">${dateLabel(t.date)}</td>
+        <td><span class="badge ${t.direction}">${DIRECTION_LABEL[t.direction]}</span>${t.approx ? '<span class="badge approx" title="Valor aproximado">≈</span>' : ''}</td>
+        <td class="muted">${acct}</td>
+        <td><span class="chip">${esc(t.category)}</span></td>
+        <td class="desc" title="${esc(t.description)}">${esc(t.description) || '<span class="muted">—</span>'}</td>
+        <td class="num ${signClass(t.direction === 'transfer' && !S.movAccount ? 0 : e)}">${t.direction === 'transfer' && !S.movAccount ? eur(t.amount) : eurSigned(e)}</td>
+        <td class="actions"><button class="icon-btn" data-edit-tx="${esc(t.id)}" aria-label="Editar">✎</button><button class="icon-btn del" data-del-tx="${esc(t.id)}" aria-label="Apagar">✕</button></td>
+      </tr>`;
+    }).join('')}</tbody></table>${rows.length > shown.length ? `<div class="empty">A mostrar os 500 mais recentes. Usa os filtros para ver os restantes.</div>` : ''}`
+    : S.movSearch.trim() ? `<div class="empty">Nenhum movimento com esta pesquisa neste período.</div>`
+    : `<div class="empty">Sem movimentos neste período.<br><button class="btn primary" data-action="tx-new">+ Movimento</button></div>`;
+  renderBulk();
+}
+
+// ── mudar a categoria de vários movimentos de uma vez ──
+// ids dos movimentos que se podem selecionar na tabela visível (preenchido por renderMovements)
+let movSelectable = [];
+
+// Barra que aparece com movimentos selecionados: escolher a categoria (só uma), aplicar ou cancelar.
+// Entradas e saídas têm categorias diferentes, por isso só se podem mudar juntas se forem do mesmo tipo.
+function renderBulk() {
+  const bar = $('#mov-bulk');
+  const sel = D.transactions.filter(t => S.movSel.has(t.id));
+  // caixa "selecionar todos": marcada com todos, a meio com alguns
+  const all = $('#mov-sel-all');
+  if (all) { all.checked = sel.length > 0 && sel.length === movSelectable.length; all.indeterminate = sel.length > 0 && sel.length < movSelectable.length; }
+  bar.classList.toggle('hidden', !sel.length);
+  if (!sel.length) { S.movBulkCat = ''; return; }
+  const dirs = new Set(sel.map(t => t.direction));
+  const count = `<span>${sel.length} selecionado(s)</span>`;
+  const cancel = '<button class="btn" data-bulk-cancel>Cancelar</button>';
+  if (dirs.size > 1) {
+    bar.innerHTML = `${count}<span class="err">Escolhe só entradas ou só saídas: têm categorias diferentes</span>${cancel}`;
+    return;
+  }
+  const cats = knownCategories([...dirs][0]);
+  if (S.movBulkCat && !cats.includes(S.movBulkCat)) cats.push(S.movBulkCat);   // categoria nova escrita à mão
+  bar.innerHTML = `${count}
+    <details class="multi" id="mov-bulk-cat">
+      <summary>Categoria: ${S.movBulkCat ? esc(S.movBulkCat) : 'escolher'}</summary>
+      <div class="multi-panel">
+        ${cats.map(c => `<label class="check"><input type="checkbox" data-pick value="${esc(c)}" ${c === S.movBulkCat ? 'checked' : ''}> ${esc(c)}</label>`).join('')}
+        <input class="inline" data-newcat placeholder="Outra categoria… (Enter)">
+      </div>
+    </details>
+    <button class="btn primary" data-bulk-apply ${S.movBulkCat ? '' : 'disabled'}>Mudar categoria</button>${cancel}`;
+}
+
+// Marcar / desmarcar um movimento ou todos (sem redesenhar a página toda)
+$('#mov-table').addEventListener('change', e => {
+  if (e.target.id === 'mov-sel-all') {
+    S.movSel = new Set(e.target.checked ? movSelectable : []);
+    $$('#mov-table [data-sel]').forEach(c => { c.checked = e.target.checked; c.closest('tr').classList.toggle('selected', c.checked); });
+  } else if (e.target.dataset.sel) {
+    S.movSel[e.target.checked ? 'add' : 'delete'](e.target.dataset.sel);
+    e.target.closest('tr').classList.toggle('selected', e.target.checked);
+  } else return;
+  renderBulk();
+});
+// Escolher a categoria: só pode haver uma, por isso marcar uma desmarca as outras (e fecha a lista)
+$('#mov-bulk').addEventListener('change', e => {
+  if (!e.target.matches('[data-pick]')) return;
+  S.movBulkCat = e.target.checked ? e.target.value : '';
+  renderBulk();
+});
+$('#mov-bulk').addEventListener('keydown', e => {
+  if (e.key !== 'Enter' || !e.target.matches('[data-newcat]') || !e.target.value.trim()) return;
+  e.preventDefault();
+  S.movBulkCat = e.target.value.trim().slice(0, 60);
+  renderBulk();
+});
+$('#mov-bulk').addEventListener('click', async e => {
+  if (e.target.matches('[data-bulk-cancel]')) { S.movSel.clear(); renderMovements(); return; }
+  if (!e.target.matches('[data-bulk-apply]') || !S.movBulkCat) return;
+  const cat = S.movBulkCat;
+  const items = D.transactions.filter(t => S.movSel.has(t.id) && t.category !== cat).map(t => ({ ...t, category: cat }));
+  const n = S.movSel.size;
+  e.target.disabled = true; e.target.textContent = 'A guardar…';
+  try {
+    if (items.length) await saveItems(items);
+    S.movSel.clear(); S.movBulkCat = '';
+    renderMovements();
+    toast(`${n} movimento(s) em «${cat}»`);
+  } catch (x) {
+    toast(x.message, true);
+    renderBulk();
+  }
+});
+
+// ── formulário de conta ──
+// acc = conta a editar (ou null para criar); after = função a chamar depois de criar
+function accountForm(acc = null, after) {
+  formModal({
+    title: acc ? 'Editar conta' : 'Nova conta',
+    values: acc || { acc_type: 'Conta à ordem', opening_balance: '', opening_date: todayISO() },
+    fields: [
+      { name: 'name', label: 'Nome', type: 'text', required: true, placeholder: 'ex.: Conta à ordem, Poupança, Carteira' },
+      { name: 'acc_type', label: 'Tipo', type: 'select', options: ACCOUNT_TYPES, required: true },
+      { name: 'opening_balance', label: 'Saldo inicial (€)', type: 'money', required: false,
+        hint: 'O dinheiro que já estava na conta antes do primeiro movimento que vais registar. Pode ser 0.' },
+    ],
+    onSubmit: async v => {
+      const res = await saveItems([{ kind: 'account', id: acc?.id, name: v.name, acc_type: v.acc_type,
+        opening_balance: v.opening_balance ?? 0, opening_date: acc?.opening_date || todayISO() }]);
+      toast(acc ? 'Conta atualizada' : 'Conta criada');
+      if (after) setTimeout(() => after(res.saved[0]), 50);
+    },
+    danger: acc && { label: 'Apagar conta', onClick: async () => {
+      const n = D.transactions.filter(t => t.account_id === acc.id || t.to_account_id === acc.id).length;
+      if (await confirmDialog(`Apagar a conta <b>${esc(acc.name)}</b>${n ? ` e os <b>${n} movimentos</b> dela` : ''}?${reservationsNote(acc.id)} Não dá para desfazer.`)) {
+        try { await removeItem(acc.id, 'Conta apagada'); } catch (e) { toast(e.message, true); }
+      }
+    } },
+  });
+}
+
+// ── formulário de movimento ──
+// Sem contas, primeiro abre o formulário de conta e depois volta aqui. preset = valores iniciais.
+function txForm(tx = null, preset = {}) {
+  if (!D.accounts.length) {
+    toast('Primeiro cria uma conta');
+    return accountForm(null, () => txForm(tx, preset));
+  }
+  const accOpts = sortByName(D.accounts).map(a => ({ value: a.id, label: a.name }));
+  const defaults = { direction: 'out', date: todayISO(), account_id: S.movAccount || accOpts[0].value, amount: '', category: '', description: '', approx: false, ...preset };
+  formModal({
+    title: tx ? 'Editar movimento' : 'Novo movimento',
+    values: tx ? { ...tx } : defaults,
+    fields: [
+      { name: 'direction', label: 'Tipo', type: 'seg', required: true,
+        options: [{ value: 'out', label: 'Saída' }, { value: 'in', label: 'Entrada' }, { value: 'transfer', label: 'Transferência' }],
+        onChange: (v, st, f) => f.setSuggestions('category', knownCategories(v === 'transfer' ? 'out' : v)) },
+      { name: 'amount', label: 'Valor (€)', type: 'money', required: true, positive: true, half: true, placeholder: '0,00' },
+      { name: 'date', label: 'Data', type: 'date', required: true, half: true },
+      { name: 'account_id', label: 'Conta', type: 'select', options: accOpts, required: true, half: true },
+      { name: 'to_account_id', label: 'Para a conta', type: 'select', options: accOpts, required: true, half: true, showIf: v => v.direction === 'transfer' },
+      { name: 'category', label: 'Categoria', type: 'pick', required: true, showIf: v => v.direction !== 'transfer', placeholder: 'Escolhe uma categoria',
+        init: (st, f) => f.setSuggestions('category', knownCategories(st.direction === 'in' ? 'in' : 'out')) },
+      { name: 'description', label: 'Descrição', type: 'text', placeholder: 'ex.: supermercado, renda de março…' },
+      { name: 'approx', label: 'Valor aproximado (ex.: reconstituído de papel)', type: 'check' },
+    ],
+    onSubmit: async v => {
+      if (v.direction === 'transfer' && v.to_account_id === v.account_id) throw new Error('Escolhe duas contas diferentes');
+      await saveItems([{ kind: 'transaction', id: tx?.id, ...v, category: v.direction === 'transfer' ? 'Transferência' : v.category }]);
+      toast(tx ? 'Movimento atualizado' : 'Movimento guardado');
+    },
+    danger: tx && { label: 'Apagar', onClick: () => deleteTx(tx.id) },
+  });
+}
+// Apagar um movimento (depois de confirmar)
+async function deleteTx(id) {
+  const t = findById('transactions', id);
+  if (!t) return;
+  if (await confirmDialog(`Apagar o movimento de <b>${eur(t.amount)}</b> (${esc(t.category)}, ${dateLabel(t.date)})?`)) {
+    try { await removeItem(id, 'Movimento apagado'); } catch (e) { toast(e.message, true); }
+  }
+}
+
+// ── grelha "Histórico por mês": totais aproximados por categoria ──
+// Para reconstituir meses antigos: cada valor vira um movimento "≈" no último dia do mês,
+// repetido em todos os meses do intervalo. Valores já registados não são duplicados.
+function historyGrid() {
+  if (!D.accounts.length) { toast('Primeiro cria uma conta'); return accountForm(null, historyGrid); }
+  const body = document.createElement('div');
+  body.style.cssText = 'display:flex;flex-direction:column;gap:14px';
+  const outCats = knownCategories('out'), inCats = knownCategories('in');
+  const catRows = (cats, dir) => cats.map(c => `<tr><td>${esc(c)}</td><td style="width:130px"><input data-dir="${dir}" data-cat="${esc(c)}" inputmode="decimal" placeholder="0"></td></tr>`).join('') +
+    `<tr><td><input data-dir="${dir}" data-custom="1" placeholder="Outra categoria…" style="text-align:left"></td><td><input data-dir="${dir}" data-custom-val="1" inputmode="decimal" placeholder="0"></td></tr>`;
+  body.innerHTML = `
+    <div class="modal-hint">Para reconstituir meses antigos (por exemplo, a partir de registos em papel): escolhe a conta e o mês,
+      e escreve o <b>total aproximado</b> de cada categoria. Cada valor fica como um movimento marcado com <span class="badge approx">≈</span>
+      no último dia do mês. Se os valores forem iguais durante vários meses, escolhe um intervalo e eles repetem-se.</div>
+    <div class="field-row" style="grid-template-columns:1fr 1fr 1fr">
+      <div class="field"><label>Conta</label><select id="hg-acc">${sortByName(D.accounts).map(a => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Do mês</label><input type="month" id="hg-from" value="${addMonths(thisMonth(), -1)}"></div>
+      <div class="field"><label>Até ao mês</label><input type="month" id="hg-to" value="${addMonths(thisMonth(), -1)}"></div>
+    </div>
+    <div class="grid-cols">
+      <div><div class="grid-section-title neg">Saídas</div><div class="grid-scroll"><table class="grid-edit"><tbody>${catRows(outCats, 'out')}</tbody></table></div></div>
+      <div><div class="grid-section-title pos">Entradas</div><div class="grid-scroll"><table class="grid-edit"><tbody>${catRows(inCats, 'in')}</tbody></table></div></div>
+    </div>
+    <div class="preview-box" id="hg-summary">Preenche pelo menos um valor.</div>
+    <div class="form-error" id="hg-err"></div>`;
+
+  // Lê a grelha: meses do intervalo + lista de {sentido, categoria, valor} preenchidos
+  const collect = () => {
+    const from = $('#hg-from', body).value, to = $('#hg-to', body).value || from;
+    const entries = [];
+    $$('input[data-cat]', body).forEach(i => { const n = parseNum(i.value); if (n > 0) entries.push({ dir: i.dataset.dir, cat: i.dataset.cat, amount: round2(n) }); });
+    ['out', 'in'].forEach(dir => {
+      const name = $(`input[data-custom][data-dir="${dir}"]`, body).value.trim();
+      const n = parseNum($(`input[data-custom-val][data-dir="${dir}"]`, body).value);
+      if (name && n > 0) entries.push({ dir, cat: name, amount: round2(n) });
+    });
+    return { from, to, months: monthRange(from, to), entries };
+  };
+  // Atualiza o resumo por baixo da grelha sempre que se escreve
+  const update = () => {
+    const { months, entries } = collect();
+    const tin = entries.filter(e => e.dir === 'in').reduce((s, e) => s + e.amount, 0);
+    const tout = entries.filter(e => e.dir === 'out').reduce((s, e) => s + e.amount, 0);
+    $('#hg-summary', body).innerHTML = !months.length ? '<span class="err">O mês final tem de ser igual ou depois do inicial</span>'
+      : entries.length ? `Por mês: entradas <b class="pos">${eur(tin)}</b> · saídas <b class="neg">${eur(tout)}</b> · saldo <b>${eurSigned(tin - tout)}</b><br>
+        Vai criar <b>${entries.length * months.length}</b> movimento(s) em <b>${months.length}</b> mês(es) (${monthLabel(months[0])}${months.length > 1 ? ' → ' + monthLabel(months[months.length - 1]) : ''}).`
+      : 'Preenche pelo menos um valor.';
+  };
+  body.addEventListener('input', update);
+
+  modal.open({
+    title: 'Histórico por mês', body, wide: true,
+    footer: [
+      { label: 'Cancelar', onClick: () => modal.close() },
+      { label: 'Adicionar ao histórico', cls: 'primary', onClick: async e => {
+        const { months, entries } = collect();
+        const acc = $('#hg-acc', body).value;
+        if (!months.length) return ($('#hg-err', body).textContent = 'Verifica os meses');
+        if (!entries.length) return ($('#hg-err', body).textContent = 'Preenche pelo menos um valor');
+        if (months.length > 240) return ($('#hg-err', body).textContent = 'Máximo de 20 anos de cada vez');
+        const existing = new Set(D.transactions.map(fingerprint));
+        const items = [];
+        let skipped = 0;
+        for (const m of months) for (const en of entries) {
+          const it = { kind: 'transaction', date: lastDayOf(m), account_id: acc, direction: en.dir, category: en.cat,
+            description: 'Total aproximado do mês', amount: en.amount, approx: true };
+          if (existing.has(fingerprint(it))) { skipped++; continue; }
+          items.push(it);
+        }
+        if (!items.length) return ($('#hg-err', body).textContent = 'Esses valores já estão todos registados');
+        e.target.disabled = true; e.target.textContent = 'A guardar…';
+        try {
+          await saveItems(items);
+          modal.close();
+          toast(`${items.length} movimentos adicionados${skipped ? ` (${skipped} já existiam)` : ''}`);
+        } catch (err) {
+          $('#hg-err', body).textContent = err.message;
+          e.target.disabled = false; e.target.textContent = 'Adicionar ao histórico';
+        }
+      } },
+    ],
+  });
+}
+
+// ── orçamentos por categoria (botão "◎ Orçamentos" e "Editar" no painel dos orçamentos) ──
+// Uma linha por categoria de saídas (sem investimentos nem amortizações), com o que se gastou em média nos
+// 12 meses anteriores para ajudar a escolher. Vazio = sem orçamento (apaga o que houver).
+function budgetsModal() {
+  const latest = Object.create(null), dupes = [];   // sem protótipo: categorias como "constructor" contam como as outras
+  for (const b of [...D.budgets].sort((a, b2) => (a.updated_at || '').localeCompare(b2.updated_at || ''))) {
+    if (latest[b.category]) dupes.push(latest[b.category].id);   // orçamentos repetidos da mesma categoria: fica o mais recente
+    latest[b.category] = b;
+  }
+  // média por mês dos 12 meses anteriores (só desde o primeiro movimento)
+  const first = firstTxMonth(), to = addMonths(thisMonth(), -1);
+  const from = first ? [addMonths(thisMonth(), -12), first].sort().pop() : to;
+  const nMonths = first ? monthRange(from, to).length : 0;
+  const spent = Object.create(null);
+  if (nMonths) for (const t of filterTx({ from, to })) if (t.direction === 'out') spent[t.category] = (spent[t.category] || 0) + t.amount;
+  // primeiro as categorias com orçamento ou com gastos (das mais gastas para as menos), depois as outras por ordem alfabética
+  const cats = [...new Set([...knownCategories('out').filter(c => !isSavingOut({ direction: 'out', category: c })), ...Object.keys(latest)])]
+    .sort((a, b) => (latest[b] || spent[b] ? 1 : 0) - (latest[a] || spent[a] ? 1 : 0) || (spent[b] || 0) - (spent[a] || 0) || a.localeCompare(b, 'pt'));
+  const body = document.createElement('div');
+  body.style.cssText = 'display:flex;flex-direction:column;gap:14px';
+  body.innerHTML = `
+    <div class="modal-hint">Quanto queres gastar por mês, no máximo, em cada categoria. Deixa vazio para não ter orçamento.
+      Nos Movimentos, cada orçamento tem uma barra que fica laranja a partir de 80% e vermelha quando passa do limite.
+      ${nMonths ? `Ao lado, quanto gastaste em média por mês nos últimos ${nMonths} ${nMonths === 1 ? 'mês' : 'meses'}.` : ''}</div>
+    <div class="grid-scroll"><table class="grid-edit budget-edit"><thead><tr><th>Categoria</th><th class="num">Média/mês</th><th class="num">Limite por mês (€)</th></tr></thead>
+      <tbody>${cats.map(c => `<tr><td>${esc(c)}</td>
+        <td class="num">${spent[c] ? eurShort(spent[c] / nMonths) : '—'}</td>
+        <td class="budget-limit"><input data-cat="${esc(c)}" inputmode="decimal" placeholder="—" value="${latest[c] ? numInput(latest[c].amount) : ''}"
+          aria-label="Limite por mês para ${esc(c)}"></td></tr>`).join('')}</tbody></table></div>
+    <div class="form-error" id="bud-err"></div>`;
+  modal.open({
+    title: 'Orçamentos por categoria', body, wide: true,
+    footer: [
+      { label: 'Cancelar', onClick: () => modal.close() },
+      { label: 'Guardar', cls: 'primary', onClick: async e => {
+        const items = [], deletes = [...dupes], bad = [];
+        for (const input of $$('input[data-cat]', body)) {
+          const cat = input.dataset.cat, cur = latest[cat], txt = input.value.trim(), n = parseNum(txt);
+          if (!txt) { if (cur) deletes.push(cur.id); continue; }
+          if (!(n > 0)) { bad.push(cat); continue; }
+          if (!cur || round2(n) !== cur.amount) items.push({ kind: 'budget', id: cur?.id, category: cat, amount: round2(n) });
+        }
+        if (bad.length) return ($('#bud-err', body).textContent = `Valor inválido em: ${bad.join(', ')}`);
+        if (!items.length && !deletes.length) return modal.close();
+        e.target.disabled = true;
+        try {
+          await saveItems(items, deletes);
+          modal.close();
+          toast('Orçamentos guardados');
+        } catch (err) {
+          $('#bud-err', body).textContent = err.message;
+          e.target.disabled = false;
+        }
+      } },
+    ],
+  });
+}
+
+// ── despesas fixas e subscrições (botão "↻ Despesas fixas") ──
+// As saídas que se repetem todos os meses (recurringExpenses no calc.js), com o total por mês e por ano.
+// Carregar numa descrição mostra esses movimentos na tabela.
+function recurringModal() {
+  const list = recurringExpenses();
+  const perMonth = round2(list.reduce((s, x) => s + x.amount, 0));
+  const body = document.createElement('div');
+  body.style.cssText = 'display:flex;flex-direction:column;gap:14px';
+  body.innerHTML = `
+    <div class="modal-hint">Saídas que se repetem todos os meses (renda, luz, telemóvel, ginásio, subscrições…), encontradas nos
+      movimentos deste mês e dos 12 anteriores, em todas as contas. As que mudam de valor de mês para mês (ex.: luz) estão marcadas com
+      <span class="badge approx" style="margin-left:0">≈</span> e contam pelo valor habitual. Carrega numa descrição para ver esses movimentos.</div>
+    ${list.length ? `
+      <div class="preview-box">Por mês: <b class="neg">${eur(perMonth)}</b> · por ano: <b class="neg">${eur(perMonth * 12)}</b>
+        · ${list.length} ${list.length === 1 ? 'despesa' : 'despesas'}</div>
+      <div class="table-wrap grid-scroll"><table class="data">
+        <thead><tr><th>Descrição</th><th class="num">Por mês</th><th class="num">Por ano</th></tr></thead>
+        <tbody>${list.map(x => `<tr>
+          <td><button class="link-btn" style="text-align:left" data-recurring="${esc(x.key)}">${esc(x.description)}</button>
+            <div class="li-sub">${esc(x.category || '—')} · ${esc(accountName(x.account_id))} · última a ${dateLabel(x.last)}
+              · em ${x.months} meses</div></td>
+          <td class="num">${eur(x.amount)}${x.variable ? `<span class="badge approx" title="Varia entre ${eur(x.min)} e ${eur(x.max)}">≈</span>` : ''}</td>
+          <td class="num">${eurShort(x.amount * 12)}</td>
+        </tr>`).join('')}</tbody></table></div>`
+      : `<div class="empty">Ainda não há despesas que se repitam todos os meses.<br>
+          São precisos movimentos de pelo menos 3 meses (podes importar os extratos com "⬆ Importar").</div>`}`;
+  body.addEventListener('click', e => {
+    const b = e.target.closest('[data-recurring]');
+    if (b) showMovementsMatching(b.dataset.recurring);
+  });
+  modal.open({ title: 'Despesas fixas e subscrições', body, wide: true, footer: [{ label: 'Fechar', onClick: () => modal.close() }] });
+}
+
+// Mostra na tabela dos Movimentos os que têm este texto: pesquisa em "Sempre", sem filtros de conta nem de categoria
+function showMovementsMatching(text) {
+  Object.assign(S, { movMode: 'all', movAccount: '', movCatIn: [], movCatOut: [], movSearch: text });
+  $$('#mov-period-mode button').forEach(x => x.classList.toggle('active', x.dataset.mode === 'all'));
+  $('#mov-search').value = text;
+  modal.close();
+  renderMovements();
+  $('#mov-table').closest('.panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// ════════ INVESTIMENTOS ════════
+// Filtro: carteira completa ou um investimento
+$('#inv-filter').addEventListener('change', e => { S.invFilter = e.target.value; renderInvestments(); });
+
+// Explicação da rentabilidade anual (no cartão do ganho e no título da coluna "Por ano")
+const ANNUAL_RETURN_TITLE = 'Rentabilidade anual: conta com a data de cada aporte e resgate (como a TIR). '
+  + 'Só aparece com o valor registado e pelo menos 1 ano desde o primeiro aporte.';
+
+// Desenha o separador Investimentos: resumo, 3 gráficos e 2 tabelas
+function renderInvestments() {
+  S.invFilter = fillSelect($('#inv-filter'), sortByName(D.investments).map(i => ({ value: i.id, label: i.name })), S.invFilter, 'Carteira completa');
+  const f = S.invFilter;
+  const sum = f ? investmentSummary(f) : portfolioSummary();
+  const year = thisMonth().slice(0, 4);
+  const yearMonths = monthRange(`${year}-01`, thisMonth());
+  const yearContrib = netContributions(yearMonths, f).reduce((s, x) => s + x, 0);
+
+  $('#inv-invested').textContent = eur(sum.invested);
+  $('#inv-value').textContent = eur(sum.value);
+  const lastVal = D.valuations.filter(v => !f || v.investment_id === f).reduce((m, v) => (v.month > m ? v.month : m), '');
+  $('#inv-value-sub').textContent = lastVal ? `último valor registado: ${monthLabel(lastVal)}` : 'sem valores registados — usa "Atualizar mês"';
+  $('#inv-gain').textContent = eurSigned(sum.gain);
+  $('#inv-gain').className = 'stat-value ' + signClass(sum.gain);
+  // por baixo do ganho: a % sobre o investido e, com pelo menos 1 ano de histórico, a rentabilidade anual (annualReturn)
+  const annual = annualReturn(f);
+  $('#inv-gain-sub').textContent = isFinite(sum.gainPct) ? `${pct(sum.gainPct)} sobre o investido${isFinite(annual) ? ` · ${pct(annual)} ao ano` : ''}` : '—';
+  $('#inv-gain-sub').title = isFinite(annual) ? ANNUAL_RETURN_TITLE : '';
+  $('#inv-year').textContent = eurSigned(round2(yearContrib));
+  $('#inv-year-sub').textContent = `${year} · média ${eurShort(yearContrib / yearMonths.length)}/mês`;
+
+  renderAllocation(!f);
+
+  // gráfico: valor vs investido ao longo do tempo
+  const s = investmentSeries(f);
+  drawChart('chart-inv-value', {
+    type: 'line',
+    data: { labels: s.months.map(monthShort), datasets: [
+      lineDataset('Valor', s.value, SERIES[0]),
+      lineDataset('Investido', s.invested, SERIES[1], { borderDash: [6, 4], stepped: 'before', tension: 0 }),
+    ] },
+    options: {
+      interaction: INDEX_HOVER,
+      scales: { x: catAxis(), y: moneyAxis({ beginAtZero: true }) },
+      plugins: {
+        legend: { position: 'top', align: 'end' },
+        tooltip: { callbacks: { title: i => monthLabel(s.months[i[0].dataIndex]), label: tooltipMoney,
+          footer: i => { const k = i[0].dataIndex, g = s.value[k] - s.invested[k]; return `Ganho/perda: ${eurSigned(g)}${s.invested[k] > 0 ? ` (${pct(g / s.invested[k])})` : ''}`; } } },
+      },
+    },
+  }, 'Adiciona um investimento e usa "Atualizar mês" para registar aportes e o valor no fim de cada mês.');
+
+  // gráfico: aportes líquidos por mês (últimos 12)
+  const m12 = monthRange(addMonths(thisMonth(), -11), thisMonth());
+  const c12 = netContributions(m12, f);
+  drawChart('chart-inv-contrib', {
+    type: 'bar',
+    data: { labels: m12.map(monthShort), datasets: [barDataset('Aportes líquidos', c12, SERIES[0])] },
+    options: {
+      scales: { x: catAxis(), y: moneyAxis() },
+      plugins: { legend: { display: false }, tooltip: { callbacks: { title: i => monthLabel(m12[i[0].dataIndex]), label: c => ` ${eurSigned(c.parsed.y)}` } } },
+    },
+  }, 'Sem aportes nos últimos 12 meses');
+
+  // gráfico: ganho/perda acumulado (linha do zero mais visível)
+  const gains = s.months.map((_, i) => round2(s.value[i] - s.invested[i]));
+  drawChart('chart-inv-gain', {
+    type: 'line',
+    data: { labels: s.months.map(monthShort), datasets: [lineDataset('Ganho / perda', gains, SERIES[0])] },
+    options: {
+      interaction: INDEX_HOVER,
+      scales: { x: catAxis(), y: moneyAxis({ grid: { color: c => (c.tick.value === 0 ? ZERO_LINE : GRID), drawTicks: false } }) },
+      plugins: { legend: { display: false }, tooltip: { callbacks: { title: i => monthLabel(s.months[i[0].dataIndex]), label: c => ` ${eurSigned(c.parsed.y)}` } } },
+    },
+  }, 'O ganho aparece quando registares o valor dos investimentos');
+
+  // tabela de investimentos (clicar no nome filtra a página por esse investimento)
+  const invs = sortByName(D.investments).map(i => ({ i, ...investmentSummary(i.id), annual: annualReturn(i.id) }));
+  const totalValue = invs.reduce((s2, x) => s2 + x.value, 0);
+  $('#inv-table').innerHTML = invs.length ? `<table class="data">
+    <thead><tr><th>Investimento</th><th class="num">Investido</th><th class="num">Valor</th><th class="num">Ganho / perda</th><th class="num">%</th><th class="num" title="${ANNUAL_RETURN_TITLE}">Por ano</th><th class="num">Peso</th><th>Último valor</th><th></th></tr></thead>
+    <tbody>${invs.map(x => `<tr>
+      <td><a href="#" class="li-name" style="color:inherit" data-inv-focus="${esc(x.i.id)}">${esc(x.i.name)}</a><div class="li-sub">${esc(x.i.inv_type)}</div></td>
+      <td class="num">${eur(x.invested)}</td>
+      <td class="num">${eur(x.value)}</td>
+      <td class="num ${signClass(x.gain)}">${eurSigned(x.gain)}</td>
+      <td class="num ${signClass(x.gain)}">${pct(x.gainPct)}</td>
+      <td class="num ${isFinite(x.annual) ? signClass(x.annual) : 'muted'}">${pct(x.annual)}</td>
+      <td class="num muted">${totalValue > 0 ? Math.round(x.value / totalValue * 100) + '%' : '—'}</td>
+      <td class="date">${x.lastValMonth ? monthShort(x.lastValMonth) : '—'}</td>
+      <td class="actions"><button class="icon-btn" data-edit-inv="${esc(x.i.id)}" aria-label="Editar">✎</button></td>
+    </tr>`).join('')}</tbody></table>`
+    : `<div class="empty">Ainda não tens investimentos.<br><button class="btn primary" data-action="inv-new">+ Investimento</button></div>`;
+
+  // tabela de aportes e resgates (os 300 mais recentes)
+  const moves = D.inv_moves.filter(x => !f || x.investment_id === f).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 300);
+  $('#imv-table').innerHTML = moves.length ? `<table class="data">
+    <thead><tr><th>Data</th><th>Investimento</th><th>Operação</th><th>Descrição</th><th class="num">Valor</th><th></th></tr></thead>
+    <tbody>${moves.map(x => `<tr>
+      <td class="date">${dateLabel(x.date)}</td>
+      <td>${esc(investmentName(x.investment_id))}</td>
+      <td><span class="badge ${x.move === 'contribution' ? 'in' : 'out'}">${x.move === 'contribution' ? 'Aporte' : 'Resgate'}</span>${x.approx ? '<span class="badge approx">≈</span>' : ''}</td>
+      <td class="desc muted">${esc(x.description) || '—'}</td>
+      <td class="num">${eur(x.amount)}</td>
+      <td class="actions"><button class="icon-btn" data-edit-imv="${esc(x.id)}" aria-label="Editar">✎</button><button class="icon-btn del" data-del-imv="${esc(x.id)}" aria-label="Apagar">✕</button></td>
+    </tr>`).join('')}</tbody></table>`
+    : `<div class="empty">Sem aportes ou resgates registados.</div>`;
+}
+
+// Formulário de investimento (criar / editar / apagar)
+function investmentForm(inv = null, after) {
+  formModal({
+    title: inv ? 'Editar investimento' : 'Novo investimento',
+    values: inv || { inv_type: 'ETF' },
+    fields: [
+      { name: 'name', label: 'Nome', type: 'text', required: true, placeholder: 'ex.: ETF Mundial, PPR, Bitcoin' },
+      { name: 'inv_type', label: 'Tipo', type: 'select', options: INVESTMENT_TYPES, required: true },
+      { name: 'notes', label: 'Notas', type: 'textarea', placeholder: 'Corretora, objetivo, etc.' },
+    ],
+    onSubmit: async v => {
+      const res = await saveItems([{ kind: 'investment', id: inv?.id, ...v }]);
+      toast(inv ? 'Investimento atualizado' : 'Investimento criado');
+      if (after) setTimeout(() => after(res.saved[0]), 50);
+    },
+    danger: inv && { label: 'Apagar investimento', onClick: async () => {
+      if (await confirmDialog(`Apagar <b>${esc(inv.name)}</b> com todos os aportes, resgates e valores mensais?${reservationsNote(inv.id)} Não dá para desfazer.`)) {
+        try { await removeItem(inv.id, 'Investimento apagado'); } catch (e) { toast(e.message, true); }
+      }
+    } },
+  });
+}
+
+// Formulário de um aporte ou resgate
+function invMoveForm(mv = null) {
+  if (!D.investments.length) { toast('Primeiro cria um investimento'); return investmentForm(null, () => invMoveForm()); }
+  const opts = sortByName(D.investments).map(i => ({ value: i.id, label: i.name }));
+  formModal({
+    title: mv ? 'Editar operação' : 'Aporte / resgate',
+    values: mv ? { ...mv } : { move: 'contribution', date: todayISO(), investment_id: S.invFilter || opts[0].value, amount: '' },
+    fields: [
+      { name: 'move', label: 'Operação', type: 'seg', required: true, options: [{ value: 'contribution', label: 'Aporte (pus dinheiro)' }, { value: 'withdrawal', label: 'Resgate (tirei dinheiro)' }] },
+      { name: 'investment_id', label: 'Investimento', type: 'select', options: opts, required: true },
+      { name: 'amount', label: 'Valor (€)', type: 'money', required: true, positive: true, half: true },
+      { name: 'date', label: 'Data', type: 'date', required: true, half: true },
+      { name: 'description', label: 'Descrição', type: 'text' },
+      { name: 'approx', label: 'Valor aproximado', type: 'check' },
+    ],
+    onSubmit: async v => {
+      await saveItems([{ kind: 'inv_move', id: mv?.id, ...v }]);
+      toast('Guardado');
+    },
+    danger: mv && { label: 'Apagar', onClick: () => deleteImv(mv.id) },
+  });
+}
+// Apagar um aporte/resgate (depois de confirmar)
+async function deleteImv(id) {
+  const x = findById('inv_moves', id);
+  if (x && await confirmDialog(`Apagar ${x.move === 'contribution' ? 'o aporte' : 'o resgate'} de <b>${eur(x.amount)}</b> em ${esc(investmentName(x.investment_id))}?`)) {
+    try { await removeItem(id, 'Registo apagado'); } catch (e) { toast(e.message, true); }
+  }
+}
+
+// ── rotina mensal "Atualizar mês": aportes + valor no fim do mês, numa só grelha ──
+// Apagar um valor na grelha apaga o valor desse mês; só grava valores que mudaram.
+function investmentMonthGrid() {
+  if (!D.investments.length) { toast('Primeiro cria um investimento'); return investmentForm(null, investmentMonthGrid); }
+  const body = document.createElement('div');
+  body.style.cssText = 'display:flex;flex-direction:column;gap:14px';
+  body.innerHTML = `
+    <div class="modal-hint">Uma vez por mês (ou para meses antigos): regista quanto puseste ou tiraste e <b>quanto vale</b> cada investimento
+      no fim do mês (vê na app do banco/corretora). É com estes valores que a app calcula o ganho ou perda.</div>
+    <div class="field" style="max-width:220px"><label>Mês</label><input type="month" id="ig-month" value="${thisMonth()}"></div>
+    <div class="grid-scroll"><table class="grid-edit"><thead><tr><th>Investimento</th><th style="text-align:right">Investido até ao mês</th><th style="width:150px">Novo aporte (+) / resgate (−)</th><th style="width:150px">Valor no fim do mês</th></tr></thead><tbody id="ig-rows"></tbody></table></div>
+    <div class="form-error" id="ig-err"></div>`;
+
+  const renderRows = () => {
+    const m = $('#ig-month', body).value || thisMonth();
+    $('#ig-rows', body).innerHTML = sortByName(D.investments).map(i => {
+      const cur = valuationFor(i.id, m), prev = lastValuationBefore(i.id, m);
+      return `<tr data-id="${esc(i.id)}">
+        <td>${esc(i.name)}<div class="li-sub">${esc(i.inv_type)}</div></td>
+        <td class="num">${eur(investedUpTo(i.id, m))}</td>
+        <td><input data-f="move" inputmode="decimal" placeholder="0"></td>
+        <td><input data-f="value" inputmode="decimal" value="${numInput(cur?.value)}" placeholder="${prev ? 'antes: ' + eurShort(prev.value) : 'ex.: 1 234,56'}"></td>
+      </tr>`;
+    }).join('');
+  };
+  renderRows();
+  $('#ig-month', body).addEventListener('change', renderRows);
+
+  modal.open({
+    title: 'Atualizar investimentos do mês', body, wide: true,
+    footer: [
+      { label: 'Cancelar', onClick: () => modal.close() },
+      { label: 'Guardar mês', cls: 'primary', onClick: async e => {
+        const m = $('#ig-month', body).value;
+        const err = $('#ig-err', body);
+        if (!m) return (err.textContent = 'Escolhe o mês');
+        const items = [], deletes = [];
+        for (const tr of $$('#ig-rows tr', body)) {
+          const id = tr.dataset.id;
+          const mvRaw = $('[data-f=move]', tr).value.trim(), valRaw = $('[data-f=value]', tr).value.trim();
+          if (mvRaw) {
+            const n = parseNum(mvRaw);
+            if (isNaN(n) || n === 0) return (err.textContent = `Valor de aporte inválido em ${investmentName(id)}`);
+            items.push({ kind: 'inv_move', investment_id: id, date: m === thisMonth() ? todayISO() : lastDayOf(m),
+              move: n > 0 ? 'contribution' : 'withdrawal', amount: Math.abs(n), description: '' });
+          }
+          const cur = valuationFor(id, m);
+          if (valRaw) {
+            const v = parseNum(valRaw);
+            if (isNaN(v) || v < 0) return (err.textContent = `Valor inválido em ${investmentName(id)}`);
+            if (!cur || cur.value !== round2(v)) items.push({ kind: 'valuation', investment_id: id, month: m, value: v });
+          } else if (cur) deletes.push(cur.id);
+        }
+        if (!items.length && !deletes.length) return (err.textContent = 'Não há nada para guardar');
+        e.target.disabled = true; e.target.textContent = 'A guardar…';
+        try {
+          await saveItems(items, deletes);
+          modal.close();
+          toast(`${monthLabel(m)} guardado`);
+        } catch (x) {
+          err.textContent = x.message;
+          e.target.disabled = false; e.target.textContent = 'Guardar mês';
+        }
+      } },
+    ],
+  });
+}
+
+// ── alocação por tipo (painel dos Investimentos; allocation no calc.js) ──
+// Uma linha por tipo: barra com o peso de hoje (e uma marca no alvo, se houver), valor, % e, com alvo, quanto falta ou sobra.
+// Só na carteira completa (show) e com algum valor.
+function renderAllocation(show) {
+  const list = show ? allocation() : [];
+  const visible = list.some(a => a.value > 0);
+  $('#alloc-panel').classList.toggle('hidden', !visible);
+  if (!visible) return;
+  const withTargets = list.some(a => a.target !== null);
+  $('#alloc-sub').textContent = withTargets ? 'peso de hoje · alvo · quanto falta (+) ou sobra (−) para o alvo, com o valor de hoje'
+    : 'peso de cada tipo na carteira · em "Alvos" podes dizer que percentagem queres em cada um';
+  $('#alloc-list').innerHTML = list.map(a => `<div class="alloc-row">
+    <span class="li-name">${esc(a.type)}</span>
+    <div class="progress alloc-bar" role="progressbar" aria-label="${esc(a.type)}" aria-valuenow="${Math.round(a.share * 100)}" aria-valuemin="0" aria-valuemax="100">
+      <div style="width:${a.share * 100}%"></div>${a.target !== null ? `<span class="alloc-target" style="left:${a.target}%" title="Alvo: ${a.target}%"></span>` : ''}</div>
+    <span class="num alloc-value">${eur(a.value)}</span>
+    <span class="num">${Math.round(a.share * 100)}%${a.target !== null ? ` <span class="muted">/ ${numInput(a.target)}%</span>` : ''}</span>
+    <span class="num ${a.diff ? signClass(a.diff) : ''}">${a.diff === null ? '' : Math.abs(a.diff) < 1 ? '✓' : eurSigned(a.diff)}</span>
+  </div>`).join('');
+}
+
+// Janela "Alvos": a percentagem que se quer em cada tipo de investimento (os que tens primeiro). Vazio = sem alvo; com algum,
+// têm de somar 100%.
+function allocTargetsModal() {
+  const latest = Object.create(null), dupes = [];
+  for (const t of [...D.alloc_targets].sort((a, b) => (a.updated_at || '').localeCompare(b.updated_at || ''))) {
+    if (latest[t.inv_type]) dupes.push(latest[t.inv_type].id);   // alvos repetidos do mesmo tipo: fica o mais recente
+    latest[t.inv_type] = t;
+  }
+  const now = Object.fromEntries(allocation().map(a => [a.type, a.share]));
+  const types = [...new Set([...allocation().filter(a => a.value > 0).map(a => a.type), ...INVESTMENT_TYPES, ...Object.keys(latest)])];
+  const body = document.createElement('div');
+  body.style.cssText = 'display:flex;flex-direction:column;gap:14px';
+  body.innerHTML = `
+    <div class="modal-hint">Que percentagem da carteira queres em cada tipo. Deixa vazio os que não te interessam; os preenchidos têm de
+      somar 100%. Na página inicial aparece um aviso quando um tipo se afasta mais de 5 pontos do alvo.</div>
+    <div class="grid-scroll"><table class="grid-edit budget-edit"><thead><tr><th>Tipo</th><th class="num">Hoje</th><th class="num">Alvo (%)</th></tr></thead>
+      <tbody>${types.map(t => `<tr><td>${esc(t)}</td><td class="num">${now[t] ? Math.round(now[t] * 100) + '%' : '—'}</td>
+        <td class="budget-limit"><input data-type="${esc(t)}" inputmode="decimal" placeholder="—" value="${latest[t] ? numInput(latest[t].pct) : ''}"
+          aria-label="Alvo para ${esc(t)}"></td></tr>`).join('')}</tbody></table></div>
+    <div class="modal-hint" id="alt-sum"></div>
+    <div class="form-error" id="alt-err"></div>`;
+  const values = () => $$('input[data-type]', body).map(i => ({ type: i.dataset.type, txt: i.value.trim(), n: parseNum(i.value.trim()) }));
+  const showSum = () => {
+    const total = round2(values().filter(v => v.txt && v.n > 0).reduce((s2, v) => s2 + v.n, 0));
+    $('#alt-sum', body).textContent = total ? `Total: ${numInput(total)}%${Math.abs(total - 100) > 0.05 ? ' (tem de dar 100%)' : ' ✓'}` : '';
+  };
+  body.addEventListener('input', showSum);
+  modal.open({
+    title: 'Alvos da alocação', body, wide: true,
+    footer: [
+      { label: 'Cancelar', onClick: () => modal.close() },
+      { label: 'Guardar', cls: 'primary', onClick: async e => {
+        const items = [], deletes = [...dupes], bad = [];
+        let total = 0;
+        for (const v of values()) {
+          const cur = latest[v.type];
+          if (!v.txt) { if (cur) deletes.push(cur.id); continue; }
+          if (!(v.n > 0 && v.n <= 100)) { bad.push(v.type); continue; }
+          total += v.n;
+          if (!cur || round2(v.n) !== cur.pct) items.push({ kind: 'alloc_target', id: cur?.id, inv_type: v.type, pct: round2(v.n) });
+        }
+        if (bad.length) return ($('#alt-err', body).textContent = `Valor inválido em: ${bad.join(', ')}`);
+        if (total && Math.abs(round2(total) - 100) > 0.05) return ($('#alt-err', body).textContent = `Os alvos somam ${numInput(round2(total))}%: têm de dar 100%`);
+        if (!items.length && !deletes.length) return modal.close();
+        e.target.disabled = true;
+        try {
+          await saveItems(items, deletes);
+          modal.close();
+          toast('Alvos guardados');
+        } catch (err) {
+          $('#alt-err', body).textContent = err.message;
+          e.target.disabled = false;
+        }
+      } },
+    ],
+  });
+  showSum();
+}
+
+// ════════ CRÉDITOS ════════
+// Desenha o separador Créditos: resumo, gráfico da dívida e um cartão por crédito
+function renderLoans() {
+  const loans = sortByName(D.loans);
+  const total = round2(loans.reduce((s, l) => s + loanCurrent(l), 0));
+  const principal = loans.reduce((s, l) => s + l.principal, 0);
+  const active = loans.filter(l => loanCurrent(l) > 0);
+  const lefts = active.map(loanMonthsLeft);
+
+  $('#loan-total').textContent = eur(total);
+  $('#loan-total-sub').textContent = `${active.length} crédito(s) ativo(s)`;
+  $('#loan-payments').textContent = eur(active.reduce((s, l) => s + (l.payment || 0), 0));
+  $('#loan-paid').textContent = eur(Math.max(0, principal - total));
+  $('#loan-paid-sub').textContent = principal > 0 ? `${Math.round(Math.max(0, principal - total) / principal * 100)}% do montante inicial` : '—';
+  // "Livre de dívidas em": o crédito que acaba mais tarde (— se algum não der para estimar)
+  // "fim do contrato" quando todos os créditos ativos têm essa data; senão é uma estimativa pela fórmula
+  $('#loan-free-sub').textContent = active.length && active.every(l => l.end_date) ? 'fim do(s) contrato(s)' : 'estimativa';
+  $('#loan-free').textContent = !active.length ? (loans.length ? 'Já estás!' : '—')
+    : lefts.some(x => x === null) ? '—' : monthLabel(addMonths(thisMonth(), Math.max(...lefts)));
+
+  const s = loanSeries();
+  // Até 4 créditos: uma linha por crédito; mais do que isso: só a linha do total
+  const datasets = s.perLoan.length <= 4
+    ? s.perLoan.map((p, i) => lineDataset(p.loan.name, p.values, SERIES[i], { stepped: 'before', tension: 0 }))
+    : [lineDataset('Total em dívida', s.total, SERIES[0], { stepped: 'before', tension: 0 })];
+  drawChart('chart-loan', {
+    type: 'line',
+    data: { labels: s.months.map(monthShort), datasets },
+    options: {
+      interaction: INDEX_HOVER,
+      scales: { x: catAxis(), y: moneyAxis({ beginAtZero: true }) },
+      plugins: {
+        legend: { display: datasets.length > 1, position: 'top', align: 'end' },
+        tooltip: { callbacks: { title: i => monthLabel(s.months[i[0].dataIndex]), label: tooltipMoney,
+          footer: i => (datasets.length > 1 ? `Total: ${eur(s.total[i[0].dataIndex])}` : '') } },
+      },
+    },
+  }, 'Adiciona um crédito e regista o saldo em dívida com "Atualizar mês".');
+
+  $('#loan-list').innerHTML = loans.length ? loans.map(l => {
+    const cur = loanCurrent(l);
+    const paid = Math.max(0, l.principal - cur);
+    const pctPaid = l.principal > 0 ? Math.min(100, paid / l.principal * 100) : 0;
+    const left = loanMonthsLeft(l);
+    const lastBal = D.loan_balances.filter(b => b.loan_id === l.id).reduce((m, b) => (b.month > m ? b.month : m), '');
+    return `<div class="loan-card">
+      <div class="loan-top">
+        <div><div class="li-name">${esc(l.name)}</div><div class="li-sub">${esc(l.loan_type)}${l.lender ? ' · ' + esc(l.lender) : ''} · desde ${dateLabel(l.start_date)}</div></div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div class="li-value">${eur(cur)}<div class="li-sub" style="text-align:right">em dívida${lastBal ? ' · ' + monthShort(lastBal) : ''}</div></div>
+          <button class="icon-btn" data-edit-loan="${esc(l.id)}" aria-label="Editar">✎</button>
+        </div>
+      </div>
+      <div>
+        <div class="progress" role="progressbar" aria-valuenow="${Math.round(pctPaid)}" aria-valuemin="0" aria-valuemax="100"><div style="width:${pctPaid}%"></div></div>
+        <div class="progress-label" style="margin-top:6px"><span>${Math.round(pctPaid)}% pago (${eur(paid)})</span><span>montante inicial ${eur(l.principal)}</span></div>
+      </div>
+      <div class="loan-meta">
+        <div><div class="k">Prestação</div><div class="v">${l.payment ? eur(l.payment) : '—'}</div></div>
+        <div><div class="k">Taxa</div><div class="v">${l.rate !== undefined && l.rate !== null ? String(l.rate).replace('.', ',') + '%' : '—'}</div></div>
+        <div><div class="k">Faltam</div><div class="v">${cur <= 0 ? 'pago ✓' : left === null ? '—' : `${Math.floor(left / 12)}a ${left % 12}m`}</div></div>
+        <div><div class="k">${l.end_date ? 'Fim do contrato' : 'Fim previsto'}</div><div class="v">${cur <= 0 ? '—' : left === null ? '—' : monthShort(addMonths(thisMonth(), left))}</div></div>
+      </div>
+      ${cur > 0 ? `<div class="loan-actions"><button class="btn" data-sim-loan="${esc(l.id)}">Simular amortização</button></div>` : ''}
+    </div>`;
+  }).join('') : `<div class="empty">Sem créditos registados. Boa!<br>Se tiveres algum, adiciona-o para acompanhar a amortização.<br><button class="btn primary" data-action="loan-new">+ Crédito</button></div>`;
+
+  renderLoanHistory();
+}
+
+// ── histórico de prestações de um crédito ──
+$('#loan-history-select').addEventListener('change', e => { S.loanHistory = e.target.value; renderLoanHistory(); });
+
+// Resumo, gráfico (capital vs juros de cada prestação) e tabela mês a mês com totais por ano
+function renderLoanHistory() {
+  const loans = sortByName(D.loans);
+  $('#loan-history-panel').classList.toggle('hidden', !loans.length);
+  if (!loans.length) return;
+  // Por omissão mostra o crédito com mais dívida (normalmente o da casa)
+  if (!loans.some(l => l.id === S.loanHistory)) S.loanHistory = [...loans].sort((a, b) => loanCurrent(b) - loanCurrent(a))[0].id;
+  const sel = $('#loan-history-select');
+  sel.innerHTML = loans.map(l => `<option value="${esc(l.id)}">${esc(l.name)}</option>`).join('');
+  sel.value = S.loanHistory;
+  sel.classList.toggle('hidden', loans.length < 2);
+
+  const loan = findById('loans', S.loanHistory);
+  const rows = loanHistory(loan);
+  const year = thisMonth().slice(0, 4);
+  const t = loanTotals(rows, year);
+  const anyEstimated = rows.some(r => r.estimated);
+
+  $('#loan-history-stats').innerHTML = `
+    <div class="stat"><div class="stat-label">Prestações pagas</div><div class="stat-value">${eur(t.payments)}</div><div class="stat-sub">${rows.filter(r => r.payment !== null).length} prestação(ões) registada(s)</div></div>
+    <div class="stat"><div class="stat-label">Dos quais juros</div><div class="stat-value">${eur(t.interest)}</div><div class="stat-sub">${t.payments > 0 ? pct(t.interest / t.payments, 0).replace('+', '') + ' do que pagaste' : '—'}${anyEstimated ? ' · inclui estimativas' : ''}</div></div>
+    <div class="stat"><div class="stat-label">Juros em ${year}</div><div class="stat-value">${eur(t.yearInterest)}</div><div class="stat-sub">prestações em ${year}: ${eur(t.yearPayments)}</div></div>
+    <div class="stat"><div class="stat-label">Amortizações extra</div><div class="stat-value">${eur(t.extra)}</div><div class="stat-sub">${rows.filter(r => r.extra > 0).map(r => monthShort(r.month)).join(', ') || 'nenhuma registada'}</div></div>`;
+
+  // Gráfico: cada barra é uma prestação, dividida em capital e juros (a amortização extra fica no tooltip,
+  // porque uma barra de 5 000 € esmagaria as prestações normais)
+  const chartRows = rows.filter(r => r.interest !== null).slice(-60);
+  drawChart('chart-loan-pay', {
+    type: 'bar',
+    data: { labels: chartRows.map(r => monthShort(r.month)), datasets: [
+      barDataset('Capital', chartRows.map(r => r.principal), SERIES[0], { stack: 'p' }),
+      barDataset('Juros', chartRows.map(r => r.interest), SERIES[1], { stack: 'p' }),
+    ] },
+    options: {
+      interaction: INDEX_HOVER,
+      scales: { x: { ...catAxis(), stacked: true }, y: moneyAxis({ stacked: true, beginAtZero: true }) },
+      plugins: {
+        legend: { position: 'top', align: 'end' },
+        tooltip: { callbacks: { title: i => monthLabel(chartRows[i[0].dataIndex].month), label: tooltipMoney,
+          footer: i => { const r = chartRows[i[0].dataIndex];
+            return [r.payment !== null ? `Prestação: ${eur(r.payment)}` : 'Prestação não registada (juros estimados)',
+              ...(r.extra ? [`Amortização extra: ${eur(r.extra)}`] : [])]; } } },
+      },
+    },
+  }, 'Regista o saldo em dívida e a prestação em "Atualizar mês" para ver quanto é juro e quanto é capital.');
+
+  // Tabela: mais recente primeiro, com uma linha de total no início de cada ano
+  const money = v => (v === null ? '<span class="muted">—</span>' : eur(v));
+  const desc = [...rows].reverse();
+  let html = '', curYear = null;
+  for (const r of desc) {
+    const y = r.month.slice(0, 4);
+    if (y !== curYear) {
+      curYear = y;
+      const ty = loanTotals(rows.filter(x => x.month.startsWith(y)));
+      html += `<tr class="year-row"><td>${y}</td><td class="num">${eur(ty.payments)}</td><td class="num">${eur(ty.interest)}</td>
+        <td class="num">${eur(ty.principal)}</td><td class="num">${ty.extra ? eur(ty.extra) : ''}</td><td></td><td></td></tr>`;
+    }
+    html += `<tr>
+      <td class="date">${monthLabel(r.month)}${r.extra ? '<span class="badge extra">extra</span>' : ''}</td>
+      <td class="num">${money(r.payment)}</td>
+      <td class="num">${r.interest === null ? money(null) : (r.estimated ? '≈ ' : '') + eur(r.interest)}</td>
+      <td class="num">${money(r.principal)}</td>
+      <td class="num ${r.extra ? 'pos' : 'muted'}">${r.extra ? eur(r.extra) : '—'}</td>
+      <td class="num">${r.drop === null ? money(null) : eurSigned(-r.drop)}</td>
+      <td class="num">${eur(r.balance)}</td>
+    </tr>`;
+  }
+  $('#loan-history-table').innerHTML = rows.length ? `<table class="data">
+    <thead><tr><th>Mês</th><th class="num">Prestação</th><th class="num">Juros</th><th class="num">Capital</th>
+      <th class="num">Amortização extra</th><th class="num">Variação da dívida</th><th class="num">Dívida no fim do mês</th></tr></thead>
+    <tbody>${html}</tbody></table>
+    <div class="empty" style="text-align:left">Juros = prestação + amortização extra − quanto a dívida baixou no mês
+      (se a prestação incluir seguros ou comissões, também contam aqui).${anyEstimated ? ' «≈» = sem prestação registada: estimado com a taxa do crédito.' : ''}</div>`
+    : `<div class="empty">Ainda sem saldos registados para este crédito.<br><button class="btn primary" data-action="loan-month">Atualizar mês</button></div>`;
+}
+
+// ── simulador de amortização antecipada (botão "Simular amortização" de cada crédito) ──
+// Quanto se poupa em juros se se amortizar hoje parte do crédito, a reduzir a prestação ou o prazo
+// (simulateEarlyRepayment no calc.js). É só uma simulação: não grava nada.
+function earlyRepaymentModal(loan) {
+  const title = `Simular amortização · ${loan.name}`;
+  const base = simulateEarlyRepayment(loan, 0);
+  if (!base) {
+    return modal.open({ title, body: `<div class="modal-hint">Para simular, o crédito precisa da <b>taxa (TAN)</b> e da
+      <b>prestação</b> ou do <b>fim do contrato</b>. Edita o crédito e preenche esses campos.</div>`,
+      footer: [{ label: 'Fechar', onClick: () => modal.close() }, { label: 'Editar crédito', cls: 'primary', onClick: () => loanForm(loan) }] });
+  }
+  const term = n => `${Math.floor(n / 12)}a ${n % 12}m`;
+  const end = n => monthShort(addMonths(thisMonth(), n));
+  const body = document.createElement('div');
+  body.style.cssText = 'display:flex;flex-direction:column;gap:14px';
+  body.innerHTML = `
+    <div class="modal-hint">Quanto poupas em juros se amortizares hoje parte do crédito (em dívida: <b>${eur(base.balance)}</b>).
+      As contas usam a taxa atual (TAN ${esc(String(loan.rate).replace('.', ','))}%) e o prazo que falta (${term(base.now.months)}), só com capital e
+      juros: sem seguros nem outras despesas da prestação. Com taxa variável, os juros reais mudam a cada revisão da taxa.
+      É só uma simulação: não grava nada.</div>
+    <div class="field-row">
+      <div class="field"><label for="sim-amount">Valor a amortizar (€)</label><input id="sim-amount" inputmode="decimal" placeholder="ex.: 5000"></div>
+      <div class="field"><label for="sim-fee">Comissão (%)</label><input id="sim-fee" inputmode="decimal" placeholder="0">
+        <div class="hint">Vê no contrato. Nos créditos à habitação é no máximo 0,5% (taxa variável) ou 2% (taxa fixa).</div></div>
+    </div>
+    <div id="sim-result"></div>`;
+
+  // Tabela: hoje vs reduzir a prestação vs reduzir o prazo (sem valor escrito, as duas últimas colunas ficam com "—")
+  const table = s => {
+    const a = s?.byPayment, b = s?.byTerm, dash = '<td class="num">—</td>';
+    const row = (label, now, f, cls = () => '') => `<tr><td>${label}</td><td class="num">${now}</td>${
+      [a, b].map(c => (c ? `<td class="num ${cls(c)}">${f(c)}</td>` : dash)).join('')}</tr>`;
+    return `<div class="table-wrap"><table class="data sim-table">
+      <thead><tr><th></th><th class="num">Hoje</th><th class="num">Reduzir a prestação</th><th class="num">Reduzir o prazo</th></tr></thead>
+      <tbody>
+        ${row('Prestação', eur(base.now.payment), c => eur(c.payment))}
+        ${row('Prazo que falta', term(base.now.months), c => term(c.months))}
+        ${row('Fim previsto', end(base.now.months), c => end(c.months))}
+        ${row('Juros até ao fim', eurShort(base.now.interest), c => eurShort(c.interest))}
+        ${row('Poupança em juros', '—', c => eurShort(c.saved), () => 'pos')}
+        ${row('Comissão', '—', () => eurShort(s.fee))}
+        ${row('<b>Poupança líquida</b>', '—', c => `<b>${eurSignedShort(c.net)}</b>`, c => signClass(c.net))}
+      </tbody></table></div>
+      <div class="chart-note">Prestação = capital + juros. Reduzir o prazo poupa mais juros; reduzir a prestação deixa mais dinheiro
+        livre todos os meses.</div>`;
+  };
+  const update = () => {
+    const amount = parseNum($('#sim-amount', body).value), fee = parseNum($('#sim-fee', body).value);
+    const out = $('#sim-result', body);
+    if ($('#sim-amount', body).value.trim() && !(amount > 0)) return (out.innerHTML = '<div class="form-error">Valor inválido</div>');
+    if ($('#sim-fee', body).value.trim() && !(fee >= 0 && fee <= 100)) return (out.innerHTML = '<div class="form-error">Comissão inválida (0 a 100%)</div>');
+    if (!(amount > 0)) return (out.innerHTML = table(null));
+    const s = simulateEarlyRepayment(loan, amount, fee || 0);
+    out.innerHTML = s.paidOff
+      ? `<div class="preview-box">Com ${eur(amount)} pagas o crédito todo (estão em dívida ${eur(s.balance)}) e poupas
+          <b class="pos">${eur(s.saved)}</b> de juros${s.fee ? `; com a comissão de ${eur(s.fee)}, a poupança líquida é <b>${eurSigned(s.net)}</b>` : ''}.</div>`
+      : table(s);
+  };
+  body.addEventListener('input', update);
+  update();
+  modal.open({ title, body, wide: true, footer: [{ label: 'Fechar', onClick: () => modal.close() }] });
+}
+
+// Formulário de crédito (criar / editar / apagar)
+function loanForm(loan = null, after) {
+  formModal({
+    title: loan ? 'Editar crédito' : 'Novo crédito',
+    values: loan ? { ...loan } : { loan_type: 'Habitação', start_date: todayISO() },
+    intro: loan ? '' : 'O saldo em dívida atual regista-se depois, em "Atualizar mês". Se não registares nenhum, assume-se o montante inicial.',
+    fields: [
+      { name: 'name', label: 'Nome', type: 'text', required: true, placeholder: 'ex.: Crédito habitação' },
+      { name: 'loan_type', label: 'Tipo', type: 'select', options: LOAN_TYPES, required: true, half: true },
+      { name: 'lender', label: 'Banco / entidade', type: 'text', half: true },
+      { name: 'principal', label: 'Montante inicial (€)', type: 'money', required: true, min: 0, half: true },
+      { name: 'start_date', label: 'Data de início', type: 'date', required: true, half: true },
+      { name: 'payment', label: 'Prestação mensal (€)', type: 'money', min: 0, half: true },
+      { name: 'rate', label: 'Taxa anual (%)', type: 'number', min: 0, half: true, hint: 'TAN atual.' },
+      { name: 'end_date', label: 'Fim do contrato (última prestação)', type: 'date',
+        hint: 'Está no contrato ou no extrato. Com esta data, "Livre de dívidas" mostra o fim do contrato; sem ela, a app estima pela prestação e pela taxa (pouco fiável com taxa variável).' },
+      { name: 'notes', label: 'Notas', type: 'textarea' },
+    ],
+    onSubmit: async v => {
+      const res = await saveItems([{ kind: 'loan', id: loan?.id, ...v }]);
+      toast(loan ? 'Crédito atualizado' : 'Crédito criado');
+      if (after) setTimeout(() => after(res.saved[0]), 50);
+    },
+    danger: loan && { label: 'Apagar crédito', onClick: async () => {
+      if (await confirmDialog(`Apagar <b>${esc(loan.name)}</b> e todo o histórico de saldos? Não dá para desfazer.`)) {
+        try { await removeItem(loan.id, 'Crédito apagado'); } catch (e) { toast(e.message, true); }
+      }
+    } },
+  });
+}
+
+// Grelha "Atualizar mês" dos créditos: saldo em dívida, prestação e amortização extra de cada crédito num mês
+function loanMonthGrid() {
+  if (!D.loans.length) { toast('Primeiro adiciona um crédito'); return loanForm(null, loanMonthGrid); }
+  const body = document.createElement('div');
+  body.style.cssText = 'display:flex;flex-direction:column;gap:14px';
+  body.innerHTML = `
+    <div class="modal-hint">Regista o <b>saldo em dívida</b> de cada crédito no fim do mês (aparece no extrato ou na app do banco),
+      a <b>prestação</b> que pagaste e, se fizeste, a <b>amortização extraordinária</b>. Os juros do mês são calculados sozinhos:
+      prestação + amortização extra − quanto a dívida baixou. Podes escolher meses antigos para reconstituir o histórico.
+      Quando acabares de pagar um crédito, escreve 0.</div>
+    <div class="field" style="max-width:220px"><label>Mês</label><input type="month" id="lg-month" value="${thisMonth()}"></div>
+    <div class="grid-scroll"><table class="grid-edit"><thead><tr><th>Crédito</th><th style="text-align:right">Saldo anterior</th><th style="width:130px">Saldo em dívida</th><th style="width:110px">Prestação paga</th><th style="width:110px">Amortização extra</th><th style="text-align:right">Juros do mês</th></tr></thead><tbody id="lg-rows"></tbody></table></div>
+    <div class="form-error" id="lg-err"></div>`;
+  const renderRows = () => {
+    const m = $('#lg-month', body).value || thisMonth();
+    $('#lg-rows', body).innerHTML = sortByName(D.loans).map(l => {
+      const cur = loanBalanceFor(l.id, m);
+      return `<tr data-id="${esc(l.id)}">
+        <td>${esc(l.name)}<div class="li-sub">${esc(l.loan_type)}</div></td>
+        <td class="num">${eur(loanBalanceAt(l, addMonths(m, -1)))}</td>
+        <td><input data-f="balance" inputmode="decimal" value="${numInput(cur?.balance)}" placeholder="ex.: 120 000"></td>
+        <td><input data-f="payment" inputmode="decimal" value="${numInput(cur?.payment ?? l.payment)}" placeholder="opcional"></td>
+        <td><input data-f="extra" inputmode="decimal" value="${numInput(cur?.extra)}" placeholder="0"></td>
+        <td class="num" data-f="interest" data-before="${loanBalanceAt(l, addMonths(m, -1))}">—</td>
+      </tr>`;
+    }).join('');
+    updateInterest();
+  };
+  // Juros do mês, calculados enquanto escreves: prestação + extra − (saldo anterior − saldo novo)
+  const updateInterest = () => {
+    for (const tr of $$('#lg-rows tr', body)) {
+      const cell = $('[data-f=interest]', tr);
+      const b = parseNum($('[data-f=balance]', tr).value), p = parseNum($('[data-f=payment]', tr).value);
+      const x = parseNum($('[data-f=extra]', tr).value) || 0;
+      cell.textContent = isNaN(b) || isNaN(p) ? '—' : eur(round2(p + x - (Number(cell.dataset.before) - b)));
+    }
+  };
+  renderRows();
+  $('#lg-month', body).addEventListener('change', renderRows);
+  body.addEventListener('input', updateInterest);
+
+  modal.open({
+    title: 'Atualizar créditos do mês', body, wide: true,
+    footer: [
+      { label: 'Cancelar', onClick: () => modal.close() },
+      { label: 'Guardar mês', cls: 'primary', onClick: async e => {
+        const m = $('#lg-month', body).value;
+        const err = $('#lg-err', body);
+        if (!m) return (err.textContent = 'Escolhe o mês');
+        const items = [], deletes = [];
+        for (const tr of $$('#lg-rows tr', body)) {
+          const id = tr.dataset.id, cur = loanBalanceFor(id, m);
+          const bRaw = $('[data-f=balance]', tr).value.trim(), pRaw = $('[data-f=payment]', tr).value.trim();
+          const xRaw = $('[data-f=extra]', tr).value.trim();
+          if (!bRaw) { if (cur) deletes.push(cur.id); continue; }
+          const b = parseNum(bRaw), p = pRaw ? parseNum(pRaw) : null, x = xRaw ? parseNum(xRaw) : null;
+          if (isNaN(b) || b < 0) return (err.textContent = `Saldo inválido em ${loanName(id)}`);
+          if (p !== null && (isNaN(p) || p < 0)) return (err.textContent = `Prestação inválida em ${loanName(id)}`);
+          if (x !== null && (isNaN(x) || x < 0)) return (err.textContent = `Amortização extra inválida em ${loanName(id)}`);
+          items.push({ kind: 'loan_balance', loan_id: id, month: m, balance: b, payment: p, extra: x });
+        }
+        if (!items.length && !deletes.length) return (err.textContent = 'Não há nada para guardar');
+        e.target.disabled = true; e.target.textContent = 'A guardar…';
+        try {
+          await saveItems(items, deletes);
+          modal.close();
+          toast(`${monthLabel(m)} guardado`);
+        } catch (x) {
+          err.textContent = x.message;
+          e.target.disabled = false; e.target.textContent = 'Guardar mês';
+        }
+      } },
+    ],
+  });
+}
+
+// ════════ PATRIMÓNIO (IMÓVEIS) ════════
+// Desenha o separador Património: resumo e tabela dos imóveis
+function renderProperties() {
+  const props = sortByName(D.properties).map(p => ({ p, ...propertySummary(p) }));
+  const total = propertiesTotal();
+  const withPrice = props.filter(x => x.gain !== null);
+  const gain = round2(withPrice.reduce((s, x) => s + x.gain, 0));
+  const bought = withPrice.reduce((s, x) => s + x.p.purchase_price, 0);
+  // cada crédito conta uma só vez, mesmo que esteja associado a dois imóveis
+  const loans = new Map(props.filter(x => x.loan).map(x => [x.loan.id, x.debt]));
+  const debt = round2([...loans.values()].reduce((s, v) => s + v, 0));
+
+  $('#prop-total').textContent = eur(total);
+  $('#prop-total-sub').textContent = `${props.length} imóvel(is)`;
+  $('#prop-gain').textContent = withPrice.length ? eurSigned(gain) : '—';
+  $('#prop-gain').className = 'stat-value ' + (withPrice.length ? signClass(gain) : '');
+  $('#prop-gain-sub').textContent = withPrice.length ? `${bought > 0 ? pct(gain / bought) + ' ' : ''}sobre o preço de compra` : 'preenche o preço de compra';
+  $('#prop-debt').textContent = debt ? '−' + eur(debt) : eur(0);
+  $('#prop-equity').textContent = eur(round2(total - debt));
+  $('#prop-equity-sub').textContent = !(total > 0 && debt > 0) ? 'valor − crédito'
+    : debt > total ? 'a dívida é maior que o valor' : `${Math.round((total - debt) / total * 100)}% já é teu`;
+
+  $('#prop-table').innerHTML = props.length ? `<table class="data">
+    <thead><tr><th>Imóvel</th><th class="num">Valor atual</th><th class="num">Preço de compra</th><th class="num">Valorização</th>
+      <th>Crédito associado</th><th class="num">Capital próprio</th><th>Atualizado</th><th></th></tr></thead>
+    <tbody>${props.map(x => `<tr>
+      <td><div class="li-name">${esc(x.p.name)}</div><div class="li-sub">${esc(x.p.prop_type)}${x.p.purchase_date ? ' · desde ' + dateLabel(x.p.purchase_date) : ''}</div></td>
+      <td class="num">${eur(x.p.value)}</td>
+      <td class="num">${x.gain === null ? '<span class="muted">—</span>' : eur(x.p.purchase_price)}</td>
+      <td class="num ${x.gain === null ? '' : signClass(x.gain)}">${x.gain === null ? '<span class="muted">—</span>' : eurSigned(x.gain) + (isFinite(x.gainPct) ? ` <span class="muted">(${pct(x.gainPct)})</span>` : '')}</td>
+      <td>${x.loan ? `${esc(x.loan.name)}<div class="li-sub">${eur(x.debt)} em dívida</div>` : '<span class="muted">—</span>'}</td>
+      <td class="num">${eur(x.equity)}</td>
+      <td class="date">${x.p.updated_at ? dateLabel(x.p.updated_at.slice(0, 10)) : '—'}</td>
+      <td class="actions"><button class="icon-btn" data-edit-prop="${esc(x.p.id)}" aria-label="Editar">✎</button></td>
+    </tr>`).join('')}</tbody></table>
+    <div class="empty" style="text-align:left">O valor atual conta para o património líquido da página inicial; o crédito associado já está em "Créditos".
+      Quando o valor mudar (avaliação do banco, anúncios de casas parecidas…), carrega em ✎ e atualiza-o.</div>`
+    : `<div class="empty">Ainda não tens imóveis registados.<br>Adiciona a tua casa com o valor que achas que vale hoje.<br><button class="btn primary" data-action="prop-new">+ Imóvel</button></div>`;
+}
+
+// Formulário de imóvel (criar / editar / apagar)
+function propertyForm(prop = null) {
+  const loanOpts = [{ value: '', label: 'Nenhum' }, ...sortByName(D.loans).map(l => ({ value: l.id, label: l.name }))];
+  formModal({
+    title: prop ? 'Editar imóvel' : 'Novo imóvel',
+    values: prop ? { ...prop, loan_id: prop.loan_id || '' } : { prop_type: 'Habitação própria', loan_id: D.loans.find(l => l.loan_type === 'Habitação')?.id || '' },
+    fields: [
+      { name: 'name', label: 'Nome', type: 'text', required: true, placeholder: 'ex.: Casa, Apartamento T2' },
+      { name: 'prop_type', label: 'Tipo', type: 'select', options: PROPERTY_TYPES, required: true, half: true },
+      { name: 'value', label: 'Valor atual (€)', type: 'money', required: true, min: 0, half: true,
+        hint: 'Quanto achas que vale hoje (avaliação do banco, preço de casas parecidas…). É este valor que entra no património líquido.' },
+      { name: 'purchase_price', label: 'Preço de compra (€)', type: 'money', min: 0, half: true },
+      { name: 'purchase_date', label: 'Data de compra', type: 'date', half: true },
+      { name: 'loan_id', label: 'Crédito associado', type: 'select', options: loanOpts,
+        hint: 'Opcional. Serve para mostrar o capital próprio (valor − dívida). A dívida já conta em "Créditos em dívida", não é descontada duas vezes.' },
+      { name: 'notes', label: 'Notas', type: 'textarea' },
+    ],
+    onSubmit: async v => {
+      await saveItems([{ kind: 'property', id: prop?.id, ...v }]);
+      toast(prop ? 'Imóvel atualizado' : 'Imóvel adicionado');
+    },
+    danger: prop && { label: 'Apagar imóvel', onClick: async () => {
+      if (await confirmDialog(`Apagar <b>${esc(prop.name)}</b>? Não dá para desfazer.`)) {
+        try { await removeItem(prop.id, 'Imóvel apagado'); } catch (e) { toast(e.message, true); }
+      }
+    } },
+  });
+}
+
+// ════════ RESUMO DO ANO ════════
+// O ano num relance (yearSummary no calc.js): num ano que já acabou, o ano inteiro; no ano atual, de janeiro até hoje.
+// As setas mudam de ano e "Imprimir / PDF" abre a janela de impressão do browser, onde se escolhe a impressora ou
+// guardar em PDF (o que se imprime está no fim do style.css).
+$$('#year-nav .nav-btn').forEach(b => b.addEventListener('click', () => {
+  const years = summaryYears(), i = years.indexOf(S.year) + Number(b.dataset.step);
+  if (i >= 0 && i < years.length) { S.year = years[i]; renderYear(); }
+}));
+
+// Explicação da rentabilidade no período (no título da coluna "No período" e na nota por baixo dos investimentos)
+const YEAR_RETURN_TITLE = 'o ganho a dividir pelo valor no início mais os aportes líquidos, cada um a contar só pela parte do período '
+  + 'em que esteve investido. Não é ao ano.';
+
+function renderYear() {
+  const years = summaryYears();
+  if (!years.includes(S.year)) S.year = years[years.length - 1];
+  const k = years.indexOf(S.year);
+  $('#year-label').textContent = S.year;
+  $('#year-nav [data-step="-1"]').disabled = k <= 0;
+  $('#year-nav [data-step="1"]').disabled = k >= years.length - 1;
+
+  // n = meses para as médias: desde o primeiro movimento, se foi durante este ano (ver dataMonths no yearSummary)
+  const r = yearSummary(S.year), p = r.period, t = r.totals, n = Math.max(1, p.dataMonths);
+  const py = String(Number(p.year) - 1);
+  const dayMonth = iso => `${Number(iso.slice(8, 10))} de ${MONTHS_PT[Number(iso.slice(5, 7)) - 1]}`;
+  const monthName = ym => MONTHS_PT[Number(ym.slice(5, 7)) - 1];
+  const endMonth = Number(p.to.slice(5, 7));
+  // com que se compara: o ano anterior inteiro ou, no ano atual, de janeiro até ao mesmo dia
+  const prevShort = !p.prev ? '' : !p.current ? py : endMonth === 1 ? `jan ${py}` : `jan–${MONTHS_SHORT[endMonth - 1]} ${py}`;
+  const prevTitle = !p.prev ? '' : p.current ? `De 1 de janeiro a ${dayMonth(p.prev.end)} de ${py} (o mesmo período do ano anterior)` : `${py}, o ano inteiro`;
+  const startHead = `Fim de ${py}`, endHead = p.current ? `Hoje (${dateLabel(p.end).slice(0, 5)})` : `Fim de ${p.year}`;
+  const dash = '<span class="muted">—</span>';
+  const change = (cur, base) => (base > 0 ? (cur - base) / base : NaN);
+
+  const head = `<div class="year-head">
+    <div><h1 class="year-title">Resumo de ${p.year}</h1>
+      <div class="year-period">${p.current ? `De 1 de janeiro a ${dayMonth(p.end)} de ${p.year}: o ano ainda não acabou, os números são até hoje`
+        : `O ano inteiro, de 1 de janeiro a 31 de dezembro de ${p.year}`}</div></div>
+    <div class="year-made">Ledger · ${dateLabel(todayISO())}</div>
+  </div>`;
+  const nw = r.networth, inv = r.investments, loans = r.loans;
+  if (!t.count && !inv.rows.length && !loans.rows.length && !nw.end) {
+    $('#year-report').innerHTML = `${head}<div class="panel"><div class="empty">Sem movimentos, investimentos nem créditos em ${p.year}.</div></div>`;
+    return;
+  }
+
+  // ── cartões: entradas, gastos, taxa de poupança e património líquido, com a comparação com o ano anterior ──
+  const cmp = f => {
+    if (!r.prev) return '';
+    const x = f(r.prev);
+    return x ? `<div class="stat-cmp" title="${esc(prevTitle)}"><span class="${x.cls}">${x.text}</span> face a ${esc(prevShort)}</div>` : '';
+  };
+  const pctCmp = (cur, base, up) => { const x = change(cur, base); return isFinite(x) && { text: pct(x, 0), cls: signClass(up ? x : -x) }; };
+  const putAside = [t.invested > 0 && `${eurShort(t.invested)} investidos`, t.amortized > 0 && `${eurShort(t.amortized)} amortizados`].filter(Boolean).join(' e ');
+  // média por mês (desde o primeiro movimento, que no primeiro ano pode ser a meio); com um só mês, o nome do mês
+  const avgText = v => (!p.dataFrom ? 'sem movimentos'
+    : n > 1 ? `média ${eurShort(v / n)}/mês${p.dataFrom > p.from ? ` (desde ${MONTHS_SHORT[Number(p.dataFrom.slice(5, 7)) - 1]})` : ''}`
+    : monthLabel(p.dataFrom));
+  const nwStartLabel = nw.startMonth === addMonths(p.from, -1) ? `o fim de ${py}` : `o fim de ${monthLabel(nw.startMonth)}`;
+  const nwDiff = nw.start && nw.end ? round2(nw.end.total - nw.start.total) : null;
+  const stats = `<div class="stats">
+    <div class="stat"><div class="stat-label">Entradas</div><div class="stat-value pos">${eur(t.in)}</div>
+      <div class="stat-sub">${avgText(t.in)}</div>${cmp(b => pctCmp(t.in, b.in, true))}</div>
+    <div class="stat"><div class="stat-label">Gastos</div><div class="stat-value neg">${eur(t.out)}</div>
+      <div class="stat-sub">${avgText(t.out)}</div>${cmp(b => pctCmp(t.out, b.out, false))}</div>
+    <div class="stat"><div class="stat-label">Taxa de poupança</div><div class="stat-value ${t.in > 0 ? signClass(t.saved) : ''}">${t.in > 0 ? pct(t.rate, 0) : '—'}</div>
+      <div class="stat-sub">${t.saved < 0 ? `gastaste mais ${eurShort(-t.saved)} do que entrou` : `${eurShort(t.saved)} não gastos${putAside ? ` · inclui ${putAside}` : ''}`}</div>
+      ${cmp(b => { const x = t.in > 0 && isFinite(b.rate) ? Math.round((t.rate - b.rate) * 100) : NaN;
+        return isFinite(x) && { text: `${x > 0 ? '+' : x < 0 ? '−' : ''}${Math.abs(x)} p.p.`, cls: signClass(x) }; })}</div>
+    <div class="stat"><div class="stat-label">Património líquido</div><div class="stat-value">${nw.end ? eur(nw.end.total) : '—'}</div>
+      <div class="stat-sub">${nwDiff === null ? (nw.end ? 'sem dados do início do ano' : 'sem dados') : `<span class="${signClass(nwDiff)}">${eurSignedShort(nwDiff)}</span> desde ${nwStartLabel}`
+        + (nwDiff !== null && nw.start.total > 0 ? ` (${pct(nwDiff / nw.start.total, 0)})` : '')}</div></div>
+  </div>`;
+
+  // ── destaques ──
+  const h = r.highlights, lines = [];
+  if (h.biggest) lines.push(`O maior gasto: <b>${eur(h.biggest.amount)}</b> em ${esc(h.biggest.description || h.biggest.category)}`
+    + ` (${esc(h.biggest.category)}, ${dateLabel(h.biggest.date)}).`);
+  if (h.topMonth && h.lowMonth) lines.push(`O mês com mais gastos foi ${monthName(h.topMonth.month)} (<b>${eur(h.topMonth.out)}</b>)`
+    + ` e o com menos foi ${monthName(h.lowMonth.month)} (<b>${eur(h.lowMonth.out)}</b>).`);
+  if (h.bestRate) lines.push(h.bestRate.rate >= 0
+    ? `O mês em que poupaste mais foi ${monthName(h.bestRate.month)}: não gastaste <b>${Math.round(h.bestRate.rate * 100)}%</b> do que entrou.`
+    : `Em nenhum mês completo gastaste menos do que entrou; o mais perto foi ${monthName(h.bestRate.month)}, com <b>${Math.round(-h.bestRate.rate * 100)}%</b> a mais.`);
+  if (h.up) lines.push(`Onde gastaste mais do que em ${esc(prevShort)}: ${esc(h.up.category)}, <b class="neg">${eurSigned(h.up.diff)}</b> (${eur(h.up.amount)} face a ${eur(h.up.prev)}).`);
+  if (h.down) lines.push(`Onde gastaste menos: ${esc(h.down.category)}, <b class="pos">${eurSigned(h.down.diff)}</b> (${eur(h.down.amount)} face a ${eur(h.down.prev)}).`);
+  if (inv.rows.length) lines.push(`Nos investimentos puseste <b>${eurSigned(inv.total.net)}</b> (aportes − resgates) e ${inv.total.gain >= 0 ? 'ganhaste' : 'perdeste'}`
+    + ` <b class="${signClass(inv.total.gain)}">${eur(Math.abs(inv.total.gain))}</b>${isFinite(inv.total.ret) ? ` (${pct(inv.total.ret)} no período)` : ''}.`);
+  if (loans.total.payments || loans.total.extra) lines.push(`Nos créditos pagaste <b>${eur(round2(loans.total.payments + loans.total.extra))}</b>`
+    + `${loans.total.interest ? `, dos quais <b>${eur(loans.total.interest)}</b> de juros` : ''}.`);
+  lines.push(`${t.count} ${t.count === 1 ? 'movimento registado' : 'movimentos registados'}.`);
+  const highlights = `<div class="panel year-section"><div class="panel-header"><div class="panel-title">Destaques</div></div>
+    <ul class="year-highlights">${lines.map(l => `<li>${l}</li>`).join('')}</ul></div>`;
+
+  // ── património líquido no início e no fim ──
+  let networth = '';
+  if (nw.end) {
+    const parts = [['Contas', 'accounts', 1], ['Investimentos', 'investments', 1], ['Imóveis', 'properties', 1], ['Créditos', 'debt', -1]]
+      .filter(([, key]) => key !== 'properties' || nw.end.properties || nw.start?.properties);
+    const val = (x, key, sign) => (sign < 0 ? (x[key] ? '−' + eur(x[key]) : eur(0)) : eur(x[key]));
+    const diff = (key, sign) => (nw.start ? round2(sign * (nw.end[key] - nw.start[key])) : null);
+    const row = (label, key, sign, cls = '') => {
+      const d = diff(key, sign);
+      return `<tr class="${cls}"><td>${label}</td><td class="num">${nw.start ? val(nw.start, key, sign) : dash}</td><td class="num">${val(nw.end, key, sign)}</td>
+        <td class="num ${d === null ? '' : signClass(d)}">${d === null ? dash : eurSigned(d)}</td></tr>`;
+    };
+    networth = `<div class="panel year-section"><div class="panel-header"><div class="panel-title">Património líquido</div></div>
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th></th><th class="num">${nw.startMonth === addMonths(p.from, -1) ? startHead : `Fim de ${monthShort(nw.startMonth)}`}</th><th class="num">${endHead}</th><th class="num">Variação</th></tr></thead>
+        <tbody>${parts.map(([label, key, sign]) => row(label, key, sign)).join('')}${row('Total', 'total', 1, 'year-total')}</tbody>
+      </table></div>
+      ${D.properties.length ? '<div class="chart-note year-note">Imóveis: a app só guarda o valor atual, por isso os valores antigos são estimados (em linha reta desde o preço de compra).</div>' : ''}
+    </div>`;
+  }
+
+  // ── mês a mês: barras das entradas e dos gastos (os 12 meses do ano) e a tabela ──
+  const rowOf = Object.fromEntries(r.months.map(m => [m.month, m]));
+  const all = monthRange(p.from, `${p.year}-12`);
+  const max = Math.max(0, ...r.months.map(m => Math.max(m.in, m.out)));
+  const hgt = v => (max > 0 ? Math.round(v / max * 100) : 0);
+  const bars = `<div class="year-bars" role="img" aria-label="Entradas e gastos de cada mês">${all.map(m => {
+    const x = rowOf[m];
+    return `<div class="year-bar"${x?.count ? ` title="${esc(`${monthLabel(m)}: entradas ${eur(x.in)}, gastos ${eur(x.out)}`)}"` : ''}>
+      <span class="in" style="height:${hgt(x?.in || 0)}%"></span><span class="out" style="height:${hgt(x?.out || 0)}%"></span></div>`;
+  }).join('')}</div>
+    <div class="year-bar-labels">${all.map(m => `<span class="${m > p.to ? 'later' : ''}">${MONTHS_SHORT[Number(m.slice(5, 7)) - 1]}</span>`).join('')}</div>
+    <div class="year-legend"><span><i class="key in"></i>Entradas</span><span><i class="key out"></i>Gastos</span></div>`;
+  const flowCells = x => (x.count
+    ? `<td class="num">${eur(x.in)}</td><td class="num">${eur(x.out)}</td><td class="num">${x.invested + x.amortized ? eur(round2(x.invested + x.amortized)) : dash}</td>
+       <td class="num ${signClass(x.net)}">${eurSigned(x.net)}</td><td class="num">${x.in > 0 ? pct(x.rate, 0) : dash}</td>`
+    : `<td class="num">${dash}</td>`.repeat(5));
+  const monthsTable = `<div class="table-wrap"><table class="data">
+    <thead><tr><th>Mês</th><th class="num">Entradas</th><th class="num">Gastos</th><th class="num">Investido e amortizado</th><th class="num">Saldo</th>
+      <th class="num">Taxa de poupança</th><th class="num">Património no fim</th></tr></thead>
+    <tbody>${r.months.map(x => `<tr><td>${monthName(x.month)}${x.partial ? ` <span class="muted">(até dia ${Number(p.end.slice(8, 10))})</span>` : ''}</td>
+      ${flowCells(x)}<td class="num">${x.networth === null ? dash : eur(x.networth)}</td></tr>`).join('')}
+      <tr class="year-total"><td>${p.year}</td>${flowCells(t)}<td class="num">${nw.end ? eur(nw.end.total) : dash}</td></tr></tbody>
+  </table></div>`;
+  const monthly = `<div class="panel year-section"><div class="panel-header"><div class="panel-title">Mês a mês</div></div>
+    <div class="panel-body">${bars}</div>${monthsTable}
+    <div class="chart-note year-note">Saldo = entradas − gastos − investido e amortizado: o que ficou nas contas. Taxa de poupança: do que entrou, quanto não foi gasto.</div></div>`;
+
+  // ── por categoria: peso, por mês, face ao ano anterior e, nos gastos, o orçamento do ano (o limite por mês × 12) ──
+  const catTable = (title, list, out) => {
+    if (!list.length) return '';
+    const withBudget = out && list.some(c => c.budget !== null);
+    const total = round2(list.reduce((sum, c) => sum + c.amount, 0));
+    const prevCell = c => {
+      if (c.prev === null) return '';
+      const d = Math.round(c.amount - c.prev), x = change(c.amount, c.prev);   // ao euro: uma diferença de cêntimos dá 0 € (e não "−0 €")
+      return `<td class="num ${signClass(out ? -d : d)}" title="${isFinite(x) ? esc(`${pct(x, 0)} face a ${eur(c.prev)}`) : 'Não havia no ano anterior'}">${eurSignedShort(d)}</td>`;
+    };
+    const budgetCell = c => {
+      if (!withBudget) return '';
+      if (c.budget === null) return `<td class="num">${dash}</td>`;
+      const ratio = c.amount / c.budget;
+      return `<td class="num ${ratio > 1 ? 'neg' : ratio >= 0.8 ? 'warn' : ''}">${Math.round(ratio * 100)}% de ${eurShort(c.budget)}</td>`;
+    };
+    return `<div class="panel year-section"><div class="panel-header"><div class="panel-title">${title}</div></div>
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th>Categoria</th><th class="num">${out ? 'Gasto' : 'Valor'}</th><th class="year-share-col">Peso</th><th class="num">Por mês</th>
+          ${list[0].prev !== null ? `<th class="num" title="${esc(prevTitle)}">Face a ${esc(prevShort)}</th>` : ''}${withBudget ? '<th class="num" title="O limite por mês × 12, como nos Movimentos num ano">Orçamento do ano</th>' : ''}</tr></thead>
+        <tbody>${list.map(c => `<tr><td>${esc(c.category)}</td><td class="num">${eur(c.amount)}</td>
+          <td><div class="year-share"><div class="progress"><div style="width:${Math.round(c.share * 100)}%"></div></div><span>${Math.round(c.share * 100)}%</span></div></td>
+          <td class="num">${eurShort(c.amount / n)}</td>${prevCell(c)}${budgetCell(c)}</tr>`).join('')}
+          <tr class="year-total"><td>Total</td><td class="num">${eur(total)}</td><td></td><td class="num">${eurShort(total / n)}</td>
+            ${list[0].prev !== null ? '<td></td>' : ''}${withBudget ? '<td></td>' : ''}</tr></tbody>
+      </table></div>
+      ${out ? '<div class="chart-note year-note">Sem as saídas para investimentos e amortizações, que não são gasto.</div>' : ''}</div>`;
+  };
+
+  // ── investimentos e créditos ──
+  let investments = '';
+  if (inv.rows.length) {
+    const cells = x => `<td class="num">${eur(x.start)}</td><td class="num">${eurSigned(x.net)}</td><td class="num">${eur(x.end)}</td>
+      <td class="num ${signClass(x.gain)}">${eurSigned(x.gain)}</td><td class="num ${isFinite(x.ret) ? signClass(x.ret) : 'muted'}">${pct(x.ret)}</td>`;
+    investments = `<div class="panel year-section"><div class="panel-header"><div class="panel-title">Investimentos</div></div>
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th>Investimento</th><th class="num">${startHead}</th><th class="num">Aportes − resgates</th><th class="num">${endHead}</th>
+          <th class="num">Ganho / perda</th><th class="num" title="Rentabilidade no período: ${YEAR_RETURN_TITLE}">No período</th></tr></thead>
+        <tbody>${inv.rows.map(x => `<tr><td><div class="li-name">${esc(x.name)}</div><div class="li-sub">${esc(x.type)}</div></td>${cells(x)}</tr>`).join('')}
+          ${inv.rows.length > 1 ? `<tr class="year-total"><td>Total</td>${cells(inv.total)}</tr>` : ''}</tbody>
+      </table></div>
+      <div class="chart-note year-note">O valor de cada mês é o último valor registado mais os aportes e resgates desde então. "No período": ${YEAR_RETURN_TITLE}</div></div>`;
+  }
+  let loanSection = '';
+  if (loans.rows.length) {
+    const cells = x => `<td class="num">${x.startedNow || x.start === null ? dash : eur(x.start)}</td><td class="num">${eur(x.end)}</td>
+      ${x.start === null ? `<td class="num">${dash}</td>` : `<td class="num ${signClass(x.start - x.end)}">${eurSigned(round2(x.end - x.start))}</td>`}<td class="num">${eur(x.payments)}</td>
+      <td class="num">${eur(x.interest)}</td><td class="num">${x.extra ? eur(x.extra) : dash}</td>`;
+    loanSection = `<div class="panel year-section"><div class="panel-header"><div class="panel-title">Créditos</div></div>
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th>Crédito</th><th class="num">${startHead}</th><th class="num">${endHead}</th><th class="num">Variação da dívida</th>
+          <th class="num">Prestações</th><th class="num">Dos quais juros</th><th class="num">Amortizações extra</th></tr></thead>
+        <tbody>${loans.rows.map(x => `<tr><td><div class="li-name">${esc(x.name)}</div>${x.startedNow ? `<div class="li-sub">começou em ${monthLabel(ymOf(findById('loans', x.id).start_date))}</div>` : ''}</td>${cells(x)}</tr>`).join('')}
+          ${loans.rows.length > 1 ? `<tr class="year-total"><td>Total</td>${cells({ ...loans.total, startedNow: false })}</tr>` : ''}</tbody>
+      </table></div>
+      <div class="chart-note year-note">Prestações e juros dos meses com o saldo registado em "Atualizar mês"${loans.rows.some(x => x.estimated) ? '; nos meses sem prestação registada, os juros são estimados com a taxa do crédito' : ''}.
+        ${loans.rows.some(x => x.start === null) ? ` "—" no ${esc(startHead.toLowerCase())}: não há nenhum saldo registado até lá.` : ''}</div></div>`;
+  }
+
+  $('#year-report').innerHTML = head + stats + highlights + networth + monthly + catTable('Gastos por categoria', r.outCats, true)
+    + catTable('Entradas por categoria', r.inCats, false) + investments + loanSection;
+}
+
+// ════════ UTILIZADORES (só administradores; o resto está no admin.js) ════════
+$('#adm-refresh').addEventListener('click', () => loadAdmin());
+$('#adm-new').addEventListener('click', () => newAccountForm());
+// Botões "Ações" da tabela de contas (Desativar, Repor password...): a tabela é redesenhada, por isso um só ouvinte
+$('#adm-users').addEventListener('click', e => {
+  const b = e.target.closest('[data-adm-action]');
+  if (b) runAdminAction(b.dataset.admAction, b.dataset.email);
+});
+$('#adm-filter').addEventListener('change', e => { S.adminUser = e.target.value; renderAdmin(); });
+
+// ════════ ENCAMINHAMENTO DE CLIQUES (botões com atributos data-*) ════════
+// Um único "listener" para a página toda (delegação de eventos): funciona também para botões
+// criados depois, dentro das tabelas. O atributo diz o que fazer (ex.: data-edit-tx="<id>").
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-action],[data-edit-acc],[data-edit-tx],[data-del-tx],[data-edit-inv],[data-inv-focus],[data-edit-imv],[data-del-imv],[data-edit-loan],[data-sim-loan],[data-edit-prop],[data-edit-goal],[data-goal-reserve],[data-del-gres],[data-alert-act],[data-alert-dismiss]');
+  if (!el) return;
+  const d = el.dataset;
+  if (d.invFocus) { e.preventDefault(); S.invFilter = d.invFocus; renderInvestments(); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+  if (d.editAcc) return accountForm(findById('accounts', d.editAcc));
+  if (d.editTx) return txForm(findById('transactions', d.editTx));
+  if (d.delTx) return deleteTx(d.delTx);
+  if (d.editInv) return investmentForm(findById('investments', d.editInv));
+  if (d.editImv) return invMoveForm(findById('inv_moves', d.editImv));
+  if (d.delImv) return deleteImv(d.delImv);
+  if (d.editLoan) return loanForm(findById('loans', d.editLoan));
+  if (d.simLoan) return earlyRepaymentModal(findById('loans', d.simLoan));
+  if (d.editProp) return propertyForm(findById('properties', d.editProp));
+  if (d.editGoal) return goalForm(findById('goals', d.editGoal));
+  if (d.goalReserve) return reserveModal(findById('goals', d.goalReserve));
+  if (d.delGres) return deleteReservation(d.delGres);
+  if (d.alertAct) return alertAction(d.alertAct, d.alertArg);
+  if (d.alertDismiss) return dismissAlert(d.alertDismiss);
+  switch (d.action) {
+    case 'acc-new': return accountForm();
+    case 'tx-new': return txForm();
+    case 'mov-history': return historyGrid();
+    case 'mov-recurring': return recurringModal();
+    case 'budgets': return budgetsModal();
+    case 'inv-new': return investmentForm();
+    case 'imv-new': return invMoveForm();
+    case 'inv-month': return investmentMonthGrid();
+    case 'loan-new': return loanForm();
+    case 'loan-month': return loanMonthGrid();
+    case 'prop-new': return propertyForm();
+    case 'goal-new': return goalForm();
+    case 'alloc-targets': return allocTargetsModal();
+    case 'year-print': return window.print();
+    case 'import': return openImport(d.format);
+    case 'export': return exportCSV(d.format);
+  }
+});
+
+// ════════ ARRANQUE ════════
+// Tema claro ou escuro (ver theme.js). O botão da barra lateral passa de automático a claro, a escuro e outra vez a
+// automático. Quando o tema muda (pelo botão ou, em automático, pelo telemóvel ou PC), o CSS muda sozinho;
+// os gráficos têm de voltar a ler as cores e ser desenhados de novo.
+function updateThemeButton() {
+  const btn = $('#theme-btn');
+  const [icon, text] = THEME_LABELS[themeChoice()];
+  btn.querySelector('.theme-icon').textContent = icon;
+  btn.querySelector('.theme-label').textContent = text;
+  btn.title = THEME_TITLES[themeChoice()];
+  btn.setAttribute('aria-label', THEME_TITLES[themeChoice()]);   // o texto visível só diz a escolha; aqui vai a explicação
+}
+$('#theme-btn').addEventListener('click', () => { setThemeChoice(nextThemeChoice(themeChoice())); updateThemeButton(); });
+updateThemeButton();
+
+// Modo privado (ver privateMode no util.js): o botão esconde ou mostra os valores e volta a desenhar tudo
+function updatePrivateButton() {
+  const btn = $('#private-btn');
+  btn.querySelector('.theme-icon').textContent = privateMode ? '🙈' : '👁';
+  btn.querySelector('.private-label').textContent = privateMode ? 'Mostrar' : 'Ocultar';
+  btn.title = privateMode ? 'Mostrar os valores' : 'Esconder os valores (modo privado)';
+  btn.setAttribute('aria-label', btn.title);
+  btn.setAttribute('aria-pressed', String(privateMode));
+}
+$('#private-btn').addEventListener('click', () => {
+  setPrivateMode(!privateMode);
+  updatePrivateButton();
+  destroyCharts();
+  renderAll();
+});
+updatePrivateButton();
+document.addEventListener('ledger-theme', () => {
+  applyChartTheme();
+  destroyCharts();
+  renderAll();
+});
+// Imprimir (o "Imprimir / PDF" do Resumo do ano, ou Ctrl+P): sempre com o tema claro, porque o papel é branco, e, no resumo,
+// com o ano no nome do PDF (o browser usa o título da página). No fim volta tudo ao que estava.
+const PAGE_TITLE = document.title;
+addEventListener('beforeprint', () => {
+  document.documentElement.dataset.theme = 'light';
+  if (S.tab === 'year') document.title = `Ledger - Resumo de ${S.year}`;
+});
+addEventListener('afterprint', () => {
+  document.title = PAGE_TITLE;
+  applyTheme();   // o tema escolhido (se era o escuro, os gráficos voltam a ser desenhados com as cores dele)
+});
+
+// Corre uma vez ao abrir a página: escolhe a página pelo endereço (recarregar num separador fica nele),
+// verifica se o config.js existe e, se já houver sessão guardada, entra sem pedir password.
+(function init() {
+  const hashTab = location.hash.slice(1);
+  if (Object.hasOwn(TABS, hashTab)) {
+    // a página inicial fica por baixo no histórico, para o "voltar" levar até ela (#admin: ver updateAdminUi).
+    // Ao recarregar um separador aberto pela app, ela já lá está.
+    S.tab = hashTab;
+    if (!history.state?.ledgerTab) {
+      history.replaceState(null, '', '#inicio');
+      history.pushState({ ledgerTab: true }, '', '#' + hashTab);
+    }
+  } else {
+    history.replaceState(null, '', '#inicio');
+  }
+  showTab(S.tab);
+
+  if (!API_BASE || !CFG.clientId) {
+    showLogin('Falta o config.js. Faz o deploy com o deploy.ps1 primeiro.');
+    $('#login-btn').disabled = true;
+    return;
+  }
+  if (store.get('refreshToken')) {
+    getToken().then(() => { hideLogin(); loadData(); }).catch(() => showLogin());
+  } else {
+    showLogin();
+  }
+})();
