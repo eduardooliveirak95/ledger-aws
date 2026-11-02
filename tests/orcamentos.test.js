@@ -24,8 +24,9 @@ const ACC1 = 'ACC_000000000001', ACC2 = 'ACC_000000000002';
 let seq = 0;
 const tx = (date, direction, amount, category, account_id = ACC1, extra = {}) =>
   ({ id: 'TX_' + String(++seq).padStart(12, '0'), kind: 'transaction', date, direction, amount, account_id, category, ...extra });
-const budget = (n, category, amount, updated_at = '2026-10-01T10:00:00+00:00') =>
-  ({ id: 'BUD_' + String(n).padStart(12, '0'), kind: 'budget', category, amount, updated_at });
+const budget = (n, category, amount, updated_at = '2026-10-01T10:00:00+00:00', extra = {}) =>
+  ({ id: 'BUD_' + String(n).padStart(12, '0'), kind: 'budget', category, amount, updated_at, ...extra });
+const yearly = (n, category, amount) => budget(n, category, amount, undefined, { period: 'year' });
 const load = (transactions, budgets) => run('D = { ...emptyData(), transactions: txs, budgets: bs }', { txs: transactions, bs: budgets });
 const status = (from, to) => run('budgetStatus(from, to)', { from, to });
 
@@ -65,6 +66,54 @@ test('vários meses: o limite multiplica pelos meses do período (num ano, sempr
   assert.equal(status('2025-01', '2025-12')[0].months, 12);
   assert.equal(status('2026-08', '2026-10')[0].months, 3);
   assert.equal(status('2026-12', '2026-12')[0].months, 1);   // um mês futuro conta como um mês
+});
+
+// Orçamentos por ano: Férias (gastos de uma vez) e Seguros, com Lazer por mês para comparar
+const YEARLY = [yearly(1, 'Férias', 2000), yearly(2, 'Seguros', 600), budget(3, 'Lazer', 50, undefined, { period: 'month' })];
+const YEARLY_TXS = [
+  tx('2025-08-10', 'out', 1500, 'Férias'),                                   // ano anterior
+  tx('2026-03-02', 'out', 450, 'Seguros'),
+  tx('2026-07-20', 'out', 1200, 'Férias'), tx('2026-09-05', 'out', 500, 'Férias', ACC2),
+  tx('2026-09-12', 'out', 40, 'Lazer'), tx('2026-08-12', 'out', 30, 'Lazer'),
+  tx('2026-11-02', 'out', 300, 'Férias'),                                    // depois do mês escolhido
+];
+
+test('por ano, num mês: conta o gasto desde janeiro até esse mês e o limite do ano (o mensal só o mês)', () => {
+  load(YEARLY_TXS, YEARLY);
+  assert.deepEqual(status('2026-09', '2026-09').map(b => [b.category, b.period, b.from, b.times, b.spent, b.limit, b.left, b.state]), [
+    ['Férias', 'year', '2026-01', 1, 1700, 2000, 300, 'near'],
+    ['Lazer', 'month', '2026-09', 1, 40, 50, 10, 'near'],
+    ['Seguros', 'year', '2026-01', 1, 450, 600, 150, 'ok'],
+  ]);
+  // em janeiro só conta janeiro; num mês antes do gasto, ainda não conta
+  assert.deepEqual(status('2026-02', '2026-02').filter(b => b.period === 'year').map(b => [b.category, b.spent]), [['Férias', 0], ['Seguros', 0]]);
+  assert.equal(status('2026-03', '2026-03').find(b => b.category === 'Seguros').spent, 450);
+  // num mês do ano anterior, conta desde janeiro desse ano
+  assert.deepEqual(status('2025-12', '2025-12').find(b => b.category === 'Férias'), {
+    id: 'BUD_000000000001', category: 'Férias', amount: 2000, period: 'year', months: 1, times: 1, from: '2025-01',
+    limit: 2000, spent: 1500, ratio: 0.75, left: 500, state: 'ok' });
+});
+
+test('por ano, num ano: o limite conta uma vez (o mensal × 12); em "Sempre", × o número de anos', () => {
+  load(YEARLY_TXS, YEARLY);
+  assert.deepEqual(status('2026-01', '2026-12').map(b => [b.category, b.times, b.spent, b.limit, b.state]), [
+    ['Férias', 1, 2000, 2000, 'near'],   // exatamente o limite ainda não passou
+    ['Seguros', 1, 450, 600, 'ok'],
+    ['Lazer', 12, 70, 600, 'ok'],
+  ]);
+  // "Sempre" (de ago 2025 até ao mês atual): 2 anos, cada um conta inteiro; o gasto é o do período
+  assert.deepEqual(status('2025-08', '2026-10').map(b => [b.category, b.from, b.times, b.spent, b.limit]), [
+    ['Férias', '2025-08', 2, 3200, 4000],
+    ['Seguros', '2025-08', 2, 450, 1200],
+    ['Lazer', '2025-08', 15, 70, 750],
+  ]);
+  // um "Sempre" só com dados deste ano conta desde janeiro, como num mês
+  assert.deepEqual(status('2026-03', '2026-10').find(b => b.category === 'Férias').from, '2026-01');
+});
+
+test('um orçamento sem period (dos antigos) é por mês', () => {
+  load(TXS, [budget(1, 'Restauração', 150)]);
+  assert.deepEqual(status('2026-09', '2026-09').map(b => [b.period, b.times, b.limit]), [['month', 1, 150]]);
 });
 
 test('categorias com nomes especiais do JavaScript ("constructor", "toString") contam como as outras', () => {

@@ -412,15 +412,18 @@ def test_bank_formats_are_saved_and_validated(table):
 
 
 def test_budgets_are_saved_and_validated(table):
-    """Os orçamentos (limite por mês de uma categoria de saídas) ficam guardados, atualizam-se e apagam-se."""
+    """Os orçamentos (limite por mês ou por ano de uma categoria de saídas) ficam guardados, atualizam-se e apagam-se."""
     b = save([{"kind": "budget", "category": "Restauração", "amount": "150.5"}])["saved"][0]
     assert b["id"].startswith("BUD_") and b["category"] == "Restauração" and b["amount"] == 150.5
+    assert b["period"] == "month"   # sem period, é por mês (como os orçamentos antigos)
     _, d = call("GET /data")
-    assert [(x["category"], x["amount"]) for x in d["budgets"]] == [("Restauração", 150.5)]
-    # atualizar mantém o id
-    assert save([dict(b, amount=200)])["saved"][0]["id"] == b["id"]
+    assert [(x["category"], x["amount"], x["period"]) for x in d["budgets"]] == [("Restauração", 150.5, "month")]
+    # atualizar mantém o id; pode passar a ser por ano
+    y = save([dict(b, amount=2000, period="year")])["saved"][0]
+    assert y["id"] == b["id"] and y["period"] == "year" and y["amount"] == 2000
     for bad in ({"category": "", "amount": 10}, {"category": "Lazer", "amount": 0}, {"category": "Lazer", "amount": -5},
-                {"category": "Lazer", "amount": "muito"}, {"category": "Lazer"}, {"id": "BUD_xyz", "category": "Lazer", "amount": 5}):
+                {"category": "Lazer", "amount": "muito"}, {"category": "Lazer"}, {"id": "BUD_xyz", "category": "Lazer", "amount": 5},
+                {"category": "Lazer", "amount": 5, "period": "week"}, {"category": "Lazer", "amount": 5, "period": ["year"]}):
         status, body = call("POST /items", body={"items": [{"kind": "budget", **bad}]})
         assert status == 400 and body["detail"], bad
     # o backup não inclui os orçamentos (tal como os formatos dos bancos)

@@ -453,6 +453,11 @@ a.li-name:hover { color: var(--accent); }
 .loan-actions { display: flex; justify-content: flex-end; }
 table.sim-table th.num { white-space: normal; }   /* "Reduzir a prestação" pode partir em duas linhas */
 table.budget-edit td.budget-limit { width: 140px; }   /* campo do limite na janela dos orçamentos (mais estreito no telemóvel) */
+/* orçamentos: o limite e, ao lado, "por mês" ou "por ano" (no telemóvel, por baixo) */
+table.budget-edit td.budget-cap { width: 240px; }
+.budget-cap-row { display: flex; gap: 6px; }
+.budget-cap-row input { flex: 1 1 auto; min-width: 0; }
+.budget-cap-row select { flex: none; width: 92px; }
 .progress { height: 8px; background: var(--field); border-radius: 4px; overflow: hidden; }
 .progress > div { height: 100%; background: var(--series-1); border-radius: 4px; }
 .progress-label { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); font-family: var(--font-num); }
@@ -461,6 +466,7 @@ table.budget-edit td.budget-limit { width: 140px; }   /* campo do limite na jane
 .budget { display: flex; flex-direction: column; gap: 6px; }
 .budget-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
 .budget-nums { font-family: var(--font-num); font-size: 12px; white-space: nowrap; }
+.budget-period { font-weight: 400; font-size: 11px; color: var(--muted); white-space: nowrap; }   /* "por ano · jan–nov" */
 /* Um nome comprido parte em várias linhas: a barra desce para o fundo, para ficar à altura das dos vizinhos na grelha */
 .budget-bar { margin-top: auto; }
 .budget-bar.ok > div { background: var(--pos); }
@@ -648,6 +654,9 @@ table.grid-edit .num { font-family: var(--font-num); text-align: right; color: v
   table.budget-edit th.num { white-space: normal; }
   table.budget-edit th, table.budget-edit td { padding: 6px 5px; }
   table.budget-edit td.budget-limit { width: 92px; }
+  table.budget-edit td.budget-cap { width: 96px; }
+  .budget-cap-row { flex-direction: column; gap: 4px; }
+  .budget-cap-row select { width: 100%; padding: 6px 4px; }
   .year-title { font-size: 22px; }
   .year-bars, .year-bar-labels { gap: 3px; }
   .year-bars { height: 100px; }

@@ -8,7 +8,7 @@ let D = emptyData();
 function emptyData() {
   return { accounts: [], transactions: [], investments: [], inv_moves: [], valuations: [], loans: [], loan_balances: [], properties: [],
     bank_formats: [],   // bank_formats: colunas escolhidas para os CSV de cada banco (ver bank.js)
-    budgets: [],        // budgets: orçamentos por categoria de saídas (limite por mês; ver budgetStatus)
+    budgets: [],        // budgets: orçamentos por categoria de saídas (limite por mês ou por ano; ver budgetStatus)
     goals: [],          // goals: metas de poupança (ver goalStatus)
     reservations: [],   // reservations: dinheiro de contas e investimentos posto de lado para as metas (ver reservedTotal)
     alloc_targets: [] };// alloc_targets: percentagem alvo de cada tipo de investimento (ver allocation)
@@ -228,22 +228,37 @@ function movComparison(mode, anchor, filters) {
 
 /**
  * Como estão os orçamentos num período (meses from a to): para cada categoria com orçamento, quanto se gastou
- * nesse período (saídas dessa categoria, em todas as contas) e o limite = orçamento por mês × número de meses do
- * período (num ano, sempre × 12, mesmo no ano atual). state: 'ok', 'near' (80% ou mais) ou 'over' (passou).
- * Se houver dois orçamentos da mesma categoria, conta o mais recente. Ordem: os mais gastos (em %) primeiro.
+ * (saídas dessa categoria, em todas as contas) e o limite. Um orçamento é por mês ou por ano (period 'year'; sem
+ * period, é por mês, como os mais antigos):
+ *   - por mês: o gasto do período e o limite = orçamento × número de meses do período (num ano, sempre × 12, mesmo
+ *     no ano atual);
+ *   - por ano (gastos que vêm de uma vez, como férias ou seguros): num período dentro de um só ano (um mês ou o ano),
+ *     o gasto desde janeiro até ao fim do período e o limite do ano; num período de vários anos ("Sempre"), o gasto do
+ *     período e o limite × número de anos (cada um conta inteiro, também o atual).
+ * from = o primeiro mês que conta no gasto; times = por quantos meses (ou anos) se multiplicou o orçamento.
+ * state: 'ok', 'near' (80% ou mais) ou 'over' (passou). Se houver dois orçamentos da mesma categoria, conta o mais
+ * recente. Ordem: os mais gastos (em %) primeiro.
  */
 function budgetStatus(from, to) {
-  const months = Math.max(1, monthRange(from, to).length);
+  const range = monthRange(from, to), months = Math.max(1, range.length);
+  const years = Math.max(1, new Set(range.map(m => m.slice(0, 4))).size);
+  const yearFrom = years === 1 ? `${to.slice(0, 4)}-01` : from;
   // dicionários sem protótipo: uma categoria chamada "constructor" ou "toString" conta como as outras
   const latest = Object.create(null);
   for (const b of D.budgets) if (!latest[b.category] || (b.updated_at || '') > (latest[b.category].updated_at || '')) latest[b.category] = b;
-  const spentBy = Object.create(null);
-  for (const t of filterTx({ from, to })) if (t.direction === 'out') spentBy[t.category] = (spentBy[t.category] || 0) + t.amount;
+  const spentIn = (a, z) => {
+    const by = Object.create(null);
+    for (const t of filterTx({ from: a, to: z })) if (t.direction === 'out') by[t.category] = (by[t.category] || 0) + t.amount;
+    return by;
+  };
+  const spentBy = spentIn(from, to);
+  const spentYear = yearFrom === from || !Object.values(latest).some(b => b.period === 'year') ? spentBy : spentIn(yearFrom, to);
   return Object.values(latest).map(b => {
-    const limit = round2(b.amount * months), spent = round2(spentBy[b.category] || 0);
+    const yearly = b.period === 'year', times = yearly ? years : months;
+    const limit = round2(b.amount * times), spent = round2((yearly ? spentYear : spentBy)[b.category] || 0);
     const ratio = spent / limit;
-    return { id: b.id, category: b.category, amount: b.amount, months, limit, spent, ratio, left: round2(limit - spent),
-      state: ratio > 1 ? 'over' : ratio >= 0.8 ? 'near' : 'ok' };
+    return { id: b.id, category: b.category, amount: b.amount, period: yearly ? 'year' : 'month', months, times,
+      from: yearly ? yearFrom : from, limit, spent, ratio, left: round2(limit - spent), state: ratio > 1 ? 'over' : ratio >= 0.8 ? 'near' : 'ok' };
   }).sort((a, b) => b.ratio - a.ratio || a.category.localeCompare(b.category, 'pt'));
 }
 
@@ -919,8 +934,11 @@ function homeAlerts() {
   const tight = budgetStatus(now, now).filter(b => b.state !== 'ok');
   if (tight.length) {
     add(`budget:${now}:${tight.map(b => b.category).join('|')}`, tight.some(b => b.state === 'over') ? 'bad' : 'warn',
-      `Orçamentos de ${monthLabel(now)}: ${tight.map(b => b.state === 'over' ? `${b.category} ${eur(-b.left)} acima do limite`
-        : `${b.category} a ${Math.round(b.ratio * 100)}%`).join(', ')}.`, 'Ver movimentos', 'mov');
+      `Orçamentos de ${monthLabel(now)}: ${tight.map(b => {
+        const ofYear = b.period === 'year' ? ' do ano' : '';   // os anuais contam desde janeiro (budgetStatus)
+        return b.state === 'over' ? `${b.category} ${eur(-b.left)} acima do limite${ofYear}`
+          : `${b.category} a ${Math.round(b.ratio * 100)}%${ofYear ? ' do limite do ano' : ''}`;
+      }).join(', ')}.`, 'Ver movimentos', 'mov');
   }
 
   const invs = D.investments.filter(i => !i.archived && (firstInvestmentMonth([i.id]) || now) < now && investmentSummary(i.id).value > 0)
@@ -989,7 +1007,8 @@ function periodTx(p) { return D.transactions.filter(t => t.date >= p.start && t.
  *                dezembro do ano anterior (ou do primeiro mês com dados, startMonth, se for durante o ano e antes do último
  *                mês; senão null) e no fim do período (no ano atual, o de hoje)
  *   outCats, inCats  gastos e entradas por categoria, do maior para o menor: { category, amount, share (do total),
- *                prev (no mesmo período do ano anterior; null sem comparação), budget (orçamento × 12; só nos gastos) }
+ *                prev (no mesmo período do ano anterior; null sem comparação), budget (o limite do ano: o orçamento por
+ *                mês × 12 ou o orçamento por ano; só nos gastos) }
  *   investments  { rows, total }: valor no início (start) e no fim (end), aportes − resgates (net) e ganho = end − start −
  *                net, de cada investimento com algum valor ou aporte no ano; ret = rentabilidade do período (Modified
  *                Dietz: o ganho a dividir pelo valor do início mais cada aporte líquido a contar só pela parte do período

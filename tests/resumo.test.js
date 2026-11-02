@@ -84,6 +84,7 @@ const DATA = {
   budgets: [
     { id: 'BUD_000000000001', kind: 'budget', category: 'Restauração', amount: 150 },
     { id: 'BUD_000000000002', kind: 'budget', category: 'constructor', amount: 10 },
+    { id: 'BUD_000000000003', kind: 'budget', category: 'Compras', amount: 1200, period: 'year' },   // por ano: conta uma vez
   ],
 };
 
@@ -149,14 +150,14 @@ test('mês a mês e património líquido no início e no fim', () => {
   assert.deepEqual(r24.months.slice(0, 5).map(m => m.networth), [null, null, null, null, null]);
 });
 
-test('gastos e entradas por categoria: peso, ano anterior e orçamento do ano (× 12)', () => {
+test('gastos e entradas por categoria: peso, ano anterior e orçamento do ano (× 12, ou o anual uma vez)', () => {
   load(DATA);
   const r = run('yearSummary("2026")');
   assert.deepEqual(r.outCats.map(c => [c.category, c.amount, c.prev, c.budget]), [
     ['Habitação', 7500, 7000, null],
     ['Supermercado', 3100, 3000, null],
     ['Restauração', 2000, 1000, 1800],
-    ['Compras', 900, 0, null],
+    ['Compras', 900, 0, 1200],
     ['constructor', 50, 0, 120],   // uma categoria com este nome conta como as outras (dicionários sem protótipo)
   ]);
   close(r.outCats[0].share, 7500 / 13550);

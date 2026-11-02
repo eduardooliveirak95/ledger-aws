@@ -704,10 +704,16 @@ function renderMovements() {
   const budgets = budgetStatus(from, to);
   $('#budget-panel').classList.toggle('hidden', !budgets.length);
   if (budgets.length) {
-    const n = budgets[0].months;
-    $('#budget-sub').textContent = `todas as contas${n > 1 ? ` · limite por mês × ${n} meses` : ''}`;
+    const monthly = budgets.find(b => b.period === 'month'), yearly = budgets.find(b => b.period === 'year');
+    $('#budget-sub').textContent = ['todas as contas', monthly?.times > 1 && `limite por mês × ${monthly.times} meses`,
+      yearly?.times > 1 && `limite por ano × ${yearly.times} anos`].filter(Boolean).join(' · ');
+    // os orçamentos por ano dizem o que contam: num mês, de janeiro até esse mês; num ano, o ano todo (budgetStatus)
+    const endMonth = Number(to.slice(5, 7));
+    const yearNote = b => b.period !== 'year' ? ''
+      : `por ano${b.times === 1 && endMonth < 12 ? ` · ${MONTHS_SHORT[0]}${endMonth > 1 ? `–${MONTHS_SHORT[endMonth - 1]}` : ''}` : ''}`;
     $('#budget-list').innerHTML = budgets.map(b => `<div class="budget">
-      <div class="budget-top"><span class="li-name">${esc(b.category)}</span><span class="budget-nums">${eur(b.spent)} de ${eur(b.limit)}</span></div>
+      <div class="budget-top"><span class="li-name">${esc(b.category)}${b.period === 'year' ? ` <span class="budget-period">${yearNote(b)}</span>` : ''}</span>
+        <span class="budget-nums">${eur(b.spent)} de ${eur(b.limit)}</span></div>
       <div class="progress budget-bar ${b.state}" role="progressbar" aria-label="${esc(b.category)}" aria-valuenow="${Math.round(b.ratio * 100)}"
         aria-valuemin="0" aria-valuemax="100"><div style="width:${Math.min(100, b.ratio * 100)}%"></div></div>
       <div class="progress-label"><span>${Math.round(b.ratio * 100)}%</span>
@@ -1046,7 +1052,7 @@ function historyGrid() {
 
 // ── orçamentos por categoria (botão "◎ Orçamentos" e "Editar" no painel dos orçamentos) ──
 // Uma linha por categoria de saídas (sem investimentos nem amortizações), com o que se gastou em média nos
-// 12 meses anteriores para ajudar a escolher. Vazio = sem orçamento (apaga o que houver).
+// 12 meses anteriores para ajudar a escolher e o limite por mês ou por ano. Vazio = sem orçamento (apaga o que houver).
 function budgetsModal() {
   const latest = Object.create(null), dupes = [];   // sem protótipo: categorias como "constructor" contam como as outras
   for (const b of [...D.budgets].sort((a, b2) => (a.updated_at || '').localeCompare(b2.updated_at || ''))) {
@@ -1059,21 +1065,33 @@ function budgetsModal() {
   const nMonths = first ? monthRange(from, to).length : 0;
   const spent = Object.create(null);
   if (nMonths) for (const t of filterTx({ from, to })) if (t.direction === 'out') spent[t.category] = (spent[t.category] || 0) + t.amount;
+  const avgText = (c, yearly) => (spent[c] ? `${eurShort(spent[c] / nMonths * (yearly ? 12 : 1))}/${yearly ? 'ano' : 'mês'}` : '—');
   // primeiro as categorias com orçamento ou com gastos (das mais gastas para as menos), depois as outras por ordem alfabética
   const cats = [...new Set([...knownCategories('out').filter(c => !isSavingOut({ direction: 'out', category: c })), ...Object.keys(latest)])]
     .sort((a, b) => (latest[b] || spent[b] ? 1 : 0) - (latest[a] || spent[a] ? 1 : 0) || (spent[b] || 0) - (spent[a] || 0) || a.localeCompare(b, 'pt'));
   const body = document.createElement('div');
   body.style.cssText = 'display:flex;flex-direction:column;gap:14px';
   body.innerHTML = `
-    <div class="modal-hint">Quanto queres gastar por mês, no máximo, em cada categoria. Deixa vazio para não ter orçamento.
+    <div class="modal-hint">Quanto queres gastar no máximo em cada categoria, por mês ou por ano (para gastos que vêm de uma vez,
+      como férias ou seguros: num mês, conta o que gastaste desde janeiro). Deixa vazio para não ter orçamento.
       Nos Movimentos, cada orçamento tem uma barra que fica laranja a partir de 80% e vermelha quando passa do limite.
-      ${nMonths ? `Ao lado, quanto gastaste em média por mês nos últimos ${nMonths} ${nMonths === 1 ? 'mês' : 'meses'}.` : ''}</div>
-    <div class="grid-scroll"><table class="grid-edit budget-edit"><thead><tr><th>Categoria</th><th class="num">Média/mês</th><th class="num">Limite por mês (€)</th></tr></thead>
-      <tbody>${cats.map(c => `<tr><td>${esc(c)}</td>
-        <td class="num">${spent[c] ? eurShort(spent[c] / nMonths) : '—'}</td>
-        <td class="budget-limit"><input data-cat="${esc(c)}" inputmode="decimal" placeholder="—" value="${latest[c] ? numInput(latest[c].amount) : ''}"
-          aria-label="Limite por mês para ${esc(c)}"></td></tr>`).join('')}</tbody></table></div>
+      ${nMonths ? `Ao lado, quanto gastaste em média nos últimos ${nMonths} ${nMonths === 1 ? 'mês' : 'meses'}.` : ''}</div>
+    <div class="grid-scroll"><table class="grid-edit budget-edit"><thead><tr><th>Categoria</th><th class="num">Média</th><th class="num">Limite (€)</th></tr></thead>
+      <tbody>${cats.map(c => {
+        const yearly = latest[c]?.period === 'year';
+        return `<tr><td>${esc(c)}</td>
+        <td class="num budget-avg">${avgText(c, yearly)}</td>
+        <td class="budget-cap"><div class="budget-cap-row"><input data-cat="${esc(c)}" inputmode="decimal" placeholder="—"
+          value="${latest[c] ? numInput(latest[c].amount) : ''}" aria-label="Limite para ${esc(c)}">
+          <select class="inline" data-period="${esc(c)}" aria-label="Limite por mês ou por ano para ${esc(c)}">
+            <option value="month">por mês</option><option value="year"${yearly ? ' selected' : ''}>por ano</option></select></div></td></tr>`;
+      }).join('')}</tbody></table></div>
     <div class="form-error" id="bud-err"></div>`;
+  // a média acompanha a escolha: por mês ou por ano (a de cada mês × 12)
+  body.addEventListener('change', e => {
+    const sel = e.target.closest('select[data-period]');
+    if (sel) $('.budget-avg', sel.closest('tr')).textContent = avgText(sel.dataset.period, sel.value === 'year');
+  });
   modal.open({
     title: 'Orçamentos por categoria', body, wide: true,
     footer: [
@@ -1082,9 +1100,12 @@ function budgetsModal() {
         const items = [], deletes = [...dupes], bad = [];
         for (const input of $$('input[data-cat]', body)) {
           const cat = input.dataset.cat, cur = latest[cat], txt = input.value.trim(), n = parseNum(txt);
+          const period = $('select[data-period]', input.closest('tr')).value;
           if (!txt) { if (cur) deletes.push(cur.id); continue; }
           if (!(n > 0)) { bad.push(cat); continue; }
-          if (!cur || round2(n) !== cur.amount) items.push({ kind: 'budget', id: cur?.id, category: cat, amount: round2(n) });
+          if (!cur || round2(n) !== cur.amount || period !== (cur.period === 'year' ? 'year' : 'month')) {
+            items.push({ kind: 'budget', id: cur?.id, category: cat, amount: round2(n), period });
+          }
         }
         if (bad.length) return ($('#bud-err', body).textContent = `Valor inválido em: ${bad.join(', ')}`);
         if (!items.length && !deletes.length) return modal.close();
@@ -2003,7 +2024,7 @@ function renderYear() {
     return `<div class="panel year-section"><div class="panel-header"><div class="panel-title">${title}</div></div>
       <div class="table-wrap"><table class="data">
         <thead><tr><th>Categoria</th><th class="num">${out ? 'Gasto' : 'Valor'}</th><th class="year-share-col">Peso</th><th class="num">Por mês</th>
-          ${list[0].prev !== null ? `<th class="num" title="${esc(prevTitle)}">Face a ${esc(prevShort)}</th>` : ''}${withBudget ? '<th class="num" title="O limite por mês × 12, como nos Movimentos num ano">Orçamento do ano</th>' : ''}</tr></thead>
+          ${list[0].prev !== null ? `<th class="num" title="${esc(prevTitle)}">Face a ${esc(prevShort)}</th>` : ''}${withBudget ? '<th class="num" title="O limite por mês × 12 ou o limite por ano, como nos Movimentos num ano">Orçamento do ano</th>' : ''}</tr></thead>
         <tbody>${list.map(c => `<tr><td>${esc(c.category)}</td><td class="num">${eur(c.amount)}</td>
           <td><div class="year-share"><div class="progress"><div style="width:${Math.round(c.share * 100)}%"></div></div><span>${Math.round(c.share * 100)}%</span></div></td>
           <td class="num">${eurShort(c.amount / n)}</td>${prevCell(c)}${budgetCell(c)}</tr>`).join('')}

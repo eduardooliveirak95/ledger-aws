@@ -35,7 +35,7 @@ O que vai em cada um e o que fazer todos os meses:
 
 ### Avisos
 
-Por baixo do património líquido aparece "A ver", com o que precisa de atenção: investimentos sem o valor do mês passado, créditos sem o saldo do mês passado, orçamentos deste mês a 80% ou mais, despesas fixas que subiram de preço, metas que já não chegam a tempo ou cujo prazo passou, dinheiro reservado a mais numa conta e a reserva mensal de uma meta por fazer. Cada aviso tem um botão para o resolver e um ✕ para o dispensar. Um aviso dispensado só volta se mudar, por exemplo no mês seguinte. Sem avisos, a secção não aparece.
+Por baixo do património líquido aparece "A ver", com o que precisa de atenção: investimentos sem o valor do mês passado, créditos sem o saldo do mês passado, orçamentos deste mês (nos anuais, desde janeiro) a 80% ou mais, despesas fixas que subiram de preço, metas que já não chegam a tempo ou cujo prazo passou, dinheiro reservado a mais numa conta e a reserva mensal de uma meta por fazer. Cada aviso tem um botão para o resolver e um ✕ para o dispensar. Um aviso dispensado só volta se mudar, por exemplo no mês seguinte. Sem avisos, a secção não aparece.
 
 ### Metas de poupança
 
@@ -69,7 +69,7 @@ As saídas em "Investimentos" e "Amortizações" (ou noutra categoria começada 
 
 Por baixo dos cartões das entradas, dos gastos, do saldo e da taxa de poupança aparece a comparação com a média dos meses anteriores e com o mesmo mês do ano passado (num ano, com o mesmo período do ano anterior). No mês atual só se comparam os dias que já passaram. Passando o rato por cima vês com que meses está a comparar.
 
-Em "Orçamentos" defines quanto queres gastar no máximo por mês em cada categoria, com a média do que gastaste ao lado. Os orçamentos aparecem por baixo dos cartões, para o período escolhido e em todas as contas, com uma barra que fica laranja aos 80% e vermelha quando passa do limite.
+Em "Orçamentos" defines quanto queres gastar no máximo em cada categoria, por mês ou por ano, com a média do que gastaste ao lado. O orçamento por ano serve para gastos que vêm de uma vez, como férias ou seguros: num mês, conta o que gastaste desde janeiro. Os orçamentos aparecem por baixo dos cartões, para o período escolhido e em todas as contas, com uma barra que fica laranja aos 80% e vermelha quando passa do limite.
 
 No mês atual aparece também a previsão para o fim do mês: o saldo de hoje, mais o que já registaste para os próximos dias, mais as entradas habituais que ainda não chegaram (o ordenado, por exemplo), menos as saídas habituais que ainda não saíram (a renda, as subscrições, os aportes), menos o que costumas gastar no dia a dia e ainda não gastaste este mês. É uma estimativa, para a conta escolhida no filtro ou para todas. No cartão dos Movimentos da página inicial aparece esse valor e para quantos meses dos teus gastos dá o dinheiro nas contas.
 

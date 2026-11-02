@@ -119,6 +119,19 @@ test('avisos: os de cada tipo, dos mais graves para os menos, com o botão certo
   assert.ok(list.find(a => a.action.type === 'inv-month').id.startsWith('inv:2026-09:'));
 });
 
+test('avisos: os orçamentos por ano contam desde janeiro e dizem que o limite é do ano', () => {
+  const yearlyBudget = (n, category, amount) => ({ id: 'BUD_' + String(n).padStart(12, '0'), kind: 'budget', category, amount, period: 'year' });
+  run('D = { ...emptyData(), transactions: txs, budgets: bs }', {
+    txs: [out('2026-03-10', 1300, 'Férias', 'Hotel'), out('2026-10-02', 400, 'Férias', 'Voos'),   // 1700 de 2000: 85%
+      out('2026-02-01', 650, 'Seguros', 'Seguro do carro'),                                         // passou o limite do ano
+      out('2026-01-15', 100, 'Presentes', 'Anos')],                                                 // 50%: sem aviso
+    bs: [yearlyBudget(1, 'Férias', 2000), yearlyBudget(2, 'Seguros', 600), yearlyBudget(3, 'Presentes', 200)],
+  });
+  const list = run('homeAlerts()');
+  assert.deepEqual(list.map(a => [a.level, a.action.type]), [['bad', 'mov']]);
+  assert.equal(N(list[0].text), 'Orçamentos de outubro 2026: Seguros 50,00 € acima do limite do ano, Férias a 85% do limite do ano.');
+});
+
 test('sem nada a apontar, não há avisos', () => {
   assert.deepEqual(run('D = emptyData(); homeAlerts()'), []);
 });

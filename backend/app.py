@@ -520,13 +520,14 @@ def build(user, raw):
             item["account_id"] = v_ref(raw.get("account_id"), "account", "account_id")
 
     elif kind == "budget":
-        # Orçamento de uma categoria de saídas: quanto se quer gastar por mês, no máximo.
-        # O browser compara-o com o que se gastou nessa categoria (um orçamento por categoria: o browser
-        # atualiza o que já existe em vez de criar outro).
+        # Orçamento de uma categoria de saídas: quanto se quer gastar no máximo, por mês ou por ano ("period";
+        # os antigos, sem ele, são por mês). O browser compara-o com o que se gastou nessa categoria (um orçamento
+        # por categoria: o browser atualiza o que já existe em vez de criar outro).
         item.update(
             sk=f"BUD_{h}",
             category=v_text(raw.get("category"), "category", MAX_NAME, required=True),
             amount=v_num(raw.get("amount"), "amount", positive=True),
+            period=v_choice(raw.get("period") or "month", "period", ("month", "year")),
         )
 
     elif kind == "goal":
