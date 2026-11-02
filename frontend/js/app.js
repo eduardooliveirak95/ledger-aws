@@ -2005,7 +2005,7 @@ function renderYear() {
     <div class="panel-body">${bars}</div>${monthsTable}
     <div class="chart-note year-note">Saldo = entradas − gastos − investido e amortizado: o que ficou nas contas. Taxa de poupança: do que entrou, quanto não foi gasto.</div></div>`;
 
-  // ── por categoria: peso, por mês, face ao ano anterior e, nos gastos, o orçamento do ano (o limite por mês × 12) ──
+  // ── por categoria: peso, por mês, face ao ano anterior e, nos gastos, o orçamento do ano (o limite por mês × 12 ou o limite por ano) ──
   const catTable = (title, list, out) => {
     if (!list.length) return '';
     const withBudget = out && list.some(c => c.budget !== null);

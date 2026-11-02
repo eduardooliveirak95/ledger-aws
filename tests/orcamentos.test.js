@@ -85,7 +85,7 @@ test('por ano, num mês: conta o gasto desde janeiro até esse mês e o limite d
     ['Lazer', 'month', '2026-09', 1, 40, 50, 10, 'near'],
     ['Seguros', 'year', '2026-01', 1, 450, 600, 150, 'ok'],
   ]);
-  // em janeiro só conta janeiro; num mês antes do gasto, ainda não conta
+  // em fevereiro ainda não houve gastos dos anuais (contam 0); em março já conta o seguro de março
   assert.deepEqual(status('2026-02', '2026-02').filter(b => b.period === 'year').map(b => [b.category, b.spent]), [['Férias', 0], ['Seguros', 0]]);
   assert.equal(status('2026-03', '2026-03').find(b => b.category === 'Seguros').spent, 450);
   // num mês do ano anterior, conta desde janeiro desse ano

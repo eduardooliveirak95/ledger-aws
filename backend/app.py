@@ -23,7 +23,7 @@ Todos os dados vivem numa ÚNICA tabela DynamoDB ("single-table design"):
                                  com a prestação paga e a amortização extraordinária desse mês
     PROP_<hex>                   imóvel (casa, terreno...) com o valor atual
     BFMT_<hex>                   colunas escolhidas para os CSV de um banco (importar extratos)
-    BUD_<hex>                    orçamento de uma categoria de saídas (limite por mês)
+    BUD_<hex>                    orçamento de uma categoria de saídas (limite por mês ou por ano)
     GOAL_<hex>                   meta de poupança (quanto juntar, até quando e se conta com reservas ou com o património)
     GRES_<AAAA-MM-DD>_<hex>      reserva para uma meta: parte do saldo de uma conta ou investimento posta de lado (ou tirada)
     ALT_<hex>                    alvo da alocação dos investimentos: a percentagem da carteira para um tipo (ETF, PPR...)

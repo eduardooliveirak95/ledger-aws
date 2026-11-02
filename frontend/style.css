@@ -452,7 +452,7 @@ a.li-name:hover { color: var(--accent); }
 .loan-meta .v { font-family: var(--font-num); font-size: 13px; margin-top: 3px; }
 .loan-actions { display: flex; justify-content: flex-end; }
 table.sim-table th.num { white-space: normal; }   /* "Reduzir a prestação" pode partir em duas linhas */
-table.budget-edit td.budget-limit { width: 140px; }   /* campo do limite na janela dos orçamentos (mais estreito no telemóvel) */
+table.budget-edit td.budget-limit { width: 140px; }   /* campo do alvo na janela dos alvos da alocação (mais estreito no telemóvel) */
 /* orçamentos: o limite e, ao lado, "por mês" ou "por ano" (no telemóvel, por baixo) */
 table.budget-edit td.budget-cap { width: 240px; }
 .budget-cap-row { display: flex; gap: 6px; }
@@ -650,11 +650,11 @@ table.grid-edit .num { font-family: var(--font-num); text-align: right; color: v
   .alloc-row .alloc-bar { grid-column: 1 / -1; grid-row: 2; }
   .alloc-row .alloc-value { display: none; }   /* sem a coluna do valor (fica o % e o que falta) */
   table.sim-table th, table.sim-table td { padding: 8px 6px; font-size: 12px; }   /* simulador: as 4 colunas cabem no ecrã */
-  /* orçamentos: os títulos das colunas partem em duas linhas e o campo encolhe, para a tabela caber no ecrã */
+  /* orçamentos e alvos da alocação: os títulos das colunas partem em duas linhas e o campo encolhe, para a tabela caber no ecrã */
   table.budget-edit th.num { white-space: normal; }
   table.budget-edit th, table.budget-edit td { padding: 6px 5px; }
-  table.budget-edit td.budget-limit { width: 92px; }
-  table.budget-edit td.budget-cap { width: 96px; }
+  table.budget-edit td.budget-limit { width: 92px; }   /* alvos */
+  table.budget-edit td.budget-cap { width: 96px; }   /* orçamentos: a escolha "por mês / por ano" passa para baixo do campo */
   .budget-cap-row { flex-direction: column; gap: 4px; }
   .budget-cap-row select { width: 100%; padding: 6px 4px; }
   .year-title { font-size: 22px; }
