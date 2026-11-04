@@ -504,6 +504,16 @@ async function runBankImport(plan, onProgress) {
   return { saved: items.length, updated: plan.updates.filter(u => u.kind === 'transaction').length, skipped: plan.skipped, parents: news.length };
 }
 
+// Depois de importar: o saldo de cada conta na app no último dia do extrato bate com o do banco (balanceCheck)? Só as contas
+// importadas com saldos. Se não bater, faltam ou sobram movimentos nesse período (ex.: um movimento registado à mão que não está
+// no extrato) ou o saldo antes do extrato ficou por acertar. [{ name, date, app, bank, diff, ok, last }]
+function importBalanceChecks(plan) {
+  return plan.accounts.filter(acc => acc.choice !== 'skip' && acc.closing !== null).flatMap(acc => {
+    const id = acc.choice === 'new' ? D.accounts.find(a => norm(a.name) === norm(acc.defaultName))?.id : acc.choice;
+    return id ? [{ name: accountName(id), date: acc.to, ...balanceCheck(id, acc.to, acc.closing) }] : [];
+  });
+}
+
 /** Resumo em HTML para a janela de importação: contas, saldos, avisos e totais por categoria. */
 function bankPreviewHTML(plan) {
   const accOpts = acc => [

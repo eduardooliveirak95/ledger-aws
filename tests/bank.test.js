@@ -263,3 +263,36 @@ test('o backup inclui as contas (tipo e saldo inicial) e o importar atualiza as 
     { id: 'ACC_aaaaaaaaaaaa', kind: 'account', name: 'Ordem', acc_type: 'Conta à ordem', opening_balance: 10, opening_date: '2026-01-01' }] });
   assert.deepEqual(run('exportRows("acc")'), [['Ordem', 'Conta à ordem', 10, '2026-01-01'], ['Zeta', 'Dinheiro', 20, '2026-02-01']]);
 });
+
+// API simulada para o runBankImport: devolve os itens gravados com um id
+let apiSeq = 0;
+ctx.api = { save: async items => ({ saved: items.map(it => ({ ...it, id: it.id || (it.kind === 'account' ? 'ACC_'
+  : it.kind === 'transaction' ? `TX_${it.date}_` : 'BFMT_') + (++apiSeq).toString(16).padStart(12, '0') })), deleted: [] }) };
+
+test('conferir o saldo: o da app no fim de um dia, a diferença para o banco e o último movimento', () => {
+  const A = 'ACC_000000000001';
+  reset({ accounts: [{ id: A, kind: 'account', name: 'Ordem', acc_type: 'Conta à ordem', opening_balance: 100, opening_date: '2026-09-01' }],
+    transactions: [{ id: 'TX_2026-09-10_000000000001', kind: 'transaction', date: '2026-09-10', direction: 'out', amount: 30, account_id: A, category: 'Outros' },
+      { id: 'TX_2026-09-20_000000000002', kind: 'transaction', date: '2026-09-20', direction: 'in', amount: 50.5, account_id: A, category: 'Outros' }] });
+  assert.deepEqual(run('balanceCheck(a, "2026-09-30", 120.5)', { a: A }), { app: 120.5, bank: 120.5, diff: 0, ok: true, last: '2026-09-20' });
+  // a app tem 30 € a mais (ex.: falta a saída de 30 €) e, antes do 1.º movimento, só o saldo inicial
+  assert.deepEqual(run('balanceCheck(a, "2026-09-30", 90.5)', { a: A }), { app: 120.5, bank: 90.5, diff: 30, ok: false, last: '2026-09-20' });
+  assert.deepEqual(run('balanceCheck(a, "2026-09-05", 100)', { a: A }), { app: 100, bank: 100, diff: 0, ok: true, last: null });
+  // uma transferência recebida de outra conta também é um movimento desta conta
+  run('D.transactions.push({ id: "TX_2026-09-25_000000000003", kind: "transaction", date: "2026-09-25", direction: "transfer", amount: 10, account_id: "ACC_000000000002", to_account_id: a, category: "Transferência" })', { a: A });
+  assert.deepEqual(run('balanceCheck(a, "2026-09-30", 130.5)', { a: A }), { app: 130.5, bank: 130.5, diff: 0, ok: true, last: '2026-09-25' });
+});
+
+test('depois de importar, o saldo no fim do extrato bate com o da app (e não bate se houver um movimento a mais na app)', async () => {
+  reset();
+  const plan = run('planBankImport([parseStatementCsv(a)])', { a: ORDEM });
+  ctx.plan = plan;
+  await vm.runInContext('runBankImport(plan)', ctx);
+  assert.deepEqual(run('importBalanceChecks(plan)').map(c => [c.date, c.bank, c.app, c.ok]), [['2026-10-03', 1150, 1150, true]]);
+  // um movimento registado à mão nesse período, que não está no extrato: a app fica com 15 € a menos
+  const acc = run('D.accounts[0].id');
+  run('D.transactions.push({ id: "TX_2026-10-02_00000000ffff", kind: "transaction", date: "2026-10-02", direction: "out", amount: 15, account_id: a, category: "Outros" })', { a: acc });
+  assert.deepEqual(run('importBalanceChecks(plan)').map(c => [c.name, c.diff, c.ok]), [[run('D.accounts[0].name'), -15, false]]);
+  // contas que não se importaram ou extratos sem saldos não se conferem
+  assert.deepEqual(run('importBalanceChecks({ accounts: [{ choice: "skip", closing: 10 }, { choice: a, closing: null }] })', { a: acc }), []);
+});

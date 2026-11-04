@@ -490,6 +490,30 @@ table.budget-edit td.budget-cap { width: 240px; }
 .alert-actions { flex: none; display: flex; align-items: center; gap: 4px; }
 /* Previsão para o fim do mês (Movimentos): uma linha por parcela, o valor à direita */
 .forecast-total { font-family: var(--font-num); font-size: 20px; font-weight: 700; }
+/* Calendário do mês (▦ Calendário nos Movimentos): grelha de segunda a domingo; no telemóvel passa a lista (ver o fim) */
+.cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.cal-head { font-size: var(--label-size); font-weight: 700; letter-spacing: var(--caps-spacing); text-transform: var(--caps);
+  color: var(--muted); text-align: center; padding: 2px 0; }
+.cal-day { min-height: 74px; border: 1px solid var(--border); border-radius: 8px; padding: 4px 5px; display: flex; flex-direction: column;
+  gap: 2px; font-size: 11px; min-width: 0; }
+.cal-pad { border: none; }
+.cal-num { font-weight: 600; color: var(--muted); }
+.cal-wd { display: none; }   /* o dia da semana só aparece na lista do telemóvel */
+.cal-today { border-color: var(--accent); }
+.cal-today .cal-num { color: var(--accent); }
+.cal-low { background: var(--surface2); }
+.cal-item { line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal-item b { font-family: var(--font-num); font-weight: 600; }
+.cal-item.done { color: var(--muted); }
+.cal-item.done b { color: var(--muted); }
+.cal-item.missed { color: var(--muted); text-decoration: line-through; }
+.cal-item.missed b { color: var(--muted); }
+.cal-bal { margin-top: auto; text-align: right; font-family: var(--font-num); font-size: 11px; color: var(--muted); }
+.cal-bal.neg { color: var(--neg); }
+.cal-low .cal-bal { color: var(--text); font-weight: 700; }
+.cal-low .cal-bal.neg { color: var(--neg); }
+.panel-actions, .chk-actions { display: flex; gap: 8px; flex-wrap: wrap; }   /* vários botões juntos (Contas, Conferir saldo) */
+.chk-actions { margin: 10px 0 4px; }
 .forecast-body { padding: 8px 18px 14px; }
 .forecast-row { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; padding: 6px 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
 .forecast-row b { font-family: var(--font-num); font-weight: 600; color: var(--text); white-space: nowrap; }
@@ -657,6 +681,14 @@ table.grid-edit .num { font-family: var(--font-num); text-align: right; color: v
   table.budget-edit td.budget-cap { width: 96px; }   /* orçamentos: a escolha "por mês / por ano" passa para baixo do campo */
   .budget-cap-row { flex-direction: column; gap: 4px; }
   .budget-cap-row select { width: 100%; padding: 6px 4px; }
+  /* calendário: uma lista só com os dias que têm alguma coisa (mais hoje e o dia mais apertado) */
+  .cal-grid { grid-template-columns: 1fr; }
+  .cal-head, .cal-pad, .cal-quiet { display: none; }
+  .cal-day { min-height: 0; flex-direction: row; flex-wrap: wrap; align-items: baseline; column-gap: 10px; padding: 6px 10px; }
+  .cal-num { width: 52px; }
+  .cal-wd { display: inline; }
+  .cal-item { white-space: normal; flex: 1 1 60%; }
+  .cal-bal { margin-left: auto; }
   .year-title { font-size: 22px; }
   .year-bars, .year-bar-labels { gap: 3px; }
   .year-bars { height: 100px; }

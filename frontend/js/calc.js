@@ -72,6 +72,22 @@ function accountBalance(accountId, upToDate = '9999-12-31') {
   return round2(b);
 }
 
+/**
+ * Conferir o saldo de uma conta com o do banco: o saldo da app no fim do dia `date` (accountBalance) e a diferença para o
+ * que o banco mostra (bank). diff = app − banco: positivo, a app tem a mais (ex.: falta uma saída ou há uma entrada repetida);
+ * negativo, tem a menos. last = data do último movimento da conta até esse dia (null sem nenhum), para ver se falta importar
+ * alguma coisa. { app, bank, diff, ok, last }
+ */
+function balanceCheck(accountId, date, bank) {
+  const app = accountBalance(accountId, date);
+  let last = null;
+  for (const t of D.transactions) {
+    if (t.date <= date && (t.account_id === accountId || t.to_account_id === accountId) && (!last || t.date > last)) last = t.date;
+  }
+  const diff = round2(app - bank);
+  return { app, bank: round2(bank), diff, ok: diff === 0, last };
+}
+
 // Soma dos saldos de todas as contas numa data
 function totalAccountsBalance(upToDate = '9999-12-31') {
   let b = D.accounts.reduce((s, a) => s + a.opening_balance, 0);
@@ -393,6 +409,56 @@ function monthForecast(account = '') {
 }
 
 /**
+ * Calendário do mês atual, numa conta ou em todas: em cada dia, as entradas e saídas habituais (recurringFlows) no dia do mês
+ * em que apareceram da última vez (num mês mais curto, no último dia) e os movimentos já registados para os próximos dias.
+ * Cada item é { description, amount, sign, state }, com state:
+ *   done       habitual que já aconteceu este mês (no dia em que aconteceu)
+ *   due        habitual por vir
+ *   late       saída habitual cujo dia já passou e ainda não saiu: fica hoje, porque pode sair a qualquer momento
+ *   missed     entrada habitual cujo dia já passou e ainda não veio (como na previsão, não conta)
+ *   scheduled  movimento já registado com data entre amanhã e o fim do mês
+ * balance = saldo previsto no fim de cada dia, de hoje até ao fim do mês (null antes de hoje): o de hoje + o que está registado
+ * e as habituais por vir até esse dia − os gastos do dia a dia que faltam (monthForecast.daily), repartidos por igual pelos
+ * dias que faltam (hoje incluído). No último dia dá o mesmo que monthForecast().total.
+ * { month, today, days: [{ date, day, weekday (0 = segunda … 6 = domingo), items, balance }], low: o dia com o saldo previsto
+ * mais baixo, total }
+ */
+function monthCalendar(account = '') {
+  const now = thisMonth(), today = todayISO(), f = monthForecast(account);
+  const nDays = Number(lastDayOf(now).slice(8, 10)), todayDay = Number(today.slice(8, 10));
+  const dateOf = d => `${now}-${String(d).padStart(2, '0')}`;
+  const byDate = Object.create(null);
+  const add = (date, item) => (byDate[date] ||= []).push(item);
+  for (const x of recurringFlows(account)) {
+    const amount = x.amounts[x.amounts.length - 1], base = { description: x.description, amount, sign: x.sign };
+    // já apareceu este mês: no dia em que aconteceu (se foi registada para um dia que ainda não chegou, entra como 'scheduled', abaixo)
+    if (ymOf(x.last) === now) { if (x.last <= today) add(x.last, { ...base, state: 'done' }); continue; }
+    const date = dateOf(Math.min(Number(x.last.slice(8, 10)), nDays));
+    if (!x.pending) add(date, { ...base, state: 'missed' });
+    else if (date >= today) add(date, { ...base, state: 'due' });
+    else add(today, { ...base, state: 'late' });   // só as saídas: uma entrada cujo dia passou já não conta (pending)
+  }
+  for (const t of D.transactions) {
+    const e = t.date > today && ymOf(t.date) === now ? txEffect(t, account) : 0;
+    if (e) add(t.date, { description: t.description || t.category, amount: Math.abs(e), sign: Math.sign(e), state: 'scheduled' });
+  }
+  const left = nDays - todayDay + 1;
+  let moved = 0, low = null;
+  const days = [];
+  for (let d = 1; d <= nDays; d++) {
+    const date = dateOf(d), items = byDate[date] || [];
+    let balance = null;
+    if (d >= todayDay) {
+      for (const it of items) if (it.state === 'due' || it.state === 'late' || it.state === 'scheduled') moved += it.sign * it.amount;
+      balance = round2(f.balance + moved - f.daily * (d - todayDay + 1) / left);
+      if (!low || balance < low.balance) low = { date, balance };
+    }
+    days.push({ date, day: d, weekday: (new Date(date + 'T12:00:00Z').getUTCDay() + 6) % 7, items, balance });
+  }
+  return { month: now, today, days, low, total: f.total };
+}
+
+/**
  * Para quantos meses de gastos dá o dinheiro nas contas (o "fundo de emergência"): o saldo de hoje em todas as contas a
  * dividir pela média dos gastos por mês (flowTotals: sem investimentos nem amortizações) dos 12 meses completos antes do atual,
  * só desde o primeiro movimento. null sem um mês completo ou sem gastos. { months, avg, cash, n }
@@ -711,6 +777,36 @@ function simulateEarlyRepayment(loan, amount, feePct = 0) {
   return { balance, now, fee, paidOff: false, byPayment, byTerm };
 }
 
+/**
+ * Em vez de amortizar, investir: quanto `amount` € rendem investidos durante `months` meses (o prazo que falta do crédito) a
+ * ret % por ano (juros compostos), com o imposto de tax % sobre o ganho, pago no fim (28% em Portugal, nas mais-valias e nos
+ * juros). { gain, tax, net }
+ */
+function investInstead(amount, ret, months, tax = 28) {
+  const gain = amount * (Math.pow(1 + ret / 100, months / 12) - 1), t = Math.max(0, gain) * tax / 100;
+  return { gain: round2(gain), tax: round2(t), net: round2(gain - t) };
+}
+// A rentabilidade por ano (antes do imposto) a partir da qual investir `amount` € durante `months` meses rende mais do que os
+// `saved` € líquidos que se poupam a amortizar (o investInstead ao contrário). 0 se amortizar não poupa nada.
+function breakEvenReturn(saved, amount, months, tax = 28) {
+  if (!(saved > 0)) return 0;
+  return (Math.pow(1 + saved / (amount * (1 - tax / 100)), 12 / months) - 1) * 100;
+}
+
+/**
+ * Amortizar ou investir, para o simulador (s = simulateEarlyRepayment de `amount` €): compara a poupança líquida de amortizar e
+ * reduzir o prazo (amort) com o ganho líquido de investir o mesmo valor durante o prazo que falta a ret % por ano (invest; null
+ * sem ret). A conta é justa assim: quem reduz o prazo deixa de pagar as últimas prestações, que somam o valor amortizado + os juros
+ * poupados, e no fim do prazo tem isso; quem investe tem o valor + o ganho. breakEven = a rentabilidade a partir da qual investir
+ * compensa. Devolve null se o valor pagar o crédito todo: aí as prestações deixam de sair logo no mês seguinte (não no fim), e
+ * esta conta já não serve (pagar o crédito "rende" a taxa dele, sem risco e sem imposto).
+ */
+function investComparison(s, amount, ret, months, tax = 28) {
+  if (!s || s.paidOff || !(amount > 0)) return null;
+  const amort = s.byTerm.net, invest = Number.isFinite(ret) ? investInstead(amount, ret, months, tax) : null;
+  return { amort, invest, breakEven: breakEvenReturn(amort, amount, months, tax), better: invest && (invest.net > amort ? 'invest' : 'amortize') };
+}
+
 // ════════ IMÓVEIS ════════
 
 // Soma do valor atual de todos os imóveis
@@ -737,6 +833,52 @@ function netWorth() {
   const properties = propertiesTotal();
   const debt = round2(D.loans.reduce((s, l) => s + loanCurrent(l), 0));
   return { accounts, investments, properties, debt, total: round2(accounts + investments + properties - debt) };
+}
+
+// ════════ SIMULADOR DO FUTURO ════════
+
+/**
+ * Valores para começar o simulador do futuro, tirados dos teus dados: start = contas + investimentos de hoje (o dinheiro que
+ * pode render; sem imóveis nem créditos; nunca negativo); monthly = o que poupaste em média por mês (entradas − gastos: flowTotals.saved, onde
+ * os aportes e as amortizações contam como poupança) nos 12 meses completos antes do atual, só desde o primeiro movimento (0
+ * sem nenhum mês completo; nunca negativo), e months = por quantos meses; ret = a rentabilidade por ano da carteira
+ * (annualReturn, em %, a 0,1) ou null sem ela.
+ */
+function futureDefaults() {
+  const nw = netWorth(), first = firstTxMonth(), now = thisMonth(), to = addMonths(now, -1);
+  let monthly = 0, months = 0;
+  if (first && first <= to) {
+    const from = [addMonths(now, -12), first].sort().pop();
+    months = monthRange(from, to).length;
+    monthly = Math.max(0, round2(flowTotals(filterTx({ from, to })).saved / months));
+  }
+  const r = annualReturn('');
+  return { start: Math.max(0, round2(nw.accounts + nw.investments)), monthly, months, ret: isFinite(r) ? Math.round(r * 1000) / 10 : null };
+}
+
+/**
+ * Projeção mês a mês: começa com start €, junta monthly € no fim de cada mês e rende ret % por ano (juros compostos todos os
+ * meses, (1 + ret)^(1/12) − 1), durante years anos. inflation % por ano dá também o valor em euros de hoje (real). Com
+ * target, eta = em quantos meses se chega lá (0 se já lá está; procura até 100 anos, mesmo depois do prazo; null se nunca).
+ * É uma simulação: rentabilidade igual todos os anos e sem impostos.
+ * { rows: um por ano, a começar em hoje (year 0): { year, value, contributed, real }, end: a última, com gain = value −
+ * contributed, eta }; contributed = start + o que se juntou.
+ */
+function futureProjection({ start = 0, monthly = 0, ret = 0, years = 10, inflation = 0, target = null }) {
+  const rm = Math.pow(1 + ret / 100, 1 / 12) - 1, horizon = years * 12;
+  let v = start, c = start, eta = target !== null && start >= target ? 0 : null;
+  const rows = [{ year: 0, value: round2(v), contributed: round2(c), real: round2(v) }];
+  for (let m = 1; m <= Math.max(horizon, target === null ? 0 : 1200); m++) {
+    v = v * (1 + rm) + monthly;
+    c += monthly;
+    if (eta === null && target !== null && v >= target) eta = m;
+    if (m <= horizon && m % 12 === 0) {
+      rows.push({ year: m / 12, value: round2(v), contributed: round2(c), real: round2(v / Math.pow(1 + inflation / 100, m / 12)) });
+    }
+    if (m >= horizon && (target === null || eta !== null)) break;
+  }
+  const end = rows[rows.length - 1];
+  return { rows, end: { ...end, gain: round2(end.value - end.contributed) }, eta };
 }
 
 /**

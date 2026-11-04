@@ -132,3 +132,49 @@ test('alocação por tipo: peso de hoje, alvo e quanto falta ou sobra', () => {
   load({});
   assert.deepEqual(run('allocation()'), []);
 });
+
+test('calendário do mês: as habituais no dia em que costumam acontecer e o saldo previsto no fim de cada dia', () => {
+  load(DATA);
+  const c = run('monthCalendar()');
+  assert.equal(c.month, '2026-10');
+  assert.equal(c.days.length, 31);
+  assert.deepEqual([c.days[0].weekday, c.days[18].weekday], [3, 0]);   // 1/10/2026 é uma quinta e o 19 uma segunda
+  const at = d => c.days[d - 1].items.map(x => [x.description, x.sign * x.amount, x.state]);
+  assert.deepEqual(at(1), [['RENDA', -700, 'done']]);              // já saiu este mês, no dia em que saiu
+  assert.deepEqual(at(2), [['REEMBOLSO', 50, 'missed']]);           // entrada atrasada: não veio e não conta
+  assert.deepEqual(at(19).sort(), [['APORTE ETF', -300, 'late'], ['GINASIO', -30, 'late']]);   // saídas atrasadas: ficam hoje
+  assert.deepEqual(at(20), [['ORDENADO', 2000, 'due']]);
+  assert.deepEqual(at(25), [['SEGURO CARRO', -120, 'scheduled']]);   // já registado, com data futura
+  assert.deepEqual(at(28), [['FIBRA', -40, 'due']]);
+  // saldo: só de hoje para a frente, com os 200 € do dia a dia que faltam repartidos pelos 13 dias (19 a 31)
+  assert.equal(c.days[17].balance, null);
+  assert.deepEqual([19, 20, 25, 28, 31].map(d => c.days[d - 1].balance), [
+    6800 - 330 - 15.38, 6800 - 330 + 2000 - 30.77, 6800 - 330 + 2000 - 120 - 107.69, 6800 - 330 + 2000 - 160 - 153.85, 8110]);
+  assert.equal(c.days[30].balance, run('monthForecast().total'));   // o último dia dá a previsão para o fim do mês
+  assert.deepEqual(c.low, { date: '2026-10-19', balance: 6454.62 });
+  // numa só conta: a Poupança só recebe a transferência, que já entrou este mês
+  const p = run('monthCalendar(a)', { a: ACC2 });
+  assert.deepEqual(p.days[2].items.map(x => [x.description, x.sign, x.state]), [['PARA POUPANCA', 1, 'done']]);
+  assert.deepEqual([p.days[18].balance, p.days[30].balance, p.low], [4200, 4200, { date: '2026-10-19', balance: 4200 }]);
+});
+
+test('calendário: uma habitual já registada para um dia que ainda não chegou aparece uma só vez, como registada', () => {
+  load({ ...DATA, transactions: [...DATA.transactions, tx('2026-10-28', 'out', 40, 'FIBRA')] });
+  const c = run('monthCalendar()');
+  assert.deepEqual(c.days[27].items.map(x => [x.description, x.sign * x.amount, x.state]), [['FIBRA', -40, 'scheduled']]);
+  assert.equal(c.days[30].balance, run('monthForecast().total'));   // conta uma vez, como na previsão
+  assert.equal(c.days[30].balance, 8110);
+});
+
+test('calendário: num mês mais curto, uma habitual do dia 31 fica no último dia', () => {
+  vm.runInContext('todayISO = () => "2026-02-10"', ctx);
+  try {
+    load({ accounts: DATA.accounts, transactions: ['2025-10-31', '2025-11-30', '2025-12-31', '2026-01-31'].map(d => tx(d, 'out', 60, 'CONDOMINIO')) });
+    const c = run('monthCalendar()');
+    assert.equal(c.days.length, 28);
+    assert.deepEqual(c.days[27].items.map(x => [x.description, x.state]), [['CONDOMINIO', 'due']]);
+    assert.equal(c.days[0].weekday, 6);   // 1/2/2026 é um domingo
+  } finally {
+    vm.runInContext('todayISO = () => "2026-10-19"', ctx);
+  }
+});

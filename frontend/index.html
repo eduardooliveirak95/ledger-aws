@@ -193,7 +193,11 @@
     </div>
     <!-- evolução do património líquido mês a mês (netWorthSeries no calc.js, renderNetWorthChart no app.js) -->
     <div class="panel" style="margin-top:16px">
-      <div class="panel-header"><div class="panel-title">Evolução do património líquido</div></div>
+      <div class="panel-header">
+        <div class="panel-title">Evolução do património líquido</div>
+        <!-- quanto terás daqui a uns anos (futureProjection no calc.js, futureModal no app.js) -->
+        <button class="btn" data-action="future">Simular o futuro</button>
+      </div>
       <div class="panel-body">
         <div class="chart-box tall"><canvas id="chart-nw"></canvas></div>
         <div class="chart-note hidden" id="nw-chart-note">Imóveis: a app só guarda o valor atual, por isso os meses anteriores
@@ -226,6 +230,7 @@
       <div class="toolbar-right">
         <button class="btn" data-action="budgets">◎ Orçamentos</button>
         <button class="btn" data-action="mov-recurring">↻ Despesas fixas</button>
+        <button class="btn" data-action="mov-calendar">▦ Calendário</button>
         <button class="btn" data-action="mov-history">Histórico por mês</button>
         <button class="btn" data-action="import" data-format="mov">⬆ Importar</button>
         <button class="btn" data-action="export" data-format="mov">⬇ Exportar</button>
@@ -274,7 +279,9 @@
       <div class="panel">
         <div class="panel-header">
           <div class="panel-title">Contas</div>
-          <button class="btn" data-action="acc-new">+ Conta</button>
+          <!-- conferir o saldo de uma conta com o do banco (balanceCheck no calc.js, balanceCheckModal no app.js) -->
+          <div class="panel-actions"><button class="btn" data-action="acc-check">Conferir saldo</button>
+            <button class="btn" data-action="acc-new">+ Conta</button></div>
         </div>
         <div id="acc-list"></div>
       </div>

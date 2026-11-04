@@ -53,6 +53,10 @@ Ao criar uma meta, a app sugere quanto juntar para um fundo de emergência: 3 a 
 
 As metas e as reservas, tal como os orçamentos e os alvos da alocação, não entram no backup.
 
+### Simular o futuro
+
+No gráfico da evolução do património, "Simular o futuro" mostra quanto podes ter daqui a uns anos. Começa com as tuas contas e investimentos de hoje, com o que poupaste em média por mês no último ano e com a rentabilidade da tua carteira, e podes mudar tudo. Mostra o valor no fim do prazo, também em euros de hoje (descontada a inflação), quanto disso é o que juntaste e quanto é o que rendeu. Se puseres um objetivo, diz quando lá chegas. A rentabilidade é igual todos os anos e não há impostos. É só uma simulação, não grava nada.
+
 ### Resumo do ano
 
 O cartão "Resumo do ano" (também na barra lateral) mostra o ano num relance: entradas, gastos, taxa de poupança e património líquido, comparados com o ano anterior, alguns destaques (o maior gasto, os meses com mais e menos gastos, as categorias que mais subiram e desceram), o património no início e no fim, o mês a mês, os gastos e as entradas por categoria (com os orçamentos do ano), os investimentos e os créditos. Num ano que já acabou mostra o ano inteiro. No ano atual mostra de 1 de janeiro até hoje e compara com o mesmo período do ano anterior. As setas mudam de ano.
@@ -75,6 +79,10 @@ No mês atual aparece também a previsão para o fim do mês: o saldo de hoje, m
 
 "Despesas fixas" mostra as saídas que se repetem todos os meses (renda, luz, ginásio, subscrições...) nos últimos 12 meses, com quanto somam por mês e por ano. As que mudam de valor, como a luz, aparecem com ≈. Carregando numa vês esses movimentos na tabela.
 
+"Calendário" mostra o mês atual com as entradas e saídas que se repetem todos os meses no dia em que costumam acontecer (o ordenado, a renda, as subscrições) e, por baixo de cada dia, o saldo previsto no fim desse dia. Assim vês o dia em que a conta fica mais apertada. Conta com a conta escolhida no filtro, ou com todas. No telemóvel aparece em lista, só com os dias que têm alguma coisa.
+
+Em "Conferir saldo", nas Contas, escreves o saldo que o banco mostra num dia e a app diz se bate com o dela. Se não bater, falta algum movimento, há algum repetido ou o saldo inicial está errado. Daí podes ir ver os movimentos desse mês ou acertar o saldo inicial.
+
 ### Investimentos
 
 Na carteira completa, "Alocação por tipo" mostra quanto pesa cada tipo de investimento (ETF, PPR, cripto...). Em "Alvos" dizes que percentagem queres em cada um (têm de somar 100%), e a app mostra quanto falta ou sobra em cada tipo para lá chegar. Assim sabes onde pôr os próximos aportes. Se um tipo se afastar mais de 5 pontos do alvo, aparece um aviso na página inicial.
@@ -86,6 +94,8 @@ Ao lado do ganho em percentagem aparece a rentabilidade por ano, que conta com a
 Os juros de cada mês saem do saldo e da prestação que registas. Para saber quando acabas de pagar, preenche o fim do contrato na ficha do crédito. Para registar uma amortização antiga, abre "Atualizar mês", escolhe esse mês e preenche a amortização extra.
 
 Em "Simular amortização" escreves quanto queres amortizar (e a comissão, se houver) e vês quanto poupas em juros a reduzir a prestação ou a reduzir o prazo. Precisa da taxa e da prestação ou do fim do contrato. É só uma simulação, não grava nada.
+
+No mesmo sítio dá para comparar com investir esse dinheiro: escreves a rentabilidade por ano e vês quanto rendia durante o prazo que falta, já com o imposto de 28% sobre o ganho, e o que compensa mais. A app diz também a partir de que rentabilidade investir passa a compensar. Amortizar é garantido; investir tem risco.
 
 ### Património
 
@@ -107,6 +117,6 @@ Se ligares o "Backup diário", recebes os mesmos CSV no email da tua conta todos
 
 O botão Importar, em cada separador, serve para recuperar um backup ou trazer dados de outro lado: os modelos CSV (descarregam-se na própria janela), CSV do Excel, exportações de uma corretora (transações e portefólio, com o ISIN) e movimentos do banco em CSV. Se o banco puser os dados da conta antes dos movimentos, a app lê o ficheiro sozinha. Com os outros, reconhece as colunas (data, descrição, valor ou débito/crédito, saldo) e mostra-tas para confirmares ou corrigires. Da próxima vez já se lembra das colunas e da conta.
 
-Nos extratos podes importar vários ficheiros de uma vez e escolher a conta da app. A categoria de cada movimento é adivinhada pela descrição, e se mudares uma, os próximos iguais passam a seguir essa.
+Nos extratos podes importar vários ficheiros de uma vez e escolher a conta da app. A categoria de cada movimento é adivinhada pela descrição, e se mudares uma, os próximos iguais passam a seguir essa. Se o extrato tiver saldos, a app confere no fim se o saldo do último dia bate com o dela e avisa se não bater.
 
 Para recuperar um backup, importa os ficheiros um a um, com o dos créditos antes do do património (a casa fica ligada ao crédito). Importar o mesmo ficheiro duas vezes não duplica nada.

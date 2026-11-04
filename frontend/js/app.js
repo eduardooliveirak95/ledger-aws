@@ -355,6 +355,74 @@ function renderNetWorthChart() {
   $('#nw-chart-note').classList.toggle('hidden', !enough || !D.properties.length);
 }
 
+// ── simulador do futuro (botão "Simular o futuro" no gráfico do património; futureProjection no calc.js) ──
+// Começa com os teus números (futureDefaults) e mostra quanto terás daqui a uns anos e quando chegas a um objetivo.
+// Não grava nada.
+function futureModal() {
+  const def = futureDefaults();
+  const body = document.createElement('div');
+  body.style.cssText = 'display:flex;flex-direction:column;gap:14px';
+  const field = (id, label, value, hint = '') => `<div class="field"><label for="${id}">${label}</label>
+    <input id="${id}" inputmode="decimal" value="${value === null ? '' : numInput(value)}">${hint ? `<div class="hint">${hint}</div>` : ''}</div>`;
+  body.innerHTML = `
+    <div class="modal-hint">Quanto podes ter daqui a uns anos se continuares a poupar. Os valores já preenchidos vêm dos teus dados e podes
+      mudá-los. A rentabilidade é igual todos os anos e não há impostos: é só uma simulação, não grava nada.</div>
+    <div class="field-row">
+      ${field('fut-start', 'Ponto de partida (€)', def.start, 'As tuas contas e investimentos de hoje.')}
+      ${field('fut-monthly', 'Poupança por mês (€)', def.monthly, def.months
+        ? `O que poupaste em média nos últimos ${def.months} ${def.months === 1 ? 'mês' : 'meses'} (entradas − gastos).` : '')}
+    </div>
+    <div class="field-row">
+      ${field('fut-ret', 'Rentabilidade (% por ano)', def.ret ?? 4, def.ret !== null ? 'A da tua carteira até hoje.'
+        : 'Exemplo. Uma conta a prazo dá pouco; uma carteira de ações, mais, mas com anos maus.')}
+      ${field('fut-inf', 'Inflação (% por ano)', 2, 'Para veres quanto vale em euros de hoje.')}
+    </div>
+    <div class="field-row">
+      ${field('fut-years', 'Prazo (anos)', 10)}
+      ${field('fut-target', 'Objetivo (€, opcional)', null)}
+    </div>
+    <div id="fut-result"></div>
+    <div class="chart-box"><canvas id="chart-future"></canvas></div>`;
+  const val = id => $('#' + id, body).value.trim();
+  const update = () => {
+    const n = id => (val(id) ? parseMoney(val(id)) : NaN);
+    const p = { start: n('fut-start'), monthly: n('fut-monthly'), ret: n('fut-ret'), inflation: n('fut-inf'), years: n('fut-years'),
+      target: val('fut-target') ? n('fut-target') : null };
+    const out = $('#fut-result', body);
+    const bad = [!(p.start >= 0) && 'ponto de partida', !(p.monthly >= 0) && 'poupança por mês', !(p.ret > -100 && p.ret <= 100) && 'rentabilidade',
+      !(p.inflation > -100 && p.inflation <= 100) && 'inflação', !(Number.isInteger(p.years) && p.years >= 1 && p.years <= 60) && 'prazo (1 a 60 anos)',
+      p.target !== null && !(p.target > 0) && 'objetivo'].filter(Boolean);
+    if (bad.length) {
+      drawChart('chart-future', { type: 'line', data: { labels: [], datasets: [] } }, 'Corrige os valores acima');
+      return (out.innerHTML = `<div class="form-error">Valor inválido em: ${bad.join(', ')}</div>`);
+    }
+    const r = futureProjection(p);
+    const when = m => `${monthLabel(addMonths(thisMonth(), m))} (daqui a ${m >= 12 ? `${Math.floor(m / 12)} ${m >= 24 ? 'anos' : 'ano'}` : ''}${
+      m >= 12 && m % 12 ? ' e ' : ''}${m % 12 ? `${m % 12} ${m % 12 === 1 ? 'mês' : 'meses'}` : ''})`;
+    out.innerHTML = `<div class="preview-box">Daqui a ${p.years} ${p.years === 1 ? 'ano' : 'anos'}: <b>${eur(r.end.value)}</b>
+      (em euros de hoje, ${eur(r.end.real)}): ${eur(r.end.contributed)} do que juntaste ${r.end.gain >= 0
+        ? `e <b class="pos">${eur(r.end.gain)}</b> do que rendeu` : `menos <b class="neg">${eur(-r.end.gain)}</b> que se perderam`}.
+      ${p.target === null ? '' : r.eta === 0 ? `<br>Já tens o objetivo de ${eur(p.target)}.`
+        : r.eta === null ? `<br>Com estes valores não chegas aos ${eur(p.target)}.`
+        : `<br>Chegas aos ${eur(p.target)} em <b>${when(r.eta)}</b>.`}</div>`;
+    drawChart('chart-future', {
+      type: 'line',
+      data: { labels: r.rows.map(x => (x.year ? `${x.year} ${x.year === 1 ? 'ano' : 'anos'}` : 'Hoje')), datasets: [
+        lineDataset('Valor', r.rows.map(x => x.value), SERIES[0]),
+        lineDataset('Em euros de hoje', r.rows.map(x => x.real), SERIES[2], { borderDash: [5, 4] }),
+        lineDataset('Dinheiro que juntaste', r.rows.map(x => x.contributed), SERIES[1]),
+      ] },
+      options: { interaction: INDEX_HOVER, scales: { x: catAxis(), y: moneyAxis() },
+        plugins: { tooltip: { callbacks: { label: tooltipMoney } } } },
+    }, 'Sem valores para mostrar');
+  };
+  body.addEventListener('input', update);
+  // o gráfico fica preso ao <canvas> desta janela: ao fechar, apaga-o (da próxima vez desenha-se num <canvas> novo)
+  modal.open({ title: 'Simular o futuro', body, wide: true, footer: [{ label: 'Fechar', onClick: () => modal.close() }],
+    onClose: () => { if (charts['chart-future']) { charts['chart-future'].destroy(); delete charts['chart-future']; } } });
+  update();
+}
+
 // ── previsão para o fim do mês (painel dos Movimentos; monthForecast no calc.js) ──
 // Só no mês atual, com a conta escolhida no filtro (ou todas). As entradas e saídas habituais que ainda faltam vêm por nome;
 // os gastos do dia a dia são a média dos últimos meses menos o que já se gastou este mês.
@@ -924,6 +992,70 @@ function accountForm(acc = null, after) {
   });
 }
 
+// ── conferir o saldo de uma conta com o do banco (botão "Conferir saldo" nas Contas; balanceCheck no calc.js) ──
+// Escreves o saldo que o banco mostra num dia e a app diz se bate com o dela. Se não bater, dá para ir ver os movimentos da
+// conta nesse mês ou acertar o saldo inicial (como na importação dos extratos).
+function balanceCheckModal(accountId = S.movAccount) {
+  if (!D.accounts.length) { toast('Primeiro cria uma conta'); return accountForm(); }
+  const today = todayISO();
+  const body = document.createElement('div');
+  body.style.cssText = 'display:flex;flex-direction:column;gap:14px';
+  body.innerHTML = `
+    <div class="modal-hint">Escreve o saldo que o banco mostra (na app do banco ou no fim de um extrato) e a app diz se bate com o
+      dela nesse dia. Se não bater, falta algum movimento, há algum repetido ou o saldo inicial da conta está errado.</div>
+    <div class="field-row">
+      <div class="field"><label for="chk-acc">Conta</label><select id="chk-acc">${sortByName(D.accounts).map(a =>
+        `<option value="${esc(a.id)}"${a.id === accountId ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}</select></div>
+      <div class="field"><label for="chk-date">Dia</label><input id="chk-date" type="date" value="${today}" max="${today}"></div>
+    </div>
+    <div class="field"><label for="chk-bank">Saldo no banco nesse dia (€)</label><input id="chk-bank" inputmode="decimal" placeholder="ex.: 1234,56"></div>
+    <div id="chk-result"></div>`;
+  let res = null;
+  const update = () => {
+    const id = $('#chk-acc', body).value, date = $('#chk-date', body).value || today, txt = $('#chk-bank', body).value.trim();
+    const n = parseMoney(txt), out = $('#chk-result', body);
+    res = null;
+    if (!txt) return (out.innerHTML = `<div class="preview-box">Na app, no fim de ${dateLabel(date)}: <b>${eur(accountBalance(id, date))}</b></div>`);
+    if (!Number.isFinite(n)) return (out.innerHTML = '<div class="form-error">Valor inválido</div>');
+    res = { id, date, ...balanceCheck(id, date, n) };
+    out.innerHTML = res.ok
+      ? `<div class="preview-box"><b class="pos">✓ Bate com o banco</b>: ${eur(res.app)} no fim de ${dateLabel(date)}.</div>`
+      : `<div class="preview-box">No fim de ${dateLabel(date)}, a app tem <b>${eur(res.app)}</b> e o banco <b>${eur(res.bank)}</b>: a app
+          tem <b class="neg">${eur(Math.abs(res.diff))} a ${res.diff > 0 ? 'mais' : 'menos'}</b>.<br>
+          ${res.last ? `O último movimento desta conta na app é de ${dateLabel(res.last)}: se no banco há movimentos depois disso,
+            importa-os ou regista-os.` : 'Esta conta ainda não tem movimentos na app.'} Procura também um movimento repetido ou com o valor errado.
+          <div class="chk-actions"><button class="btn" data-chk="show">Ver os movimentos de ${esc(monthLabel(ymOf(date)))}</button>
+            <button class="btn" data-chk="fix">Acertar o saldo inicial (${eurSigned(-res.diff)})</button></div>
+          <div class="hint">Acertar o saldo inicial muda o saldo de todos os dias para trás: usa-o só se o erro vem de antes do
+            primeiro movimento da conta.</div></div>`;
+  };
+  body.addEventListener('input', update);
+  body.addEventListener('click', async e => {
+    const b = e.target.closest('[data-chk]');
+    if (!b || !res) return;
+    if (b.dataset.chk === 'show') {
+      Object.assign(S, { movMode: 'month', movAnchor: ymOf(res.date), movAccount: res.id, movCatIn: [], movCatOut: [], movSearch: '' });
+      $$('#mov-period-mode button').forEach(x => x.classList.toggle('active', x.dataset.mode === 'month'));
+      $('#mov-search').value = '';
+      modal.close();
+      renderMovements();
+      return $('#mov-table').closest('.panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    const a = findById('accounts', res.id);
+    b.disabled = true;
+    try {
+      await saveItems([{ ...a, kind: 'account', opening_balance: round2(a.opening_balance - res.diff) }]);
+      toast('Saldo inicial acertado');
+      update();
+    } catch (err) {
+      toast(err.message, true);
+      b.disabled = false;
+    }
+  });
+  modal.open({ title: 'Conferir saldo', body, footer: [{ label: 'Fechar', onClick: () => modal.close() }] });
+  update();
+}
+
 // ── formulário de movimento ──
 // Sem contas, primeiro abre o formulário de conta e depois volta aqui. preset = valores iniciais.
 function txForm(tx = null, preset = {}) {
@@ -1154,6 +1286,40 @@ function recurringModal() {
     if (b) showMovementsMatching(b.dataset.recurring);
   });
   modal.open({ title: 'Despesas fixas e subscrições', body, wide: true, footer: [{ label: 'Fechar', onClick: () => modal.close() }] });
+}
+
+// ── calendário do mês (botão "▦ Calendário"; monthCalendar no calc.js) ──
+// As entradas e saídas habituais no dia em que costumam acontecer e o saldo previsto no fim de cada dia, na conta do filtro
+// (ou em todas). No PC é uma grelha de segunda a domingo; no telemóvel, uma lista só com os dias que têm alguma coisa.
+const CAL_WEEKDAYS = ['seg', 'ter', 'qua', 'qui', 'sex', 'sáb', 'dom'];
+const CAL_STATE = { done: 'já aconteceu', due: 'por vir', late: 'atrasada: ainda não saiu', missed: 'ainda não veio (não conta)',
+  scheduled: 'já registado' };
+function calendarModal() {
+  const c = monthCalendar(S.movAccount);
+  const item = it => `<div class="cal-item ${it.state}" title="${esc(it.description)} · ${CAL_STATE[it.state]}">
+    <b class="${it.sign > 0 ? 'pos' : 'neg'}">${eurSignedShort(it.sign * it.amount)}</b> ${esc(it.description)}</div>`;
+  const cell = d => {
+    const cls = [d.date === c.today && 'cal-today', d.date === c.low?.date && 'cal-low', !d.items.length && d.date !== c.today
+      && d.date !== c.low?.date && 'cal-quiet'].filter(Boolean).join(' ');
+    return `<div class="cal-day ${cls}"><div class="cal-num"><span class="cal-wd">${CAL_WEEKDAYS[d.weekday]}</span> ${d.day}</div>
+      ${d.items.map(item).join('')}
+      ${d.balance !== null ? `<div class="cal-bal ${d.balance < 0 ? 'neg' : ''}" title="Saldo previsto no fim do dia">${eurShort(d.balance)}</div>` : ''}</div>`;
+  };
+  const lead = c.days[0].weekday;
+  const body = document.createElement('div');
+  body.style.cssText = 'display:flex;flex-direction:column;gap:14px';
+  body.innerHTML = `
+    <div class="modal-hint">${esc(S.movAccount ? accountName(S.movAccount) : 'Todas as contas')}: as entradas e saídas que se repetem todos os
+      meses, no dia em que costumam acontecer, e por baixo o saldo previsto no fim de cada dia, com os gastos do dia a dia repartidos pelos
+      dias que faltam. É uma estimativa, como a previsão para o fim do mês.</div>
+    ${c.low ? `<div class="preview-box">Dia mais apertado: <b>${CAL_WEEKDAYS[c.days[Number(c.low.date.slice(8)) - 1].weekday]}
+      ${dateLabel(c.low.date)}</b>, com <b class="${c.low.balance < 0 ? 'neg' : ''}">${eur(c.low.balance)}</b>
+      · no fim do mês: <b class="${c.total < 0 ? 'neg' : ''}">${eur(c.total)}</b></div>` : ''}
+    <div class="cal-grid">${CAL_WEEKDAYS.map(w => `<div class="cal-head">${w}</div>`).join('')}
+      ${'<div class="cal-day cal-pad"></div>'.repeat(lead)}${c.days.map(cell).join('')}</div>
+    <div class="chart-note">Cinzento: já aconteceu. Riscado: uma entrada habitual que ainda não veio (não conta no saldo).
+      As saídas atrasadas ficam no dia de hoje.</div>`;
+  modal.open({ title: `Calendário de ${monthLabel(c.month)}`, body, wide: true, footer: [{ label: 'Fechar', onClick: () => modal.close() }] });
 }
 
 // Mostra na tabela dos Movimentos os que têm este texto: pesquisa em "Sempre", sem filtros de conta nem de categoria
@@ -1650,7 +1816,11 @@ function earlyRepaymentModal(loan) {
       <div class="field"><label for="sim-fee">Comissão (%)</label><input id="sim-fee" inputmode="decimal" placeholder="0">
         <div class="hint">Vê no contrato. Nos créditos à habitação é no máximo 0,5% (taxa variável) ou 2% (taxa fixa).</div></div>
     </div>
-    <div id="sim-result"></div>`;
+    <div id="sim-result"></div>
+    <div class="field"><label for="sim-ret">E se investires esse dinheiro? Rentabilidade (% por ano)</label>
+      <input id="sim-ret" inputmode="decimal" placeholder="ex.: 5">
+      <div class="hint">Para comparar: quanto rendia o mesmo valor investido durante o prazo que falta, já com o imposto de 28% sobre o ganho.</div></div>
+    <div id="sim-invest"></div>`;
 
   // Tabela: hoje vs reduzir a prestação vs reduzir o prazo (sem valor escrito, as duas últimas colunas ficam com "—")
   const table = s => {
@@ -1671,13 +1841,37 @@ function earlyRepaymentModal(loan) {
       <div class="chart-note">Prestação = capital + juros. Reduzir o prazo poupa mais juros; reduzir a prestação deixa mais dinheiro
         livre todos os meses.</div>`;
   };
+  // Amortizar ou investir (investComparison no calc.js): o ganho líquido do investimento no prazo que falta contra a poupança
+  // líquida de amortizar e reduzir o prazo (a que poupa mais juros). Se o valor pagar o crédito todo, a conta não se faz.
+  const invest = (amount, s) => {
+    const txt = $('#sim-ret', body).value.trim(), ret = parseNum(txt), out = $('#sim-invest', body);
+    if (txt && !(ret > -100 && ret <= 100)) return (out.innerHTML = '<div class="form-error">Rentabilidade inválida</div>');
+    if (!(amount > 0) || !s) return (out.innerHTML = '');
+    if (s.paidOff) {
+      return (out.innerHTML = `<div class="chart-note">Com este valor pagas o crédito todo e deixas de pagar a prestação já no mês seguinte.
+        Pagar o crédito equivale a ganhar a taxa dele (TAN ${esc(String(loan.rate).replace('.', ','))}%), garantido e sem imposto: investir só
+        compensa se render mais do que isso, depois do imposto e com risco.</div>`);
+    }
+    const months = base.now.months, c = investComparison(s, amount, txt ? ret : NaN, months);
+    const even = `Para investir render mais do que amortizar, o investimento tem de dar mais de
+      <b>${c.breakEven.toFixed(1).replace('.', ',')}%</b> por ano (antes do imposto), todos os anos até ao fim do prazo. Amortizar é
+      garantido; investir tem risco.`;
+    if (!c.invest) return (out.innerHTML = `<div class="chart-note">${even}</div>`);
+    out.innerHTML = `<div class="preview-box">Investidos durante ${term(months)} a ${esc(txt.replace('.', ','))}% por ano, os
+      ${eur(amount)} rendiam <b class="${signClass(c.invest.net)}">${eurSigned(c.invest.net)}</b> depois do imposto${c.invest.tax ? ` (${eur(c.invest.tax)})` : ''}.
+      Amortizar e reduzir o prazo poupa <b class="${signClass(c.amort)}">${eurSigned(c.amort)}</b> líquidos.
+      <br>Com estes números, compensa mais <b>${c.better === 'invest' ? 'investir' : 'amortizar'}</b>.</div>
+      <div class="chart-note">${even} Contas simplificadas: a taxa do crédito e a rentabilidade iguais até ao fim.</div>`;
+  };
   const update = () => {
     const amount = parseNum($('#sim-amount', body).value), fee = parseNum($('#sim-fee', body).value);
     const out = $('#sim-result', body);
+    invest(NaN, null);
     if ($('#sim-amount', body).value.trim() && !(amount > 0)) return (out.innerHTML = '<div class="form-error">Valor inválido</div>');
     if ($('#sim-fee', body).value.trim() && !(fee >= 0 && fee <= 100)) return (out.innerHTML = '<div class="form-error">Comissão inválida (0 a 100%)</div>');
     if (!(amount > 0)) return (out.innerHTML = table(null));
     const s = simulateEarlyRepayment(loan, amount, fee || 0);
+    invest(amount, s);
     out.innerHTML = s.paidOff
       ? `<div class="preview-box">Com ${eur(amount)} pagas o crédito todo (estão em dívida ${eur(s.balance)}) e poupas
           <b class="pos">${eur(s.saved)}</b> de juros${s.fee ? `; com a comissão de ${eur(s.fee)}, a poupança líquida é <b>${eurSigned(s.net)}</b>` : ''}.</div>`
@@ -2102,6 +2296,9 @@ document.addEventListener('click', e => {
   if (d.alertDismiss) return dismissAlert(d.alertDismiss);
   switch (d.action) {
     case 'acc-new': return accountForm();
+    case 'acc-check': return balanceCheckModal();
+    case 'future': return futureModal();
+    case 'mov-calendar': return calendarModal();
     case 'tx-new': return txForm();
     case 'mov-history': return historyGrid();
     case 'mov-recurring': return recurringModal();

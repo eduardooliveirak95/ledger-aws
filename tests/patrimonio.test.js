@@ -122,3 +122,54 @@ test('o último mês dá sempre o mesmo que o património líquido da página in
   assert.deepEqual([s.accounts[last], s.investments[last], s.properties[last], s.debt[last], s.total[last]],
     [nw.accounts, nw.investments, nw.properties, nw.debt, nw.total]);
 });
+
+test('simulador do futuro: juros compostos todos os meses, poupança no fim de cada mês, euros de hoje e o objetivo', () => {
+  const proj = p => run('futureProjection(p)', { p });
+  // 12% ao ano, com juros compostos ao mês, dá mesmo 12% num ano
+  assert.equal(proj({ start: 10000, ret: 12, years: 1 }).end.value, 11200);
+  // sem rentabilidade: só o que se junta; uma linha por ano, a começar em hoje
+  const flat = proj({ start: 0, monthly: 100, years: 2 });
+  assert.deepEqual(flat.rows.map(r => [r.year, r.value, r.contributed]), [[0, 0, 0], [1, 1200, 1200], [2, 2400, 2400]]);
+  assert.deepEqual([flat.end.gain, flat.eta], [0, null]);
+  // a poupança entra no fim de cada mês e só rende a partir daí: 100 × ((1 + r)^12 − 1) / r, com r a taxa ao mês
+  assert.equal(proj({ monthly: 100, ret: 12, years: 1 }).end.value, 1264.65);
+  // a perder e em euros de hoje (inflação de 2%)
+  assert.equal(proj({ start: 1000, ret: -10, years: 1 }).end.value, 900);
+  assert.equal(proj({ start: 1000, inflation: 2, years: 1 }).end.real, 980.39);
+  // objetivo: dentro do prazo, depois do prazo (procura na mesma), já atingido e nunca
+  assert.equal(proj({ monthly: 100, years: 5, target: 1000 }).eta, 10);
+  const later = proj({ monthly: 100, years: 1, target: 2000 });
+  assert.deepEqual([later.eta, later.rows.length, later.end.value], [20, 2, 1200]);
+  assert.equal(proj({ start: 5000, years: 1, target: 1000 }).eta, 0);
+  assert.equal(proj({ start: 100, years: 1, target: 1000 }).eta, null);
+});
+
+test('simulador do futuro: começa com as contas e os investimentos de hoje e com a poupança média dos meses completos', () => {
+  load({
+    accounts: [account(ACC1, 1000)],
+    transactions: [
+      tx('2026-08-01', 'in', 2000), tx('2026-08-10', 'out', 1500),
+      tx('2026-09-01', 'in', 2000), tx('2026-09-10', 'out', 1200),
+      tx('2026-09-12', 'out', 300, { category: 'Investimentos' }),   // um aporte conta como poupança, não como gasto
+      tx('2026-10-01', 'in', 2000),                                  // o mês atual ainda não conta para a média
+    ],
+    investments: [{ id: INV, kind: 'investment', name: 'ETF', inv_type: 'ETF' }],
+    inv_moves: [{ id: 'IMV_2026-09-12_' + '0'.repeat(11) + '1', kind: 'inv_move', investment_id: INV, date: '2026-09-12', move: 'contribution', amount: 300 }],
+    valuations: [{ id: `VAL_${INV.slice(4)}_2026-09`, kind: 'valuation', investment_id: INV, month: '2026-09', value: 320 }],
+    properties: [property(1, 250000)],   // os imóveis não contam (não são dinheiro que rende)
+  });
+  // contas 1000 + 2000 − 1500 + 2000 − 1200 − 300 + 2000 = 4000, ETF 320; poupança: (500 + 800) / 2 meses
+  assert.deepEqual(run('futureDefaults()'), { start: 4320, monthly: 650, months: 2, ret: null });
+  // a gastar mais do que entra, a poupança fica 0; sem meses completos também
+  load({ accounts: [account(ACC1, 1000)], transactions: [tx('2026-09-01', 'in', 100), tx('2026-09-02', 'out', 400)] });
+  assert.deepEqual(run('futureDefaults()'), { start: 700, monthly: 0, months: 1, ret: null });
+  load({ accounts: [account(ACC1, 1000)], transactions: [tx('2026-10-01', 'out', 50)] });
+  assert.deepEqual(run('futureDefaults()'), { start: 950, monthly: 0, months: 0, ret: null });
+  // com mais de um ano de carteira, a rentabilidade vem dela (em %, a uma casa): 1000 € a 1/9/2025 valem 1100 € no fim de set 2026
+  load({ investments: [{ id: INV, kind: 'investment', name: 'ETF', inv_type: 'ETF' }],
+    inv_moves: [{ id: 'IMV_2025-09-01_' + '0'.repeat(11) + '1', kind: 'inv_move', investment_id: INV, date: '2025-09-01', move: 'contribution', amount: 1000 }],
+    valuations: [{ id: `VAL_${INV.slice(4)}_2026-09`, kind: 'valuation', investment_id: INV, month: '2026-09', value: 1100 }] });
+  const ret = run('futureDefaults().ret');
+  assert.equal(ret, run('Math.round(annualReturn("") * 1000) / 10'));
+  assert.ok(ret > 9 && ret < 9.5, String(ret));   // 10% em 395 dias: cerca de 9,2% ao ano
+});

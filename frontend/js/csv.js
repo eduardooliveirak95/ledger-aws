@@ -728,7 +728,19 @@ function openImport(defaultFormat) {
           try {
             const r = await runBankImport(plan, (d, t) => { btn.textContent = `A importar… ${Math.round(d / t * 100)}%`; });
             modal.close();
-            toast(`Importado: ${r.saved} movimentos${r.updated ? `, ${r.updated} transferências ligadas` : ''}${r.skipped ? `, ${r.skipped} repetidos ignorados` : ''}${r.parents ? `, ${r.parents} conta(s) criada(s)` : ''}`);
+            // o saldo no fim de cada extrato bate com o da app? (importBalanceChecks no bank.js) Se não, explica numa janela
+            const checks = importBalanceChecks(plan), wrong = checks.filter(c => !c.ok);
+            toast(`Importado: ${r.saved} movimentos${r.updated ? `, ${r.updated} transferências ligadas` : ''}${r.skipped ? `, ${r.skipped} repetidos ignorados` : ''}${r.parents ? `, ${r.parents} conta(s) criada(s)` : ''}${
+              checks.length && !wrong.length ? ' · o saldo bate com o banco ✓' : ''}`);
+            if (wrong.length) {
+              modal.open({ title: 'O saldo não bate com o banco', body: `<div class="modal-hint" style="font-size:13px;color:var(--text)">${wrong.map(c =>
+                `<b>${esc(c.name)}</b>: no fim de ${dateLabel(c.date)}, o extrato diz ${eur(c.bank)} e a app tem ${eur(c.app)}
+                 (${eur(Math.abs(c.diff))} a ${c.diff > 0 ? 'mais' : 'menos'} na app).`).join('<br>')}<br><br>
+                Os movimentos do extrato foram importados. A diferença vem de movimentos que estão na app e não no extrato (por exemplo,
+                registados à mão), de um movimento com o valor errado ou do saldo antes do extrato, se não o acertaste.
+                Para procurar, usa "Conferir saldo", nas Contas.</div>`,
+                footer: [{ label: 'Fechar', onClick: () => modal.close() }] });
+            }
           } catch (err) {
             toast(err.message, true);
             btn.disabled = false; btn.textContent = 'Importar';

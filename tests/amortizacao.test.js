@@ -96,3 +96,34 @@ test('sem dados para simular: sem taxa, sem prazo conhecido ou já pago', () => 
   load(loan({ end_date: undefined, payment: 474.22 }));       // sem fim do contrato: prazo pela prestação
   assert.equal(sim(0).now.months, 300);
 });
+
+test('amortizar ou investir: o ganho do investimento no prazo que falta, com 28% de imposto, e a partir de quanto compensa', () => {
+  load(loan());
+  const s = sim(10000);   // reduzir o prazo poupa 10 076,89 € de juros (sem comissão)
+  assert.equal(s.byTerm.net, 10076.89);
+  // 10 000 € a 5% durante 300 meses: 10 000 × (1,05^25 − 1) = 23 863,55 € de ganho, 28% de imposto
+  assert.deepEqual(run('investInstead(10000, 5, 300)'), { gain: 23863.55, tax: 6681.79, net: 17181.76 });
+  assert.ok(run('investInstead(10000, 3, 300).net') < s.byTerm.net);   // à taxa do crédito, amortizar compensa mais
+  // a partir de quanto investir compensa: dá exatamente a poupança de amortizar (o imposto só se paga no fim, por isso fica
+  // abaixo da taxa ÷ 0,72 = 4,17%)
+  const even = run('breakEvenReturn(saved, 10000, 300)', { saved: s.byTerm.net });
+  near(even, 3.5632, 0.0001);
+  near(run('investInstead(10000, even, 300).net', { even }), s.byTerm.net, 0.01);
+  // a perder não se paga imposto; sem poupança a amortizar (ex.: a comissão come os juros), qualquer rentabilidade compensa
+  assert.deepEqual(run('investInstead(1000, -10, 12)'), { gain: -100, tax: 0, net: -100 });
+  assert.equal(run('breakEvenReturn(-5, 10000, 300)'), 0);
+});
+
+test('amortizar ou investir no simulador: compara com reduzir o prazo e não compara quando o valor paga o crédito todo', () => {
+  load(loan());
+  const c = run('investComparison(simulateEarlyRepayment(D.loans[0], 10000, 0), 10000, 5, 300)');
+  assert.equal(c.amort, 10076.89);
+  assert.equal(c.invest.net, 17181.76);
+  assert.equal(c.better, 'invest');
+  near(c.breakEven, 3.5632, 0.0001);
+  assert.equal(run('investComparison(simulateEarlyRepayment(D.loans[0], 10000, 0), 10000, 3, 300).better'), 'amortize');
+  // sem rentabilidade escrita: só a partir de quanto compensa
+  assert.equal(run('investComparison(simulateEarlyRepayment(D.loans[0], 10000, 0), 10000, NaN, 300).invest'), null);
+  // pagar tudo: as prestações deixam de sair logo no mês seguinte, e a conta de reduzir o prazo não serve
+  assert.equal(run('investComparison(simulateEarlyRepayment(D.loans[0], 100000, 0), 100000, 5, 300)'), null);
+});
