@@ -838,13 +838,14 @@ def test_invite_email_in_portuguese_with_the_site(monkeypatch):
 def test_shell_scripts_are_executable():
     """Os .sh correm-se com ./… (Linux, Mac e CloudShell): têm de começar pelo bash, ter fins de linha do Linux (com
     CRLF, o ./… dá "No such file or directory"; quem os garante é o .gitattributes) e estar marcados como executáveis
-    no git (git update-index --chmod=+x). No Windows (onde se usam os .ps1) os ficheiros não têm esta permissão, por
-    isso lá não se confere."""
+    no git (git update-index --chmod=+x). No Windows (onde se usam os .ps1) não há permissão de execução nos ficheiros,
+    por isso lá confere-se tudo menos isso."""
     root = Path(__file__).resolve().parents[1]
     scripts = sorted(root.glob("*.sh"))
     assert {p.name for p in scripts} >= {"create-user.sh", "deploy.sh", "make-admin.sh"}
     for p in scripts:
-        data = p.read_bytes()       # em bytes: o read_text() trocava CRLF por LF e não dava pela diferença
+        data = p.read_bytes()       # em bytes, porque o read_text() converte CRLF em LF e o teste não dava pela diferença
         assert data.startswith(b"#!/usr/bin/env bash\n") and b"\r\n" not in data, p.name
+        data.decode("utf-8")        # as mensagens têm acentos: noutra codificação saíam estragadas no CloudShell
         if os.name != "nt":
             assert os.access(p, os.X_OK), f"{p.name} sem permissão de execução"
