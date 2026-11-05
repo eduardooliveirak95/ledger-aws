@@ -833,3 +833,16 @@ def test_invite_email_in_portuguese_with_the_site(monkeypatch):
         "triggerSource": "CustomMessage_AdminCreateUser"}
     monkeypatch.delenv("SITE_URL")
     assert app.custom_message(json.loads(json.dumps(event))) == event
+
+
+def test_shell_scripts_are_executable():
+    """Os .sh correm-se com ./… (Linux, Mac e CloudShell): têm de começar pelo bash e estar marcados como executáveis
+    no git (git update-index --chmod=+x). No Windows (onde se usam os .ps1) os ficheiros não têm esta permissão,
+    por isso lá só se confere o início."""
+    root = Path(__file__).resolve().parents[1]
+    scripts = sorted(root.glob("*.sh"))
+    assert {p.name for p in scripts} >= {"create-user.sh", "deploy.sh", "make-admin.sh"}
+    for p in scripts:
+        assert p.read_text(encoding="utf-8").startswith("#!/usr/bin/env bash\n"), p.name
+        if os.name != "nt":
+            assert os.access(p, os.X_OK), f"{p.name} sem permissão de execução"
