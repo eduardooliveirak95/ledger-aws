@@ -140,8 +140,24 @@ function passwordForm() {
   });
 }
 
+// ── sair em todos os aparelhos (botão "Sair em todos"; globalSignOut no auth.js) ──
+// Para quando ficou uma sessão aberta noutro PC (o do trabalho, um emprestado). Se o Cognito falhar, não sai de lado nenhum.
+async function logoutEverywhere() {
+  if (!await confirmDialog('Sair deste aparelho e de todos os outros onde tens o Ledger aberto? Nos outros, a sessão acaba '
+    + 'no máximo dentro de 1 hora (quando o acesso que lá está expirar).', 'Sair em todos')) return;
+  try { await globalSignOut(); }
+  catch (e) {
+    if (!sessionIsOver(e)) return toast(e.message, true);   // uma falha passageira: não sai de lado nenhum
+    logout();                                               // a sessão já tinha acabado (por exemplo, noutro "Sair em todos")
+    return toast('A sessão já tinha terminado');
+  }
+  logout();
+  toast('Saíste em todos os aparelhos');
+}
+
 // Botões fixos da barra lateral
 $('#logout-btn').addEventListener('click', logout);
+$('#logout-all-btn').addEventListener('click', logoutEverywhere);
 $('#export-all-btn').addEventListener('click', exportAll);
 $('#password-btn').addEventListener('click', passwordForm);
 
@@ -381,22 +397,26 @@ function futureModal() {
       ${field('fut-years', 'Prazo (anos)', 10)}
       ${field('fut-target', 'Objetivo (€, opcional)', null)}
     </div>
+    ${field('fut-spend', 'Gastos por mês (€, opcional)', def.spend || null, `${def.months ? `A tua média dos últimos ${def.months} ${
+      def.months === 1 ? 'mês' : 'meses'}. ` : ''}Para a independência financeira: quando tiveres 25 vezes os gastos de um ano, tirar
+      4% por ano chega para os pagar (a regra dos 4%).`)}
     <div id="fut-result"></div>
     <div class="chart-box"><canvas id="chart-future"></canvas></div>`;
   const val = id => $('#' + id, body).value.trim();
   const update = () => {
     const n = id => (val(id) ? parseMoney(val(id)) : NaN);
     const p = { start: n('fut-start'), monthly: n('fut-monthly'), ret: n('fut-ret'), inflation: n('fut-inf'), years: n('fut-years'),
-      target: val('fut-target') ? n('fut-target') : null };
+      target: val('fut-target') ? n('fut-target') : null, spend: val('fut-spend') ? n('fut-spend') : null };
     const out = $('#fut-result', body);
     const bad = [!(p.start >= 0) && 'ponto de partida', !(p.monthly >= 0) && 'poupança por mês', !(p.ret > -100 && p.ret <= 100) && 'rentabilidade',
       !(p.inflation > -100 && p.inflation <= 100) && 'inflação', !(Number.isInteger(p.years) && p.years >= 1 && p.years <= 60) && 'prazo (1 a 60 anos)',
-      p.target !== null && !(p.target > 0) && 'objetivo'].filter(Boolean);
+      p.target !== null && !(p.target > 0) && 'objetivo', p.spend !== null && !(p.spend >= 0) && 'gastos por mês'].filter(Boolean);
     if (bad.length) {
       drawChart('chart-future', { type: 'line', data: { labels: [], datasets: [] } }, 'Corrige os valores acima');
       return (out.innerHTML = `<div class="form-error">Valor inválido em: ${bad.join(', ')}</div>`);
     }
-    const r = futureProjection(p);
+    const fire = p.spend > 0 ? round2(p.spend * 12 * 25) : null;   // a regra dos 4%: 25 × os gastos de um ano
+    const r = futureProjection({ ...p, fire });
     const when = m => `${monthLabel(addMonths(thisMonth(), m))} (daqui a ${m >= 12 ? `${Math.floor(m / 12)} ${m >= 24 ? 'anos' : 'ano'}` : ''}${
       m >= 12 && m % 12 ? ' e ' : ''}${m % 12 ? `${m % 12} ${m % 12 === 1 ? 'mês' : 'meses'}` : ''})`;
     out.innerHTML = `<div class="preview-box">Daqui a ${p.years} ${p.years === 1 ? 'ano' : 'anos'}: <b>${eur(r.end.value)}</b>
@@ -404,7 +424,9 @@ function futureModal() {
         ? `e <b class="pos">${eur(r.end.gain)}</b> do que rendeu` : `menos <b class="neg">${eur(-r.end.gain)}</b> que se perderam`}.
       ${p.target === null ? '' : r.eta === 0 ? `<br>Já tens o objetivo de ${eur(p.target)}.`
         : r.eta === null ? `<br>Com estes valores não chegas aos ${eur(p.target)}.`
-        : `<br>Chegas aos ${eur(p.target)} em <b>${when(r.eta)}</b>.`}</div>`;
+        : `<br>Chegas aos ${eur(p.target)} em <b>${when(r.eta)}</b>.`}
+      ${fire === null ? '' : `<br>Independência financeira (25 × os gastos de um ano, em euros de hoje: ${eur(fire)}): ${
+        r.fireEta === 0 ? '<b>já lá estás</b>.' : r.fireEta === null ? 'com estes valores não chegas lá.' : `chegas lá em <b>${when(r.fireEta)}</b>.`}`}</div>`;
     drawChart('chart-future', {
       type: 'line',
       data: { labels: r.rows.map(x => (x.year ? `${x.year} ${x.year === 1 ? 'ano' : 'anos'}` : 'Hoje')), datasets: [
@@ -420,6 +442,38 @@ function futureModal() {
   // o gráfico fica preso ao <canvas> desta janela: ao fechar, apaga-o (da próxima vez desenha-se num <canvas> novo)
   modal.open({ title: 'Simular o futuro', body, wide: true, footer: [{ label: 'Fechar', onClick: () => modal.close() }],
     onClose: () => { if (charts['chart-future']) { charts['chart-future'].destroy(); delete charts['chart-future']; } } });
+  update();
+}
+
+// ── simular a venda de um investimento (botão € na tabela dos investimentos; saleSimulation no calc.js) ──
+// Quanto se recebe ao vender hoje, já sem o imposto sobre o ganho. Não grava nada.
+function saleModal(inv) {
+  if (!inv) return;
+  const s = investmentSummary(inv.id);
+  const body = document.createElement('div');
+  body.style.cssText = 'display:flex;flex-direction:column;gap:14px';
+  body.innerHTML = `
+    <div class="modal-hint">Quanto recebes se venderes hoje, ao valor de hoje (${eur(s.value)}). O imposto é só sobre o ganho:
+      em Portugal, 28% nas ações, ETF e fundos, a não ser que englobes os rendimentos; noutros produtos pode ser diferente. É uma
+      estimativa: não conta com comissões e o custo é o custo médio (depois de um resgate, o resto fica com a mesma parte do custo).
+      Não grava nada.</div>
+    <div class="field-row">
+      <div class="field"><label for="sell-amount">Quanto vendes (€)</label><input id="sell-amount" inputmode="decimal" value="${numInput(s.value)}"></div>
+      <div class="field"><label for="sell-tax">Imposto sobre o ganho (%)</label><input id="sell-tax" inputmode="decimal" value="28"></div>
+    </div>
+    <div id="sell-result"></div>`;
+  const update = () => {
+    const amount = parseMoney($('#sell-amount', body).value.trim()), tax = parseMoney($('#sell-tax', body).value.trim());
+    const out = $('#sell-result', body);
+    const bad = [!(amount > 0 && amount <= s.value) && `quanto vendes (até ${eur(s.value)})`, !(tax >= 0 && tax <= 100) && 'imposto (0 a 100%)'].filter(Boolean);
+    if (bad.length) return (out.innerHTML = `<div class="form-error">Valor inválido em: ${bad.join(', ')}</div>`);
+    const r = saleSimulation(inv.id, amount, tax);
+    out.innerHTML = `<div class="preview-box">Dos <b>${eur(r.amount)}</b> que vendes, ${eur(r.cost)} são o que investiste e ${r.gain >= 0
+      ? `<b class="pos">${eur(r.gain)}</b> são ganho` : `há <b class="neg">${eur(-r.gain)}</b> de perda (sem imposto)`}.<br>
+      Imposto: <b>${eur(r.tax)}</b> · Recebes: <b>${eur(r.net)}</b></div>`;
+  };
+  body.addEventListener('input', update);
+  modal.open({ title: `Simular venda · ${inv.name}`, body, footer: [{ label: 'Fechar', onClick: () => modal.close() }] });
   update();
 }
 
@@ -1421,7 +1475,7 @@ function renderInvestments() {
       <td class="num ${isFinite(x.annual) ? signClass(x.annual) : 'muted'}">${pct(x.annual)}</td>
       <td class="num muted">${totalValue > 0 ? Math.round(x.value / totalValue * 100) + '%' : '—'}</td>
       <td class="date">${x.lastValMonth ? monthShort(x.lastValMonth) : '—'}</td>
-      <td class="actions"><button class="icon-btn" data-edit-inv="${esc(x.i.id)}" aria-label="Editar">✎</button></td>
+      <td class="actions">${x.value > 0 ? `<button class="icon-btn" data-sell-inv="${esc(x.i.id)}" aria-label="Simular venda" title="Simular venda">€</button>` : ''}<button class="icon-btn" data-edit-inv="${esc(x.i.id)}" aria-label="Editar">✎</button></td>
     </tr>`).join('')}</tbody></table>`
     : `<div class="empty">Ainda não tens investimentos.<br><button class="btn primary" data-action="inv-new">+ Investimento</button></div>`;
 
@@ -2276,7 +2330,7 @@ $('#adm-filter').addEventListener('change', e => { S.adminUser = e.target.value;
 // Um único "listener" para a página toda (delegação de eventos): funciona também para botões
 // criados depois, dentro das tabelas. O atributo diz o que fazer (ex.: data-edit-tx="<id>").
 document.addEventListener('click', e => {
-  const el = e.target.closest('[data-action],[data-edit-acc],[data-edit-tx],[data-del-tx],[data-edit-inv],[data-inv-focus],[data-edit-imv],[data-del-imv],[data-edit-loan],[data-sim-loan],[data-edit-prop],[data-edit-goal],[data-goal-reserve],[data-del-gres],[data-alert-act],[data-alert-dismiss]');
+  const el = e.target.closest('[data-action],[data-edit-acc],[data-edit-tx],[data-del-tx],[data-edit-inv],[data-sell-inv],[data-inv-focus],[data-edit-imv],[data-del-imv],[data-edit-loan],[data-sim-loan],[data-edit-prop],[data-edit-goal],[data-goal-reserve],[data-del-gres],[data-alert-act],[data-alert-dismiss]');
   if (!el) return;
   const d = el.dataset;
   if (d.invFocus) { e.preventDefault(); S.invFilter = d.invFocus; renderInvestments(); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
@@ -2284,6 +2338,7 @@ document.addEventListener('click', e => {
   if (d.editTx) return txForm(findById('transactions', d.editTx));
   if (d.delTx) return deleteTx(d.delTx);
   if (d.editInv) return investmentForm(findById('investments', d.editInv));
+  if (d.sellInv) return saleModal(findById('investments', d.sellInv));
   if (d.editImv) return invMoveForm(findById('inv_moves', d.editImv));
   if (d.delImv) return deleteImv(d.delImv);
   if (d.editLoan) return loanForm(findById('loans', d.editLoan));
@@ -2348,6 +2403,29 @@ $('#private-btn').addEventListener('click', () => {
   renderAll();
 });
 updatePrivateButton();
+// Bloqueio por inatividade (idleShouldHide no util.js): sem mexer na app durante IDLE_MINUTES, com sessão aberta, liga-se o
+// modo privado. Conta o rato, o teclado, o toque e o scroll. Com a página escondida, os browsers atrasam os temporizadores:
+// confere-se também ao voltar a ela.
+let lastActivity = Date.now();
+for (const ev of ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart', 'scroll']) {
+  addEventListener(ev, () => { lastActivity = Date.now(); }, { passive: true, capture: true });
+}
+function checkIdle() {
+  if (!store.get('refreshToken') || !idleShouldHide(lastActivity, Date.now(), privateMode)) return;
+  modal.close();   // uma janela aberta (o simulador, um formulário) também tinha valores à vista
+  setPrivateMode(true);
+  updatePrivateButton();
+  destroyCharts();
+  renderAll();
+  toast(`Valores escondidos ao fim de ${IDLE_MINUTES} minutos sem mexer (👁 para os mostrar)`);
+}
+// A mesma volta confere a sessão: se o ID token expirou, tokenForApi renova-o; se a sessão acabou (por exemplo, "Sair em
+// todos" noutro aparelho), sai daqui também, mesmo sem nenhum pedido à API. É uma renovação por hora, no máximo.
+setInterval(() => {
+  checkIdle();
+  if (store.get('refreshToken')) tokenForApi().catch(() => {});
+}, 30000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkIdle(); });
 document.addEventListener('ledger-theme', () => {
   applyChartTheme();
   destroyCharts();

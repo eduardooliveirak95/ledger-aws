@@ -136,6 +136,15 @@ test('sem nada a apontar, não há avisos', () => {
   assert.deepEqual(run('D = emptyData(); homeAlerts()'), []);
 });
 
+test('inatividade: liga o modo privado ao fim de IDLE_MINUTES sem mexer, se ainda não estiver ligado', () => {
+  const min = run('IDLE_MINUTES'), t0 = 1_800_000_000_000;
+  const hide = (ms, on = false) => run('idleShouldHide(a, b, c)', { a: t0, b: t0 + ms, c: on });
+  assert.equal(min, 10);
+  assert.equal(hide(min * 60000 - 1), false);
+  assert.equal(hide(min * 60000), true);
+  assert.equal(hide(min * 60000 * 3, true), false);   // já está ligado
+});
+
 test('modo privado: os euros aparecem como ••• €, as percentagens não mudam', () => {
   try {
     run('setPrivateMode(true)');

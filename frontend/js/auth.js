@@ -136,20 +136,34 @@ async function completeNewPassword(email, session, newPassword) {
   saveTokens(data.AuthenticationResult, email);
 }
 
-// Muda a password do utilizador com sessão aberta (botão 🔑 Password). Só o próprio o pode fazer:
-// o Cognito exige a password atual e o access token desta sessão.
-async function changePassword(oldPassword, newPassword) {
+// O access token desta sessão, com pelo menos 1 minuto de validade (se não, renova-o). Só o ChangePassword e o GlobalSignOut
+// o usam; a API usa o ID token.
+async function freshAccessToken() {
   let t = store.get('accessToken');
   // sessões abertas antes desta versão não têm access token; a renovação vai buscá-lo
   if (!t || jwtExp(t) <= Date.now() + 60000) {
     try { await refreshToken(); }
     catch (err) {
       // só diz que a sessão expirou se for verdade; uma falha passageira não obriga a sair (ver sessionIsOver)
-      throw new AuthError(sessionIsOver(err) ? 'A sessão expirou. Sai, volta a entrar e tenta outra vez.' : NO_CONNECTION);
+      throw new AuthError(sessionIsOver(err) ? 'A sessão expirou. Sai, volta a entrar e tenta outra vez.' : NO_CONNECTION,
+        sessionIsOver(err) ? err.type : 'Network');   // o tipo diz a quem chama se a sessão acabou (sessionIsOver)
     }
     t = store.get('accessToken');
   }
-  await cognito('ChangePassword', { AccessToken: t, PreviousPassword: oldPassword, ProposedPassword: newPassword });
+  return t;
+}
+
+// Muda a password do utilizador com sessão aberta (botão 🔑 Password). Só o próprio o pode fazer:
+// o Cognito exige a password atual e o access token desta sessão.
+async function changePassword(oldPassword, newPassword) {
+  await cognito('ChangePassword', { AccessToken: await freshAccessToken(), PreviousPassword: oldPassword, ProposedPassword: newPassword });
+}
+
+// "Sair em todos" (botão na barra lateral): o Cognito anula todos os refresh tokens desta conta, em todos os aparelhos. Nos
+// outros, o ID token que lá está ainda é aceite pela API até expirar (no máximo 1 hora); depois não se consegue renovar e a
+// sessão acaba. Quem chama sai também deste aparelho (logout no app.js).
+async function globalSignOut() {
+  await cognito('GlobalSignOut', { AccessToken: await freshAccessToken() });
 }
 
 // Ao sair: anula o refresh token no Cognito, para não poder voltar a ser usado (mesmo que alguém o

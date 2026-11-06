@@ -29,9 +29,10 @@ const networkError = () => Promise.reject(new TypeError('Failed to fetch'));
 // Carrega o auth.js com uma sessão cujo ID token já expirou (obriga a renovar no próximo pedido).
 // renovacoes = lista do que o Cognito responde a cada renovação, por ordem; api = respostas da API.
 function setup({ renovacoes, api = [ok({ dados: 1 })] }) {
-  const calls = { cognito: 0, api: 0, expired: 0 };
+  const calls = { cognito: 0, api: 0, expired: 0, targets: [] };
   const fetch = async (url, opts) => {
     if (url === COGNITO) {
+      calls.targets.push([opts.headers['X-Amz-Target'].split('.').pop(), JSON.parse(opts.body).AccessToken]);
       const r = renovacoes[calls.cognito++];
       return typeof r === 'function' ? r() : r;
     }
@@ -108,6 +109,22 @@ test('mudar a password: uma falha passageira na renovação não diz que a sess�
 test('mudar a password: com o refresh token recusado, diz que a sessão expirou', async () => {
   const { ctx } = setup({ renovacoes: [cognitoError('NotAuthorizedException')] });
   await assert.rejects(changePassword(ctx), /A sessão expirou/);
+});
+
+test('sair em todos: renova o access token e pede ao Cognito o GlobalSignOut com ele', async () => {
+  const { ctx, calls } = setup({ renovacoes: [renovado(), ok({})] });
+  await vm.runInContext('globalSignOut()', ctx);
+  assert.deepEqual(calls.targets, [['InitiateAuth', undefined], ['GlobalSignOut', 'acesso-exemplo']]);
+  // sem ligação na renovação, não diz que a sessão expirou nem tenta sair
+  const off = setup({ renovacoes: [networkError] });
+  await assert.rejects(vm.runInContext('globalSignOut()', off.ctx), /Sem ligação ao serviço de login/);
+  assert.deepEqual(off.calls.targets.map(t => t[0]), ['InitiateAuth']);
+  assert.equal(off.calls.expired, 0);
+  // a sessão já tinha sido anulada (o access token foi recusado, ou a renovação): o erro diz que a sessão acabou
+  const revoked = setup({ renovacoes: [renovado(), cognitoError('NotAuthorizedException')] });
+  assert.equal(await vm.runInContext('globalSignOut().then(() => "ok", e => sessionIsOver(e))', revoked.ctx), true);
+  const gone = setup({ renovacoes: [cognitoError('NotAuthorizedException')] });
+  assert.equal(await vm.runInContext('globalSignOut().then(() => "ok", e => sessionIsOver(e))', gone.ctx), true);
 });
 
 test('sem internet, o pedido ao Cognito dá a mensagem em português (não o "Failed to fetch" do browser)', async () => {

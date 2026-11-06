@@ -8,7 +8,7 @@ Corre na AWS: o site é estático, o login é feito com o Cognito, a API corre e
 
 Não há registo público, só convites. O convite chega por email com o endereço da app e uma password temporária que dura 7 dias (se não aparecer, vê no spam). Se expirar, pede ao administrador para o reenviar.
 
-No primeiro login escolhes a tua password, com pelo menos 10 caracteres, maiúsculas, minúsculas e um número. Mais tarde podes mudá-la no botão Password, na barra lateral.
+No primeiro login escolhes a tua password, com pelo menos 10 caracteres, maiúsculas, minúsculas e um número. Mais tarde podes mudá-la no botão Password, na barra lateral. Se ficou uma sessão aberta noutro aparelho (o PC do trabalho, um emprestado), "Sair em todos" termina-a lá e aqui; nos outros aparelhos acaba no máximo dentro de 1 hora.
 
 A sessão só dura enquanto o separador estiver aberto. Num separador novo, ou depois de fechares o browser, tens de entrar outra vez. Recarregar a página não te tira da conta.
 
@@ -18,7 +18,7 @@ No telemóvel dá para pôr o Ledger no ecrã principal, com ícone próprio e s
 
 O botão do tema, na barra lateral, passa de automático (segue o telemóvel ou o computador) a claro e a escuro. A escolha fica guardada só nesse aparelho.
 
-O botão 👁, ao lado, esconde todos os valores em euros (aparecem como ••• €) até voltares a carregar nele. Dá jeito para abrir a app em público. Também fica guardado só nesse aparelho, e os ficheiros exportados continuam com os valores todos.
+O botão 👁, ao lado, esconde todos os valores em euros (aparecem como ••• €) até voltares a carregar nele. Também se liga sozinho ao fim de 10 minutos sem mexeres na app. Dá jeito para abrir a app em público. Também fica guardado só nesse aparelho, e os ficheiros exportados continuam com os valores todos.
 
 Se te esqueceres da password, fala com o administrador, que te dá uma temporária. No login seguinte escolhes uma nova.
 
@@ -55,7 +55,7 @@ As metas e as reservas, tal como os orçamentos e os alvos da alocação, não e
 
 ### Simular o futuro
 
-No gráfico da evolução do património, "Simular o futuro" mostra quanto podes ter daqui a uns anos. Começa com as tuas contas e investimentos de hoje, com o que poupaste em média por mês no último ano e com a rentabilidade da tua carteira, e podes mudar tudo. Mostra o valor no fim do prazo, também em euros de hoje (descontada a inflação), quanto disso é o que juntaste e quanto é o que rendeu. Se puseres um objetivo, diz quando lá chegas. A rentabilidade é igual todos os anos e não há impostos. É só uma simulação, não grava nada.
+No gráfico da evolução do património, "Simular o futuro" mostra quanto podes ter daqui a uns anos. Começa com as tuas contas e investimentos de hoje, com o que poupaste em média por mês no último ano e com a rentabilidade da tua carteira, e podes mudar tudo. Mostra o valor no fim do prazo, também em euros de hoje (descontada a inflação), quanto disso é o que juntaste e quanto é o que rendeu. Se puseres um objetivo, diz quando lá chegas. Com os gastos por mês (vêm já preenchidos com a tua média), diz também quando chegas à independência financeira: 25 vezes os gastos de um ano, o que pela regra dos 4% chega para os pagar. A rentabilidade é igual todos os anos e não há impostos. É só uma simulação, não grava nada.
 
 ### Resumo do ano
 
@@ -86,6 +86,8 @@ Em "Conferir saldo", nas Contas, escreves o saldo que o banco mostra num dia e a
 ### Investimentos
 
 Na carteira completa, "Alocação por tipo" mostra quanto pesa cada tipo de investimento (ETF, PPR, cripto...). Em "Alvos" dizes que percentagem queres em cada um (têm de somar 100%), e a app mostra quanto falta ou sobra em cada tipo para lá chegar. Assim sabes onde pôr os próximos aportes. Se um tipo se afastar mais de 5 pontos do alvo, aparece um aviso na página inicial.
+
+Na tabela dos investimentos, o botão € simula uma venda: quanto recebes se venderes hoje (tudo ou uma parte), já sem o imposto sobre o ganho (28% por omissão, podes mudar). É uma estimativa e não grava nada.
 
 Ao lado do ganho em percentagem aparece a rentabilidade por ano, que conta com a data de cada aporte e resgate (ganhar 10% num ano não é o mesmo que ganhar 10% em cinco). Só aparece quando há um valor registado e já passou pelo menos um ano desde o primeiro aporte.
 

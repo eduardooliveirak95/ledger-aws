@@ -533,6 +533,45 @@ function investmentSummary(id) {
   return { invested, value, gain, gainPct: invested > 0 ? gain / invested : NaN, lastValMonth: vals[0]?.month || null };
 }
 
+/**
+ * O custo do que ainda se tem num investimento, pelo custo médio: cada aporte soma; cada resgate tira ao custo a mesma parte que
+ * tirou ao valor (o resgate ÷ o valor antes dele: o valor no fim desse mês em investmentSeries, mais este resgate e os
+ * seguintes do mesmo mês, menos os aportes depois dele nesse mês). Ao contrário do investido (aportes − resgates), um resgate
+ * com ganho não deixa o resto com custo a menos. Os movimentos depois do mês atual ainda não contam (como no valor). É uma
+ * estimativa, ao mês.
+ */
+function averageCost(id) {
+  const s = investmentSeries(id), valAt = Object.fromEntries(s.months.map((m, i) => [m, s.value[i]]));
+  const last = s.months[s.months.length - 1] || '';
+  const moves = D.inv_moves.filter(x => x.investment_id === id && ymOf(x.date) <= last).sort((a, b) => a.date.localeCompare(b.date));
+  let cost = 0;
+  moves.forEach((x, i) => {
+    if (x.move === 'contribution') { cost += x.amount; return; }
+    const m = ymOf(x.date);
+    const after = moves.slice(i + 1).filter(y => ymOf(y.date) === m)
+      .reduce((sum, y) => sum + (y.move === 'contribution' ? -y.amount : y.amount), 0);
+    const before = (valAt[m] || 0) + x.amount + after;
+    cost -= before > 0 ? cost * Math.min(1, x.amount / before) : cost;
+  });
+  return round2(Math.max(0, cost));
+}
+
+/**
+ * Simular a venda de amount € de um investimento ao valor de hoje (investmentSummary; sem amount, tudo): a parte do custo é
+ * proporcional ao que se vende (o custo médio × amount / valor, averageCost), o ganho é o resto e o imposto (taxPct %) só se
+ * paga sobre um ganho. É uma estimativa: sem comissões. null sem valor.
+ * { value, amount, cost, gain, tax, net }
+ */
+function saleSimulation(id, amount = null, taxPct = 28) {
+  const s = investmentSummary(id);
+  if (!(s.value > 0)) return null;
+  const amt = Math.min(amount === null ? s.value : amount, s.value);
+  const cost = round2(averageCost(id) * amt / s.value);
+  const gain = round2(amt - cost);
+  const tax = gain > 0 ? round2(gain * taxPct / 100) : 0;
+  return { value: s.value, amount: round2(amt), cost, gain, tax, net: round2(amt - tax) };
+}
+
 // O mesmo resumo para a carteira toda
 function portfolioSummary() {
   const s = investmentSeries('');
@@ -841,44 +880,51 @@ function netWorth() {
  * Valores para começar o simulador do futuro, tirados dos teus dados: start = contas + investimentos de hoje (o dinheiro que
  * pode render; sem imóveis nem créditos; nunca negativo); monthly = o que poupaste em média por mês (entradas − gastos: flowTotals.saved, onde
  * os aportes e as amortizações contam como poupança) nos 12 meses completos antes do atual, só desde o primeiro movimento (0
- * sem nenhum mês completo; nunca negativo), e months = por quantos meses; ret = a rentabilidade por ano da carteira
- * (annualReturn, em %, a 0,1) ou null sem ela.
+ * sem nenhum mês completo; nunca negativo), e months = por quantos meses; spend = os gastos médios por mês nesses meses
+ * (flowTotals.out, sem os aportes nem as amortizações; para a independência financeira); ret = a rentabilidade por ano da
+ * carteira (annualReturn, em %, a 0,1) ou null sem ela.
  */
 function futureDefaults() {
   const nw = netWorth(), first = firstTxMonth(), now = thisMonth(), to = addMonths(now, -1);
-  let monthly = 0, months = 0;
+  let monthly = 0, months = 0, spend = 0;
   if (first && first <= to) {
     const from = [addMonths(now, -12), first].sort().pop();
     months = monthRange(from, to).length;
-    monthly = Math.max(0, round2(flowTotals(filterTx({ from, to })).saved / months));
+    const f = flowTotals(filterTx({ from, to }));
+    monthly = Math.max(0, round2(f.saved / months));
+    spend = round2(f.out / months);
   }
   const r = annualReturn('');
-  return { start: Math.max(0, round2(nw.accounts + nw.investments)), monthly, months, ret: isFinite(r) ? Math.round(r * 1000) / 10 : null };
+  return { start: Math.max(0, round2(nw.accounts + nw.investments)), monthly, months, spend,
+           ret: isFinite(r) ? Math.round(r * 1000) / 10 : null };
 }
 
 /**
  * Projeção mês a mês: começa com start €, junta monthly € no fim de cada mês e rende ret % por ano (juros compostos todos os
  * meses, (1 + ret)^(1/12) − 1), durante years anos. inflation % por ano dá também o valor em euros de hoje (real). Com
  * target, eta = em quantos meses se chega lá (0 se já lá está; procura até 100 anos, mesmo depois do prazo; null se nunca).
+ * Com fire (a independência financeira: 25 × os gastos de um ano, a regra dos 4%), fireEta = o mesmo, mas com o valor em
+ * euros de hoje, porque os gastos também sobem com a inflação.
  * É uma simulação: rentabilidade igual todos os anos e sem impostos.
  * { rows: um por ano, a começar em hoje (year 0): { year, value, contributed, real }, end: a última, com gain = value −
- * contributed, eta }; contributed = start + o que se juntou.
+ * contributed, eta, fireEta }; contributed = start + o que se juntou.
  */
-function futureProjection({ start = 0, monthly = 0, ret = 0, years = 10, inflation = 0, target = null }) {
+function futureProjection({ start = 0, monthly = 0, ret = 0, years = 10, inflation = 0, target = null, fire = null }) {
   const rm = Math.pow(1 + ret / 100, 1 / 12) - 1, horizon = years * 12;
-  let v = start, c = start, eta = target !== null && start >= target ? 0 : null;
+  let v = start, c = start, eta = target !== null && start >= target ? 0 : null, fireEta = fire !== null && start >= fire ? 0 : null;
   const rows = [{ year: 0, value: round2(v), contributed: round2(c), real: round2(v) }];
-  for (let m = 1; m <= Math.max(horizon, target === null ? 0 : 1200); m++) {
+  for (let m = 1; m <= Math.max(horizon, target === null && fire === null ? 0 : 1200); m++) {
     v = v * (1 + rm) + monthly;
     c += monthly;
     if (eta === null && target !== null && v >= target) eta = m;
+    if (fireEta === null && fire !== null && v / Math.pow(1 + inflation / 100, m / 12) >= fire) fireEta = m;
     if (m <= horizon && m % 12 === 0) {
       rows.push({ year: m / 12, value: round2(v), contributed: round2(c), real: round2(v / Math.pow(1 + inflation / 100, m / 12)) });
     }
-    if (m >= horizon && (target === null || eta !== null)) break;
+    if (m >= horizon && (target === null || eta !== null) && (fire === null || fireEta !== null)) break;
   }
   const end = rows[rows.length - 1];
-  return { rows, end: { ...end, gain: round2(end.value - end.contributed) }, eta };
+  return { rows, end: { ...end, gain: round2(end.value - end.contributed) }, eta, fireEta };
 }
 
 /**

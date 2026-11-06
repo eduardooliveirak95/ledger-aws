@@ -60,6 +60,12 @@ function setPrivateMode(on) {
   privateMode = !!on;
   try { localStorage.setItem(PRIVATE_KEY, privateMode ? '1' : '0'); } catch { /* sem armazenamento: fica só em memória */ }
 }
+// Bloqueio por inatividade: ao fim de IDLE_MINUTES sem mexer na app, liga-se o modo privado (checkIdle no app.js), para os
+// valores não ficarem à vista num PC esquecido aberto. true se já passou esse tempo desde lastActivity e ainda não está ligado.
+const IDLE_MINUTES = 10;
+function idleShouldHide(lastActivity, now, isPrivate) {
+  return !isPrivate && now - lastActivity >= IDLE_MINUTES * 60000;
+}
 // Formata uma fração como percentagem com sinal (0.051 -> "+5,1%"); "—" se não for um número finito
 function pct(n, digits = 1) {
   if (!isFinite(n)) return '—';

@@ -144,6 +144,49 @@ test('simulador do futuro: juros compostos todos os meses, poupança no fim de c
   assert.equal(proj({ start: 100, years: 1, target: 1000 }).eta, null);
 });
 
+test('simulador do futuro: independência financeira (25 × os gastos de um ano), em euros de hoje', () => {
+  const proj = p => run('futureProjection(p)', { p });
+  // sem rentabilidade nem inflação: 1000 €/mês chegam aos 6000 € ao 6.º mês, mesmo depois do prazo
+  assert.equal(proj({ monthly: 1000, years: 1, fire: 6000 }).fireEta, 6);
+  assert.equal(proj({ monthly: 1000, years: 1, fire: 24000 }).fireEta, 24);
+  // com inflação conta o valor em euros de hoje: chega-se lá mais tarde do que ao mesmo objetivo
+  const inf = proj({ monthly: 1000, years: 1, inflation: 10, fire: 24000, target: 24000 });
+  assert.equal(inf.eta, 24);
+  assert.ok(inf.fireEta > 24, String(inf.fireEta));
+  // já lá está, nunca lá chega e sem gastos
+  assert.equal(proj({ start: 9000, years: 1, fire: 6000 }).fireEta, 0);
+  assert.equal(proj({ start: 100, years: 1, fire: 6000 }).fireEta, null);
+  assert.equal(proj({ start: 100, years: 1 }).fireEta, null);
+});
+
+test('simular a venda: o custo é a parte do investido, o imposto só sobre o ganho', () => {
+  const inv = value => ({
+    investments: [{ id: INV, kind: 'investment', name: 'ETF', inv_type: 'ETF' }],
+    inv_moves: [{ id: 'IMV_2026-01-05_' + '0'.repeat(11) + '1', kind: 'inv_move', investment_id: INV, date: '2026-01-05', move: 'contribution', amount: 1000 }],
+    valuations: [{ id: `VAL_${INV.slice(4)}_2026-09`, kind: 'valuation', investment_id: INV, month: '2026-09', value }],
+  });
+  const sale = (amount = null, tax = 28) => run('saleSimulation(id, amount, tax)', { id: INV, amount, tax });
+  load(inv(1500));
+  assert.deepEqual(sale(), { value: 1500, amount: 1500, cost: 1000, gain: 500, tax: 140, net: 1360 });
+  assert.deepEqual(sale(300), { value: 1500, amount: 300, cost: 200, gain: 100, tax: 28, net: 272 });
+  assert.equal(sale(9999).amount, 1500);           // não se vende mais do que há
+  assert.equal(sale(1500, 0).net, 1500);            // sem imposto
+  load(inv(800));                                   // a perder: não há imposto
+  assert.deepEqual(sale(), { value: 800, amount: 800, cost: 1000, gain: -200, tax: 0, net: 800 });
+  // custo médio: 1000 € valem 2000 € em março e resgatam-se 1000 € em abril (metade): o resto fica com 500 € de custo, não 0
+  load({ ...inv(2000), inv_moves: [...inv(2000).inv_moves,
+    { id: 'IMV_2026-04-10_' + '0'.repeat(11) + '2', kind: 'inv_move', investment_id: INV, date: '2026-04-10', move: 'withdrawal', amount: 1000 }],
+    valuations: [{ id: `VAL_${INV.slice(4)}_2026-03`, kind: 'valuation', investment_id: INV, month: '2026-03', value: 2000 }] });
+  assert.equal(run('averageCost(id)', { id: INV }), 500);
+  assert.deepEqual(sale(), { value: 1000, amount: 1000, cost: 500, gain: 500, tax: 140, net: 860 });
+  // no mesmo mês, um aporte depois do resgate não conta para o valor antes dele; um resgate com data futura ainda não conta
+  const mv = (n, date, move, amount) => ({ id: `IMV_${date}_` + '0'.repeat(11) + n, kind: 'inv_move', investment_id: INV, date, move, amount });
+  load({ ...inv(1000), inv_moves: [mv(1, '2026-01-05', 'contribution', 1000), mv(2, '2026-04-05', 'withdrawal', 1000),
+    mv(3, '2026-04-20', 'contribution', 1000), mv(4, '2026-12-01', 'withdrawal', 500)],
+    valuations: [{ id: `VAL_${INV.slice(4)}_2026-03`, kind: 'valuation', investment_id: INV, month: '2026-03', value: 1000 }] });
+  assert.equal(run('averageCost(id)', { id: INV }), 1000);
+});
+
 test('simulador do futuro: começa com as contas e os investimentos de hoje e com a poupança média dos meses completos', () => {
   load({
     accounts: [account(ACC1, 1000)],
@@ -159,12 +202,12 @@ test('simulador do futuro: começa com as contas e os investimentos de hoje e co
     properties: [property(1, 250000)],   // os imóveis não contam (não são dinheiro que rende)
   });
   // contas 1000 + 2000 − 1500 + 2000 − 1200 − 300 + 2000 = 4000, ETF 320; poupança: (500 + 800) / 2 meses
-  assert.deepEqual(run('futureDefaults()'), { start: 4320, monthly: 650, months: 2, ret: null });
-  // a gastar mais do que entra, a poupança fica 0; sem meses completos também
+  assert.deepEqual(run('futureDefaults()'), { start: 4320, monthly: 650, months: 2, spend: 1350, ret: null });
+  // gastos por mês: (1500 + 1200) / 2, sem o aporte. A gastar mais do que entra, a poupança fica 0; sem meses completos também
   load({ accounts: [account(ACC1, 1000)], transactions: [tx('2026-09-01', 'in', 100), tx('2026-09-02', 'out', 400)] });
-  assert.deepEqual(run('futureDefaults()'), { start: 700, monthly: 0, months: 1, ret: null });
+  assert.deepEqual(run('futureDefaults()'), { start: 700, monthly: 0, months: 1, spend: 400, ret: null });
   load({ accounts: [account(ACC1, 1000)], transactions: [tx('2026-10-01', 'out', 50)] });
-  assert.deepEqual(run('futureDefaults()'), { start: 950, monthly: 0, months: 0, ret: null });
+  assert.deepEqual(run('futureDefaults()'), { start: 950, monthly: 0, months: 0, spend: 0, ret: null });
   // com mais de um ano de carteira, a rentabilidade vem dela (em %, a uma casa): 1000 € a 1/9/2025 valem 1100 € no fim de set 2026
   load({ investments: [{ id: INV, kind: 'investment', name: 'ETF', inv_type: 'ETF' }],
     inv_moves: [{ id: 'IMV_2025-09-01_' + '0'.repeat(11) + '1', kind: 'inv_move', investment_id: INV, date: '2025-09-01', move: 'contribution', amount: 1000 }],
