@@ -59,12 +59,13 @@ const FORMATS = {
   },
   mov: {
     label: 'Movimentos',
-    header: ['Data', 'Conta', 'Tipo', 'Categoria', 'Descrição', 'Valor', 'Conta destino', 'Aproximado', 'Etiquetas', 'A receber', 'Recebido'],
+    header: ['Data', 'Conta', 'Tipo', 'Categoria', 'Descrição', 'Valor', 'Conta destino', 'Aproximado', 'Etiquetas', 'A receber', 'Recebido', 'Reembolso de'],
     example: [
-      ['2024-01-31', 'Conta principal', 'Saída', 'Supermercado', 'Total aproximado do mês', 320, '', 'sim', '', '', ''],
-      ['2024-01-25', 'Conta principal', 'Entrada', 'Salário', '', 1450, '', 'não', '', '', ''],
-      ['2024-02-01', 'Conta principal', 'Transferência', 'Transferência', 'Para poupança', 200, 'Poupança', 'não', '', '', ''],
-      ['2024-02-10', 'Conta principal', 'Saída', 'Restauração', 'Jantar de grupo', 80, '', 'não', 'férias 2024, amigos', 60, 'não'],
+      ['2024-01-31', 'Conta principal', 'Saída', 'Supermercado', 'Total aproximado do mês', 320, '', 'sim', '', '', '', ''],
+      ['2024-01-25', 'Conta principal', 'Entrada', 'Salário', '', 1450, '', 'não', '', '', '', ''],
+      ['2024-02-01', 'Conta principal', 'Transferência', 'Transferência', 'Para poupança', 200, 'Poupança', 'não', '', '', '', ''],
+      ['2024-02-10', 'Conta principal', 'Saída', 'Restauração', 'Jantar de grupo', 80, '', 'não', 'férias 2024, amigos', 60, 'sim', ''],
+      ['2024-02-11', 'Conta principal', 'Entrada', 'Transferências in', 'MB WAY do jantar', 60, '', 'não', '', '', '', '2024-02-10 80,00'],
     ],
   },
   inv: {
@@ -103,7 +104,7 @@ function exportRows(format) {
     return [...D.transactions].sort((a, b) => a.date.localeCompare(b.date)).map(t => [
       t.date, accountName(t.account_id), DIRECTION_LABEL[t.direction], t.category, t.description, t.amount,
       t.direction === 'transfer' ? accountName(t.to_account_id) : '', t.approx ? 'sim' : 'não',
-      (t.tags || []).join(', '), t.due ?? '', t.due ? (t.due_paid ? 'sim' : 'não') : '',
+      (t.tags || []).join(', '), t.due ?? '', t.due ? (t.due_paid ? 'sim' : 'não') : '', refundLabel(t),
     ]);
   }
   if (format === 'inv') {
@@ -189,6 +190,11 @@ function directionOf(s) {
   if (['transferencia', 'transfer'].includes(n)) return 'transfer';
   return null;
 }
+// Coluna "Reembolso de": a data e o valor do gasto devolvido ("2026-11-02 84,00"; os ids mudam ao importar)
+function refundLabel(t) {
+  const o = t.direction === 'in' && t.refund_of ? findById('transactions', t.refund_of) : null;
+  return o ? `${o.date} ${o.amount.toFixed(2).replace('.', ',')}` : '';
+}
 // Interpreta "sim", "s", "yes", "x"... como verdadeiro (coluna Aproximado)
 const yes = s => ['sim', 's', 'yes', 'y', 'true', '1', 'x'].includes(norm(s));
 
@@ -266,6 +272,8 @@ function planImport(text) {
         if (tags.length) it.tags = tags;
         const due = parseNum(get(r, 'A receber'));
         if (direction === 'out' && due > 0) Object.assign(it, { due, due_paid: yes(get(r, 'Recebido')) });
+        const ref = get(r, 'Reembolso de').match(/^(\d{4}-\d{2}-\d{2})\s+([\d.,]+)$/);
+        if (direction === 'in' && ref) it._refund = { date: ref[1], amount: parseNum(ref[2]) };
       }
       if (direction === 'transfer') {
         const to = get(r, 'Conta destino');
@@ -535,10 +543,22 @@ async function runImport(plan, skipDuplicates, onProgress) {
     items.push(it);
   }
 
-  // 3) grava em blocos (ver api.save)
-  const res = await api.save(items, [], onProgress);
+  // 3) grava em blocos (ver api.save); os reembolsos depois, quando os gastos já têm id (procurados pela data e pelo valor)
+  const refunds = items.filter(it => it._refund), first = items.filter(it => !it._refund);
+  const res = await api.save(first, [], onProgress);
   applyChanges(res);
-  return { saved: res.saved.length, skipped, parents: parents.length };
+  let saved = res.saved.length;
+  if (refunds.length) {
+    for (const it of refunds) {
+      const o = D.transactions.find(t => t.direction === 'out' && t.due > 0 && t.date === it._refund.date && Math.abs(t.amount - it._refund.amount) < 0.005);
+      if (o) it.refund_of = o.id;
+      delete it._refund;
+    }
+    const res2 = await api.save(refunds, [], onProgress);
+    applyChanges(res2);
+    saved += res2.saved.length;
+  }
+  return { saved, skipped, parents: parents.length };
 }
 
 // Abre a janela "Importar": escolher/arrastar ficheiros, pré-visualizar o plano e confirmar.

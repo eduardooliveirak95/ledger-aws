@@ -137,49 +137,104 @@ function matchesSearch(t, words) {
   return words.every(w => text.includes(w));
 }
 
-/** Dinheiro a receber: os gastos com uma parte a devolver (due) que ainda não foi recebida, do mais antigo para o mais
- *  recente. { list, total } */
+/**
+ * Reembolsos: uma entrada com refund_of (o id de um gasto com "a receber") é o dinheiro que te devolveram. Não conta como
+ * entrada nem como nada no mês em que chega: abate ao gasto, na data e na categoria dele, até ao valor do gasto (flowTotals,
+ * monthlyFlows, categoryTotals, budgetStatus). O saldo (txEffect e o net) é o dinheiro a sério, por isso o MB WAY conta lá
+ * no dia em que chega. Se o gasto já não existir, volta a ser uma entrada normal. refundTargets() = Map id → gasto.
+ */
+function refundTargets() {
+  const m = new Map();
+  for (const t of D.transactions) if (t.direction === 'out' && t.due > 0) m.set(t.id, t);
+  return m;
+}
+function refundOf(t, targets = refundTargets()) { return t.direction === 'in' && t.refund_of ? targets.get(t.refund_of) || null : null; }
+/** Os reembolsos de uma vez, para se consultarem muitas vezes: { targets (refundTargets), got (refundsReceived) } */
+function refundCtx() { return { targets: refundTargets(), got: refundsReceived() }; }
+/** A parte de um gasto que já foi devolvida (os reembolsos associados, até ao valor do gasto); 0 nos outros movimentos. */
+function refundedPart(t, ctx) { return t.direction === 'out' && ctx.targets.has(t.id) ? Math.min(ctx.got.get(t.id) || 0, t.amount) : 0; }
+/** O que um movimento conta para os gastos por categoria: { category, amount } (um gasto, menos o que já foi devolvido) ou
+ *  null (as entradas, os reembolsos e as transferências). */
+function spendEntry(t, ctx) {
+  return t.direction === 'out' ? { category: t.category, amount: round2(t.amount - refundedPart(t, ctx)) } : null;
+}
+/** Quanto já foi devolvido de cada gasto (soma dos reembolsos): Map id → €. */
+function refundsReceived() {
+  const m = new Map();
+  for (const r of D.transactions) if (r.direction === 'in' && r.refund_of) m.set(r.refund_of, round2((m.get(r.refund_of) || 0) + r.amount));
+  return m;
+}
+
+/** Dinheiro a receber: os gastos com uma parte a devolver (due) por receber, do mais antigo para o mais recente. Saem quando
+ *  são marcados como recebidos (due_paid) ou quando os reembolsos associados chegam ao due. { list: [{ t, received, left }],
+ *  total (o que falta) } */
 function receivables() {
-  const list = D.transactions.filter(t => t.direction === 'out' && t.due > 0 && !t.due_paid).sort((a, b) => a.date.localeCompare(b.date));
-  return { list, total: round2(list.reduce((s, t) => s + t.due, 0)) };
+  const got = refundsReceived();
+  const list = D.transactions.filter(t => t.direction === 'out' && t.due > 0 && !t.due_paid)
+    .map(t => ({ t, received: got.get(t.id) || 0, left: round2(t.due - (got.get(t.id) || 0)) }))
+    .filter(x => x.left > 0).sort((a, b) => a.t.date.localeCompare(b.t.date));
+  return { list, total: round2(list.reduce((s, x) => s + x.left, 0)) };
+}
+
+/** As entradas que podem ser o reembolso de um gasto: sem ligação, de 3 dias antes do gasto até 90 dias depois, primeiro as
+ *  de valor mais perto do que falta receber (e depois as mais antigas). */
+function refundCandidates(id) {
+  const o = findById('transactions', id);
+  if (!o) return [];
+  const left = o.due - (refundsReceived().get(o.id) || 0), from = addDays(o.date, -3), to = addDays(o.date, 90), targets = refundTargets();
+  // sem ligação, ou ligadas a um gasto que já não existe (refundOf null)
+  return D.transactions.filter(t => t.direction === 'in' && !refundOf(t, targets) && t.date >= from && t.date <= to)
+    .sort((a, b) => Math.abs(a.amount - left) - Math.abs(b.amount - left) || a.date.localeCompare(b.date));
 }
 
 /** Totais de entradas e saídas. As transferências só contam quando se olha para uma conta.
  *  out = gasto real; invested = saídas para investimentos; amortized = amortizações de crédito;
- *  net = variação do dinheiro (in − out − invested − amortized); saved = in − out (o que não foi gasto). */
+ *  net = variação do dinheiro (a soma de tudo o que entrou e saiu, também os reembolsos); saved = in − out (o que não foi
+ *  gasto). Um gasto conta menos o que já foi devolvido (refundedPart) e os reembolsos não contam em in nem em out. */
 function flowTotals(txs, account = '') {
-  let inn = 0, out = 0, inv = 0, am = 0;
+  let inn = 0, out = 0, inv = 0, am = 0, net = 0;
+  const ctx = refundCtx();
   for (const t of txs) {
     const e = txEffect(t, account);
+    net += e;
+    if (refundOf(t, ctx.targets)) continue;   // abate ao gasto, no mês dele (refundedPart)
     if (e > 0) inn += e;
     else if (e < 0 && isAmortizationOut(t)) am -= e;
     else if (e < 0 && isInvestmentOut(t)) inv -= e;
-    else out -= e;
+    else if (e < 0) out += -e - refundedPart(t, ctx);
   }
   return { in: round2(inn), out: round2(out), invested: round2(inv), amortized: round2(am),
-           net: round2(inn - out - inv - am), saved: round2(inn - out) };
+           net: round2(net), saved: round2(inn - out) };
 }
 
 // Como flowTotals, mas mês a mês (para o gráfico de barras de entradas/saídas)
 function monthlyFlows(months, filters) {
   const idx = Object.fromEntries(months.map((m, i) => [m, i]));
   const inn = months.map(() => 0), out = months.map(() => 0), inv = months.map(() => 0), am = months.map(() => 0);
+  const ctx = refundCtx();
   for (const t of filterTx({ ...filters, from: months[0], to: months[months.length - 1] })) {
     const i = idx[ymOf(t.date)];
-    if (i === undefined) continue;
+    if (i === undefined || refundOf(t, ctx.targets)) continue;   // um reembolso abate ao gasto, no mês dele
     const e = txEffect(t, filters.account);
     if (e > 0) inn[i] += e;
     else if (e < 0 && isAmortizationOut(t)) am[i] -= e;
     else if (e < 0 && isInvestmentOut(t)) inv[i] -= e;
-    else out[i] -= e;
+    else if (e < 0) out[i] += -e - refundedPart(t, ctx);
   }
   return { in: inn.map(round2), out: out.map(round2), invested: inv.map(round2), amortized: am.map(round2) };
 }
 
-/** Totais por categoria, do maior para o menor. As categorias de poupança ficam de fora das despesas. */
+/** Totais por categoria, do maior para o menor. As categorias de poupança ficam de fora das despesas. Cada gasto conta menos
+ *  o que já foi devolvido (spendEntry) e os reembolsos não contam nas entradas. */
 function categoryTotals(txs, direction = 'out') {
   const map = Object.create(null);   // sem protótipo: uma categoria chamada "constructor" ou "toString" conta como as outras
-  for (const t of txs) if (t.direction === direction && !isSavingOut(t)) map[t.category] = (map[t.category] || 0) + t.amount;
+  const ctx = refundCtx();
+  for (const t of txs) {
+    if (direction === 'out') {
+      const s = spendEntry(t, ctx);
+      if (s && !isSavingOut(t)) map[s.category] = (map[s.category] || 0) + s.amount;
+    } else if (t.direction === direction && !refundOf(t, ctx.targets)) map[t.category] = (map[t.category] || 0) + t.amount;
+  }
   return Object.entries(map).map(([k, v]) => [k, round2(v)]).sort((a, b) => b[1] - a[1]);
 }
 
@@ -273,7 +328,11 @@ function budgetStatus(from, to) {
   for (const b of D.budgets) if (!latest[b.category] || (b.updated_at || '') > (latest[b.category].updated_at || '')) latest[b.category] = b;
   const spentIn = (a, z) => {
     const by = Object.create(null);
-    for (const t of filterTx({ from: a, to: z })) if (t.direction === 'out') by[t.category] = (by[t.category] || 0) + t.amount;
+    const ctx = refundCtx();
+    for (const t of filterTx({ from: a, to: z })) {
+      const s = spendEntry(t, ctx);   // os gastos, menos o que já foi devolvido
+      if (s) by[s.category] = (by[s.category] || 0) + s.amount;
+    }
     return by;
   };
   const spentBy = spentIn(from, to);
@@ -369,10 +428,10 @@ function priceRises(list = recurringExpenses()) {
  * a dobrar).
  */
 function recurringFlows(account = '') {
-  const now = thisMonth(), from = addMonths(now, -12), today = todayISO(), entries = [];
+  const now = thisMonth(), from = addMonths(now, -12), today = todayISO(), entries = [], targets = refundTargets();
   for (const t of D.transactions) {
     const ym = ymOf(t.date);
-    if (ym < from || ym > now) continue;
+    if (ym < from || ym > now || refundOf(t, targets)) continue;   // um reembolso não é uma entrada habitual
     const e = txEffect(t, account), key = recurringKey(t.description);
     if (e && key.length >= 3) entries.push({ t, key: (e > 0 ? '+' : '−') + key, value: Math.abs(e) });
   }

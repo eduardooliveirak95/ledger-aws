@@ -296,6 +296,18 @@ def test_transaction_tags_and_due(table):
     out, inn = sorted(d["transactions"], key=lambda t: t["date"])
     assert (out["tags"], out["due"], out["due_paid"]) == (["Férias 2026", "casa"], 60, True)
     assert "tags" not in inn and "due" not in inn   # numa entrada não há "a receber"
+    # o reembolso: só numa entrada, com um id de movimento válido
+    save([{"kind": "transaction", "date": "2026-09-04", "account_id": acc, "direction": "in", "amount": 60, "refund_of": out["id"]},
+          {"kind": "transaction", "date": "2026-09-05", "account_id": acc, "direction": "out", "amount": 5, "refund_of": out["id"]}])
+    _, d = call("GET /data")
+    by_date = {t["date"]: t for t in d["transactions"]}
+    assert by_date["2026-09-04"]["refund_of"] == out["id"] and "refund_of" not in by_date["2026-09-05"]
+    # no backup diário, o reembolso leva a data e o valor do gasto (os ids mudam ao importar)
+    rows = dict(app.backup_files("u1", "2026-10-04"))["ledger-movimentos-2026-10-04.csv"].split("\r\n")
+    assert next(r for r in rows if r.startswith("2026-09-04")).endswith(";2026-09-02 80,00")
+    status, _ = call("POST /items", body={"items": [{"kind": "transaction", "date": "2026-09-06", "account_id": acc,
+                                                     "direction": "in", "amount": 1, "refund_of": "nope"}]})
+    assert status == 400
 
 
 def test_backup_csv_content(table):
@@ -323,8 +335,8 @@ def test_backup_csv_content(table):
     assert files["ledger-contas-2026-10-04.csv"].split("\r\n")[1:] == [
         "Ordem;Conta à ordem;0,00;2026-01-01", "Poupança;Conta à ordem;0,00;2026-01-01"]
     assert files["ledger-movimentos-2026-10-04.csv"].split("\r\n")[1:] == [
-        "2026-09-01;Ordem;Transferência;Transferência;;10,00;Poupança;não;;;",
-        '2026-09-02;Ordem;Saída;Casa;"Renda; ""set""";1234,50;;não;casa, 2026;600,00;não']
+        "2026-09-01;Ordem;Transferência;Transferência;;10,00;Poupança;não;;;;",
+        '2026-09-02;Ordem;Saída;Casa;"Renda; ""set""";1234,50;;não;casa, 2026;600,00;não;']
     assert files["ledger-investimentos-2026-10-04.csv"].split("\r\n")[1:] == [
         # uma linha sem operação para os investimentos sem registos e para os que têm notas (as notas vão na descrição)
         ";Com ISIN;ETF;;;ISIN: IE0000000001", ";Sem registos;PPR;;;nota", "2026-09;Com ISIN;ETF;Valor;10,00;",

@@ -477,26 +477,57 @@ function saleModal(inv) {
   update();
 }
 
+// Um texto com no máximo n caracteres (com "…" se for cortado), para os selos
+const shortText = (s, n) => (String(s).length > n ? String(s).slice(0, n - 1).trimEnd() + '…' : String(s));
+
 // ── dinheiro a receber (painel dos Movimentos; receivables no calc.js) ──
-// Os gastos com uma parte a devolver ainda por receber, de todas as contas e meses. "Recebido" marca-o (due_paid);
-// o dinheiro que entra regista-se como um movimento normal.
+// Os gastos com uma parte a devolver ainda por receber, de todas as contas e meses. "Recebido" (markReceived) associa as
+// entradas com esse dinheiro (refund_of) ou só o marca como recebido (due_paid).
 function renderReceivables() {
   const r = receivables();
   $('#due-panel').classList.toggle('hidden', !r.list.length);
   if (!r.list.length) return;
   $('#due-total').textContent = eur(r.total);
-  $('#due-table').innerHTML = `<table class="data"><tbody>${r.list.map(t => `<tr>
+  $('#due-table').innerHTML = `<table class="data"><tbody>${r.list.map(({ t, received, left }) => `<tr>
     <td class="date">${dateLabel(t.date)}</td>
-    <td>${esc(t.description) || esc(t.category)}<div class="li-sub">pagaste ${eur(t.amount)}</div></td>
-    <td class="num">${eur(t.due)}</td>
+    <td>${esc(t.description) || esc(t.category)}<div class="li-sub">pagaste ${eur(t.amount)}${received ? ` · já recebeste ${eur(received)}` : ''}</div></td>
+    <td class="num">${eur(left)}</td>
     <td class="actions"><button class="btn" data-due-paid="${esc(t.id)}">Recebido</button></td>
   </tr>`).join('')}</tbody></table>`;
 }
-async function markReceived(id) {
-  const t = findById('transactions', id);
-  if (!t) return;
-  try { await saveItems([{ ...t, kind: 'transaction', due_paid: true }]); toast('Marcado como recebido'); }
-  catch (e) { toast(e.message, true); }
+// "Recebido": escolher a(s) entrada(s) que são esse dinheiro (refundCandidates), que deixam de contar como entradas e abatem
+// ao gasto; ou "Recebi sem movimento" (em mão), que só o marca como recebido.
+function markReceived(id) {
+  const o = findById('transactions', id);
+  if (!o) return;
+  const left = round2(o.due - (refundsReceived().get(o.id) || 0)), cands = refundCandidates(id).slice(0, 30);
+  const body = document.createElement('div');
+  body.style.cssText = 'display:flex;flex-direction:column;gap:12px';
+  body.innerHTML = `<div class="modal-hint">Falta receber <b>${eur(left)}</b> de "${esc(o.description || o.category)}" (${dateLabel(o.date)}).
+      Escolhe a entrada (ou as entradas, se cada pessoa mandou a sua parte) com esse dinheiro: deixa de contar como entrada e abate
+      ao gasto. O saldo da conta não muda.</div>
+    ${cands.length ? `<div class="table-wrap"><table class="data"><tbody>${cands.map(t => `<tr>
+      <td class="sel"><input type="checkbox" data-refund="${esc(t.id)}" aria-label="Associar a entrada de ${eur(t.amount)} de ${dateLabel(t.date)}"></td>
+      <td class="date">${dateLabel(t.date)}</td><td>${esc(t.description) || esc(t.category)}<div class="li-sub">${esc(accountName(t.account_id))}</div></td>
+      <td class="num pos">${eur(t.amount)}</td></tr>`).join('')}</tbody></table></div>`
+      : '<div class="empty">Não há entradas por associar entre 3 dias antes e 90 dias depois do gasto.</div>'}`;
+  const chosen = () => $$('[data-refund]:checked', body).map(x => findById('transactions', x.dataset.refund)).filter(Boolean);
+  const save = async (refunds, paid) => {
+    try {
+      await saveItems([...refunds.map(r => ({ ...r, kind: 'transaction', refund_of: o.id })), ...(paid ? [{ ...o, kind: 'transaction', due_paid: true }] : [])]);
+      modal.close();
+      toast(refunds.length ? `${refunds.length === 1 ? 'Entrada associada' : 'Entradas associadas'}` : 'Marcado como recebido');
+    } catch (e) { toast(e.message, true); }
+  };
+  modal.open({ title: 'Recebido', body, footer: [
+    { label: 'Cancelar', onClick: () => modal.close() },
+    { label: 'Recebi sem movimento', onClick: () => save([], true) },
+    { label: 'Associar', cls: 'primary', onClick: () => {
+      const refunds = chosen();
+      if (!refunds.length) return toast('Escolhe pelo menos uma entrada', true);
+      save(refunds, round2(refunds.reduce((s, r) => s + r.amount, 0)) >= left);
+    } },
+  ] });
 }
 
 // ── previsão para o fim do mês (painel dos Movimentos; monthForecast no calc.js) ──
@@ -945,6 +976,7 @@ function renderMovements() {
   // A seleção fica só com movimentos visíveis, para nunca mudar algo que os filtros escondem.
   movSelectable = shown.filter(t => t.direction !== 'transfer').map(t => t.id);
   S.movSel = new Set(movSelectable.filter(id => S.movSel.has(id)));
+  const got = refundsReceived(), targets = refundTargets();   // o que falta receber e os reembolsos (selos da descrição)
   $('#mov-table').innerHTML = rows.length ? `<table class="data">
     <thead><tr><th class="sel"><input type="checkbox" id="mov-sel-all" aria-label="Selecionar todos"></th><th>Data</th><th>Tipo</th><th>Conta</th><th>Categoria</th><th>Descrição</th><th class="num">Valor</th><th></th></tr></thead>
     <tbody>${shown.map(t => {
@@ -957,10 +989,13 @@ function renderMovements() {
         <td><span class="badge ${t.direction}">${DIRECTION_LABEL[t.direction]}</span>${t.approx ? '<span class="badge approx" title="Valor aproximado">≈</span>' : ''}</td>
         <td class="muted">${acct}</td>
         <td><span class="chip">${esc(t.category)}</span></td>
-        <td class="desc" title="${esc(t.description)}">${esc(t.description) || '<span class="muted">—</span>'}${
-          (t.tags || []).length || (t.due > 0 && !t.due_paid) ? `<div class="desc-extra">${(t.tags || []).map(x =>
-          `<a href="#" class="chip tag" data-tag="${esc(x)}" title="Ver os movimentos com esta etiqueta">#${esc(x)}</a>`).join('')}${
-          t.due > 0 && !t.due_paid ? `<span class="badge due" title="A receber">a receber ${eur(t.due)}</span>` : ''}</div>` : ''}</td>
+        <td class="desc" title="${esc(t.description)}">${esc(t.description) || '<span class="muted">—</span>'}${(() => {
+          const left = t.due > 0 && !t.due_paid ? round2(t.due - (got.get(t.id) || 0)) : 0, refund = refundOf(t, targets);
+          const extra = (t.tags || []).map(x => `<a href="#" class="chip tag" data-tag="${esc(x)}" title="Ver os movimentos com esta etiqueta">#${esc(x)}</a>`).join('')
+            + (left > 0 ? `<span class="badge due" title="A receber">a receber ${eur(left)}</span>` : '')
+            + (refund ? `<span class="badge in" title="Não conta como entrada: abate a este gasto">↩ reembolso de ${esc(shortText(refund.description || refund.category, 30))}</span>` : '');
+          return extra ? `<div class="desc-extra">${extra}</div>` : '';
+        })()}</td>
         <td class="num ${signClass(t.direction === 'transfer' && !S.movAccount ? 0 : e)}">${t.direction === 'transfer' && !S.movAccount ? eur(t.amount) : eurSigned(e)}</td>
         <td class="actions"><button class="icon-btn" data-edit-tx="${esc(t.id)}" aria-label="Editar">✎</button><button class="icon-btn del" data-del-tx="${esc(t.id)}" aria-label="Apagar">✕</button></td>
       </tr>`;
@@ -1145,9 +1180,10 @@ function txForm(tx = null, preset = {}) {
   }
   const accOpts = sortByName(D.accounts).map(a => ({ value: a.id, label: a.name }));
   const defaults = { direction: 'out', date: todayISO(), account_id: S.movAccount || accOpts[0].value, amount: '', category: '', description: '', approx: false, ...preset };
+  const refundFrom = tx?.refund_of ? findById('transactions', tx.refund_of) : null;   // esta entrada é o reembolso deste gasto
   formModal({
     title: tx ? 'Editar movimento' : 'Novo movimento',
-    values: tx ? { ...tx, tags: (tx.tags || []).join(', ') } : { tags: '', ...defaults },
+    values: tx ? { ...tx, tags: (tx.tags || []).join(', '), keep_refund: !!refundFrom } : { tags: '', ...defaults },
     fields: [
       { name: 'direction', label: 'Tipo', type: 'seg', required: true,
         options: [{ value: 'out', label: 'Saída' }, { value: 'in', label: 'Entrada' }, { value: 'transfer', label: 'Transferência' }],
@@ -1164,14 +1200,21 @@ function txForm(tx = null, preset = {}) {
       { name: 'due', label: 'A receber (€, opcional)', type: 'money', positive: true, showIf: v => v.direction === 'out',
         hint: 'A parte que te vão devolver (ex.: pagaste a conta toda e mandam-te a parte deles).' },
       { name: 'due_paid', label: 'Já recebi', type: 'check', showIf: v => v.direction === 'out' && String(v.due ?? '').trim() !== '' },
+      ...(refundFrom ? [{ name: 'keep_refund', label: `Reembolso de "${refundFrom.description || refundFrom.category}" (${dateLabel(refundFrom.date)})`,
+        type: 'check', showIf: v => v.direction === 'in' }] : []),
       { name: 'approx', label: 'Valor aproximado (ex.: reconstituído de papel)', type: 'check' },
     ],
     onSubmit: async v => {
       if (v.direction === 'transfer' && v.to_account_id === v.account_id) throw new Error('Escolhe duas contas diferentes');
       if (v.due > v.amount) throw new Error('"A receber" não pode ser maior do que o valor');
       const tags = String(v.tags || '').split(',').map(s => s.trim()).filter(Boolean);
-      await saveItems([{ kind: 'transaction', id: tx?.id, ...v, tags, due_paid: !!(v.due && v.due_paid),
+      const { keep_refund, ...rest } = v;
+      const res = await saveItems([{ kind: 'transaction', id: tx?.id, ...rest, tags, due_paid: !!(v.due && v.due_paid),
+        refund_of: v.direction === 'in' && keep_refund && tx?.refund_of ? tx.refund_of : undefined,
         category: v.direction === 'transfer' ? 'Transferência' : v.category }]);
+      // mudar a data muda o id do movimento: os reembolsos deste gasto passam a apontar para o id novo
+      const newId = res.saved?.[0]?.id, linked = tx && newId && newId !== tx.id ? D.transactions.filter(r => r.refund_of === tx.id) : [];
+      if (linked.length) await saveItems(linked.map(r => ({ ...r, kind: 'transaction', refund_of: newId })));
       toast(tx ? 'Movimento atualizado' : 'Movimento guardado');
     },
     danger: tx && { label: 'Apagar', onClick: () => deleteTx(tx.id) },
@@ -1284,7 +1327,11 @@ function budgetsModal() {
   const from = first ? [addMonths(thisMonth(), -12), first].sort().pop() : to;
   const nMonths = first ? monthRange(from, to).length : 0;
   const spent = Object.create(null);
-  if (nMonths) for (const t of filterTx({ from, to })) if (t.direction === 'out') spent[t.category] = (spent[t.category] || 0) + t.amount;
+  const ctx = refundCtx();
+  if (nMonths) for (const t of filterTx({ from, to })) {
+    const s = spendEntry(t, ctx);   // os gastos, menos o que já foi devolvido
+    if (s) spent[s.category] = (spent[s.category] || 0) + s.amount;
+  }
   const avgText = (c, yearly) => (spent[c] ? `${eurShort(spent[c] / nMonths * (yearly ? 12 : 1))}/${yearly ? 'ano' : 'mês'}` : '—');
   // primeiro as categorias com orçamento ou com gastos (das mais gastas para as menos), depois as outras por ordem alfabética
   const cats = [...new Set([...knownCategories('out').filter(c => !isSavingOut({ direction: 'out', category: c })), ...Object.keys(latest)])]

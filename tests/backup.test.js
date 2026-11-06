@@ -43,6 +43,7 @@ const DATA = {
     { id: 'TX_2026-01-05_000000000b01', kind: 'transaction', date: '2026-01-05', direction: 'out', amount: 32.4, category: 'Supermercado', description: 'Compras; pão "caseiro"', account_id: ACC1, approx: false, tags: ['casa', 'férias 2026'], due: 12.4, due_paid: true },
     { id: 'TX_2026-01-05_000000000b02', kind: 'transaction', date: '2026-01-05', direction: 'out', amount: 32.4, category: 'Supermercado', description: 'Compras; pão "caseiro"', account_id: ACC1, approx: false },
     { id: 'TX_2026-01-25_000000000b03', kind: 'transaction', date: '2026-01-25', direction: 'in', amount: 1800, category: 'Salário', description: '', account_id: ACC1, approx: false },
+    { id: 'TX_2026-01-26_000000000b07', kind: 'transaction', date: '2026-01-26', direction: 'in', amount: 12.4, category: 'Transferências in', description: 'MB WAY', account_id: ACC1, approx: false, refund_of: 'TX_2026-01-05_000000000b01' },
     { id: 'TX_2026-01-31_000000000b04', kind: 'transaction', date: '2026-01-31', direction: 'out', amount: 120, category: 'Restauração', description: '=SOMA(A1) total do mês', account_id: ACC1, approx: true },
     { id: 'TX_2026-02-01_000000000b05', kind: 'transaction', date: '2026-02-01', direction: 'transfer', amount: 200, category: 'Transferência', description: 'Para a poupança', account_id: ACC1, to_account_id: ACC2, approx: false },
     { id: 'TX_2026-02-03_000000000b06', kind: 'transaction', date: '2026-02-03', direction: 'out', amount: 2.4, category: 'Café', description: 'linha 1\nlinha 2', account_id: ACC3, approx: false },
@@ -80,7 +81,7 @@ const SNAPSHOT = `(() => {
   const sorted = xs => xs.map(x => JSON.stringify(x)).sort();
   return {
     accounts: sorted(D.accounts.map(a => [a.name, a.acc_type, a.opening_balance, a.opening_date])),
-    transactions: sorted(D.transactions.map(t => [t.date, acc(t.account_id), t.direction, t.category, t.description, t.amount, acc(t.to_account_id), !!t.approx, t.tags || [], t.due ?? null, !!t.due_paid])),
+    transactions: sorted(D.transactions.map(t => [t.date, acc(t.account_id), t.direction, t.category, t.description, t.amount, acc(t.to_account_id), !!t.approx, t.tags || [], t.due ?? null, !!t.due_paid, refundLabel(t)])),
     investments: sorted(D.investments.map(i => [i.name, i.inv_type, i.notes || ''])),
     inv_moves: sorted(D.inv_moves.map(m => [m.date, inv(m.investment_id), m.move, m.amount, m.description || ''])),
     valuations: sorted(D.valuations.map(v => [inv(v.investment_id), v.month, v.value])),
@@ -110,7 +111,7 @@ test('exportar o backup e importá-lo numa conta vazia dá exatamente os mesmos 
   await importAll(files);
   assert.deepEqual(run(SNAPSHOT), before);
   // e os números que a app mostra também são os mesmos
-  assert.equal(run('totalAccountsBalance()'), 1250.55 + 3000 - 32.4 * 2 + 1800 - 120 - 2.4);
+  assert.equal(run('totalAccountsBalance()'), 1250.55 + 3000 - 32.4 * 2 + 1800 + 12.4 - 120 - 2.4);
 });
 
 test('a ordem dos ficheiros só importa para o património, que vem depois dos créditos', async () => {
