@@ -59,11 +59,12 @@ const FORMATS = {
   },
   mov: {
     label: 'Movimentos',
-    header: ['Data', 'Conta', 'Tipo', 'Categoria', 'Descrição', 'Valor', 'Conta destino', 'Aproximado'],
+    header: ['Data', 'Conta', 'Tipo', 'Categoria', 'Descrição', 'Valor', 'Conta destino', 'Aproximado', 'Etiquetas', 'A receber', 'Recebido'],
     example: [
-      ['2024-01-31', 'Conta principal', 'Saída', 'Supermercado', 'Total aproximado do mês', 320, '', 'sim'],
-      ['2024-01-25', 'Conta principal', 'Entrada', 'Salário', '', 1450, '', 'não'],
-      ['2024-02-01', 'Conta principal', 'Transferência', 'Transferência', 'Para poupança', 200, 'Poupança', 'não'],
+      ['2024-01-31', 'Conta principal', 'Saída', 'Supermercado', 'Total aproximado do mês', 320, '', 'sim', '', '', ''],
+      ['2024-01-25', 'Conta principal', 'Entrada', 'Salário', '', 1450, '', 'não', '', '', ''],
+      ['2024-02-01', 'Conta principal', 'Transferência', 'Transferência', 'Para poupança', 200, 'Poupança', 'não', '', '', ''],
+      ['2024-02-10', 'Conta principal', 'Saída', 'Restauração', 'Jantar de grupo', 80, '', 'não', 'férias 2024, amigos', 60, 'não'],
     ],
   },
   inv: {
@@ -102,6 +103,7 @@ function exportRows(format) {
     return [...D.transactions].sort((a, b) => a.date.localeCompare(b.date)).map(t => [
       t.date, accountName(t.account_id), DIRECTION_LABEL[t.direction], t.category, t.description, t.amount,
       t.direction === 'transfer' ? accountName(t.to_account_id) : '', t.approx ? 'sim' : 'não',
+      (t.tags || []).join(', '), t.due ?? '', t.due ? (t.due_paid ? 'sim' : 'não') : '',
     ]);
   }
   if (format === 'inv') {
@@ -259,6 +261,12 @@ function planImport(text) {
         category: get(r, format === 'mov' ? 'Categoria' : 'Category') || (direction === 'transfer' ? 'Transferência' : 'Outros'),
         description: get(r, format === 'mov' ? 'Descri' : 'Description'),
         approx: format === 'mov' && yes(get(r, 'Aproximado')) };
+      if (format === 'mov') {
+        const tags = get(r, 'Etiquetas').split(',').map(s => s.trim()).filter(Boolean);
+        if (tags.length) it.tags = tags;
+        const due = parseNum(get(r, 'A receber'));
+        if (direction === 'out' && due > 0) Object.assign(it, { due, due_paid: yes(get(r, 'Recebido')) });
+      }
       if (direction === 'transfer') {
         const to = get(r, 'Conta destino');
         if (!to) return err('transferência sem "Conta destino"');

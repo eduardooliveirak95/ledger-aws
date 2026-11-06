@@ -65,3 +65,30 @@ test('os totais por mês dos gráficos também seguem a pesquisa', () => {
   assert.deepEqual(flows.out, [650, 650]);
   assert.deepEqual(flows.in, [0, 0]);
 });
+
+test('etiquetas: "#etiqueta" encontra os movimentos dela, de qualquer categoria, sem acentos', () => {
+  const tagged = [...TXS, { ...tx(6, '2026-09-20', 'out', 80, 'Restauração', 'Jantar'), tags: ['Férias 2026', 'amigos'] },
+    { ...tx(7, '2026-09-21', 'out', 30, 'Transportes', 'Gasolina'), tags: ['férias 2026'] }];
+  run('D.transactions = txs', { txs: tagged });
+  try {
+    assert.deepEqual(ids({ text: '#ferias' }), ['6', '7']);
+    assert.deepEqual(ids({ text: '#amigos' }), ['6']);
+    assert.deepEqual(ids({ text: '#casa' }), []);   // "Renda de casa" e a categoria "Casa" não são etiquetas
+  } finally {
+    run('D.transactions = txs', { txs: TXS });
+  }
+});
+
+test('a receber: os gastos com uma parte por devolver, ainda não recebidos', () => {
+  const list = [...TXS, { ...tx(6, '2026-09-20', 'out', 80, 'Restauração', 'Jantar'), due: 60 },
+    { ...tx(7, '2026-09-02', 'out', 40, 'Restauração', 'Almoço'), due: 25.5 },
+    { ...tx(8, '2026-09-03', 'out', 40, 'Restauração', 'Já pago'), due: 20, due_paid: true }];
+  run('D.transactions = txs', { txs: list });
+  try {
+    const r = run('receivables()');
+    assert.deepEqual(r.list.map(t => t.id.slice(-1)), ['7', '6']);   // do mais antigo para o mais recente
+    assert.equal(r.total, 85.5);
+  } finally {
+    run('D.transactions = txs', { txs: TXS });
+  }
+});

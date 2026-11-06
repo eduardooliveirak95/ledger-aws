@@ -257,6 +257,15 @@
       <div class="forecast-body" id="forecast-body"></div>
     </div>
 
+    <!-- Dinheiro a receber (receivables no calc.js): só aparece se houver gastos com uma parte por receber -->
+    <div class="panel hidden" id="due-panel" style="margin-top:16px">
+      <div class="panel-header">
+        <div><div class="panel-title">A receber</div><div class="li-sub">o que te devem dos gastos que pagaste por inteiro</div></div>
+        <div class="forecast-total" id="due-total"></div>
+      </div>
+      <div class="table-wrap" id="due-table"></div>
+    </div>
+
     <!-- Orçamentos por categoria no período escolhido (budgetStatus no calc.js); só aparece se houver orçamentos -->
     <div class="panel hidden" id="budget-panel" style="margin-top:16px">
       <div class="panel-header">

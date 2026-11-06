@@ -128,11 +128,20 @@ function filterTx({ from, to, account = '', catIn = [], catOut = [], text = '' }
   });
 }
 
-/** Pesquisa nos movimentos: cada palavra tem de aparecer na descrição, na categoria ou no valor
- *  (sem distinguir maiúsculas nem acentos; "agua" encontra "Água", "45,9" encontra 45,90 €). */
+/** Pesquisa nos movimentos: cada palavra tem de aparecer na descrição, na categoria, no valor ou nas etiquetas (como
+ *  "#etiqueta"; sem distinguir maiúsculas nem acentos; "agua" encontra "Água", "45,9" encontra 45,90 €, "#ferias" as
+ *  etiquetadas "Férias 2026"). */
 function matchesSearch(t, words) {
-  const text = norm(`${t.description || ''} ${t.category || ''} ${String(t.amount).replace('.', ',')}`);
+  const tags = (t.tags || []).map(x => '#' + x).join(' ');
+  const text = norm(`${t.description || ''} ${t.category || ''} ${String(t.amount).replace('.', ',')} ${tags}`);
   return words.every(w => text.includes(w));
+}
+
+/** Dinheiro a receber: os gastos com uma parte a devolver (due) que ainda não foi recebida, do mais antigo para o mais
+ *  recente. { list, total } */
+function receivables() {
+  const list = D.transactions.filter(t => t.direction === 'out' && t.due > 0 && !t.due_paid).sort((a, b) => a.date.localeCompare(b.date));
+  return { list, total: round2(list.reduce((s, t) => s + t.due, 0)) };
 }
 
 /** Totais de entradas e saídas. As transferências só contam quando se olha para uma conta.

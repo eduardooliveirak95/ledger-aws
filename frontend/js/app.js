@@ -477,6 +477,28 @@ function saleModal(inv) {
   update();
 }
 
+// ── dinheiro a receber (painel dos Movimentos; receivables no calc.js) ──
+// Os gastos com uma parte a devolver ainda por receber, de todas as contas e meses. "Recebido" marca-o (due_paid);
+// o dinheiro que entra regista-se como um movimento normal.
+function renderReceivables() {
+  const r = receivables();
+  $('#due-panel').classList.toggle('hidden', !r.list.length);
+  if (!r.list.length) return;
+  $('#due-total').textContent = eur(r.total);
+  $('#due-table').innerHTML = `<table class="data"><tbody>${r.list.map(t => `<tr>
+    <td class="date">${dateLabel(t.date)}</td>
+    <td>${esc(t.description) || esc(t.category)}<div class="li-sub">pagaste ${eur(t.amount)}</div></td>
+    <td class="num">${eur(t.due)}</td>
+    <td class="actions"><button class="btn" data-due-paid="${esc(t.id)}">Recebido</button></td>
+  </tr>`).join('')}</tbody></table>`;
+}
+async function markReceived(id) {
+  const t = findById('transactions', id);
+  if (!t) return;
+  try { await saveItems([{ ...t, kind: 'transaction', due_paid: true }]); toast('Marcado como recebido'); }
+  catch (e) { toast(e.message, true); }
+}
+
 // ── previsão para o fim do mês (painel dos Movimentos; monthForecast no calc.js) ──
 // Só no mês atual, com a conta escolhida no filtro (ou todas). As entradas e saídas habituais que ainda faltam vêm por nome;
 // os gastos do dia a dia são a média dos últimos meses menos o que já se gastou este mês.
@@ -823,6 +845,7 @@ function renderMovements() {
 
   // Orçamentos do período (budgetStatus): em todas as contas, sem os filtros de categoria nem a pesquisa
   renderForecast();
+  renderReceivables();
   const budgets = budgetStatus(from, to);
   $('#budget-panel').classList.toggle('hidden', !budgets.length);
   if (budgets.length) {
@@ -934,7 +957,10 @@ function renderMovements() {
         <td><span class="badge ${t.direction}">${DIRECTION_LABEL[t.direction]}</span>${t.approx ? '<span class="badge approx" title="Valor aproximado">≈</span>' : ''}</td>
         <td class="muted">${acct}</td>
         <td><span class="chip">${esc(t.category)}</span></td>
-        <td class="desc" title="${esc(t.description)}">${esc(t.description) || '<span class="muted">—</span>'}</td>
+        <td class="desc" title="${esc(t.description)}">${esc(t.description) || '<span class="muted">—</span>'}${
+          (t.tags || []).length || (t.due > 0 && !t.due_paid) ? `<div class="desc-extra">${(t.tags || []).map(x =>
+          `<a href="#" class="chip tag" data-tag="${esc(x)}" title="Ver os movimentos com esta etiqueta">#${esc(x)}</a>`).join('')}${
+          t.due > 0 && !t.due_paid ? `<span class="badge due" title="A receber">a receber ${eur(t.due)}</span>` : ''}</div>` : ''}</td>
         <td class="num ${signClass(t.direction === 'transfer' && !S.movAccount ? 0 : e)}">${t.direction === 'transfer' && !S.movAccount ? eur(t.amount) : eurSigned(e)}</td>
         <td class="actions"><button class="icon-btn" data-edit-tx="${esc(t.id)}" aria-label="Editar">✎</button><button class="icon-btn del" data-del-tx="${esc(t.id)}" aria-label="Apagar">✕</button></td>
       </tr>`;
@@ -1121,7 +1147,7 @@ function txForm(tx = null, preset = {}) {
   const defaults = { direction: 'out', date: todayISO(), account_id: S.movAccount || accOpts[0].value, amount: '', category: '', description: '', approx: false, ...preset };
   formModal({
     title: tx ? 'Editar movimento' : 'Novo movimento',
-    values: tx ? { ...tx } : defaults,
+    values: tx ? { ...tx, tags: (tx.tags || []).join(', ') } : { tags: '', ...defaults },
     fields: [
       { name: 'direction', label: 'Tipo', type: 'seg', required: true,
         options: [{ value: 'out', label: 'Saída' }, { value: 'in', label: 'Entrada' }, { value: 'transfer', label: 'Transferência' }],
@@ -1133,11 +1159,19 @@ function txForm(tx = null, preset = {}) {
       { name: 'category', label: 'Categoria', type: 'pick', required: true, showIf: v => v.direction !== 'transfer', placeholder: 'Escolhe uma categoria',
         init: (st, f) => f.setSuggestions('category', knownCategories(st.direction === 'in' ? 'in' : 'out')) },
       { name: 'description', label: 'Descrição', type: 'text', placeholder: 'ex.: supermercado, renda de março…' },
+      { name: 'tags', label: 'Etiquetas (opcional)', type: 'text', placeholder: 'ex.: férias 2026, casa',
+        hint: 'Separadas por vírgulas (até 5). Pesquisa "#etiqueta" para ver os movimentos dela, de qualquer categoria.' },
+      { name: 'due', label: 'A receber (€, opcional)', type: 'money', positive: true, showIf: v => v.direction === 'out',
+        hint: 'A parte que te vão devolver (ex.: pagaste a conta toda e mandam-te a parte deles).' },
+      { name: 'due_paid', label: 'Já recebi', type: 'check', showIf: v => v.direction === 'out' && String(v.due ?? '').trim() !== '' },
       { name: 'approx', label: 'Valor aproximado (ex.: reconstituído de papel)', type: 'check' },
     ],
     onSubmit: async v => {
       if (v.direction === 'transfer' && v.to_account_id === v.account_id) throw new Error('Escolhe duas contas diferentes');
-      await saveItems([{ kind: 'transaction', id: tx?.id, ...v, category: v.direction === 'transfer' ? 'Transferência' : v.category }]);
+      if (v.due > v.amount) throw new Error('"A receber" não pode ser maior do que o valor');
+      const tags = String(v.tags || '').split(',').map(s => s.trim()).filter(Boolean);
+      await saveItems([{ kind: 'transaction', id: tx?.id, ...v, tags, due_paid: !!(v.due && v.due_paid),
+        category: v.direction === 'transfer' ? 'Transferência' : v.category }]);
       toast(tx ? 'Movimento atualizado' : 'Movimento guardado');
     },
     danger: tx && { label: 'Apagar', onClick: () => deleteTx(tx.id) },
@@ -2330,7 +2364,7 @@ $('#adm-filter').addEventListener('change', e => { S.adminUser = e.target.value;
 // Um único "listener" para a página toda (delegação de eventos): funciona também para botões
 // criados depois, dentro das tabelas. O atributo diz o que fazer (ex.: data-edit-tx="<id>").
 document.addEventListener('click', e => {
-  const el = e.target.closest('[data-action],[data-edit-acc],[data-edit-tx],[data-del-tx],[data-edit-inv],[data-sell-inv],[data-inv-focus],[data-edit-imv],[data-del-imv],[data-edit-loan],[data-sim-loan],[data-edit-prop],[data-edit-goal],[data-goal-reserve],[data-del-gres],[data-alert-act],[data-alert-dismiss]');
+  const el = e.target.closest('[data-action],[data-edit-acc],[data-edit-tx],[data-del-tx],[data-edit-inv],[data-sell-inv],[data-inv-focus],[data-tag],[data-due-paid],[data-edit-imv],[data-del-imv],[data-edit-loan],[data-sim-loan],[data-edit-prop],[data-edit-goal],[data-goal-reserve],[data-del-gres],[data-alert-act],[data-alert-dismiss]');
   if (!el) return;
   const d = el.dataset;
   if (d.invFocus) { e.preventDefault(); S.invFilter = d.invFocus; renderInvestments(); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
@@ -2339,6 +2373,8 @@ document.addEventListener('click', e => {
   if (d.delTx) return deleteTx(d.delTx);
   if (d.editInv) return investmentForm(findById('investments', d.editInv));
   if (d.sellInv) return saleModal(findById('investments', d.sellInv));
+  if (d.tag) { e.preventDefault(); return showMovementsMatching('#' + d.tag); }
+  if (d.duePaid) return markReceived(d.duePaid);
   if (d.editImv) return invMoveForm(findById('inv_moves', d.editImv));
   if (d.delImv) return deleteImv(d.delImv);
   if (d.editLoan) return loanForm(findById('loans', d.editLoan));

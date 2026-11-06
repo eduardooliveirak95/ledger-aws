@@ -74,6 +74,7 @@ from botocore.config import Config
 MAX_ITEMS_PER_REQUEST = 300   # máximo de itens (gravar + apagar) num único POST /items
 MAX_NAME = 60                 # comprimento máximo de nomes (conta, investimento, categoria...)
 MAX_TEXT = 500                # comprimento máximo de descrições e notas
+MAX_TAGS, MAX_TAG = 5, 30     # etiquetas de um movimento: quantas e quantos caracteres cada uma
 MAX_BACKUP_BYTES = 6_000_000  # tamanho total dos CSV num email (o SES aceita até 10 MB com os anexos)
 
 # Partição do sistema com quem ativou o backup diário (sk = sub do utilizador; ver o início do ficheiro)
@@ -330,6 +331,28 @@ def v_text(value, field, max_len, required=False):
     return s
 
 
+def v_tags(value):
+    """Etiquetas de um movimento: uma lista (ou um texto separado por vírgulas) de até MAX_TAGS, cada uma com até MAX_TAG
+    caracteres, sem repetidas (sem distinguir maiúsculas). Vazio devolve []."""
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        parts = value.split(",")
+    elif isinstance(value, list) and all(isinstance(p, str) for p in value):
+        parts = [x for p in value for x in p.split(",")]
+    else:
+        raise ValueError("tags: inválidas")
+    out, seen = [], set()
+    for p in parts:
+        tag = p.strip()[:MAX_TAG].strip()
+        if tag and tag.lower() not in seen:
+            seen.add(tag.lower())
+            out.append(tag)
+    if len(out) > MAX_TAGS:
+        raise ValueError(f"tags: no máximo {MAX_TAGS}")
+    return out
+
+
 def v_ref(value, kind, field):
     """Valida uma referência a outro item (ex.: account_id de um movimento tem de ser um id ACC_ válido)."""
     if not ID_RE[kind].match(str(value or "")):
@@ -395,6 +418,15 @@ def build(user, raw):
             amount=v_num(raw.get("amount"), "amount", positive=True),
             approx=bool(raw.get("approx", False)),   # True = total aproximado ("Histórico por mês")
         )
+        tags = v_tags(raw.get("tags"))
+        if tags:
+            item["tags"] = tags
+        # Dinheiro a receber: num gasto, a parte que outros te vão devolver (até ao valor) e se já foi recebida
+        due = v_num(raw.get("due"), "due", positive=True, optional=True) if direction == "out" else None
+        if due is not None:
+            if due > item["amount"]:
+                raise ValueError("due: não pode ser maior do que o valor do movimento")
+            item.update(due=due, due_paid=bool(raw.get("due_paid", False)))
         if direction == "transfer":
             # Uma transferência precisa da conta de destino, diferente da de origem
             item["to_account_id"] = v_ref(raw.get("to_account_id"), "account", "to_account_id")
@@ -866,7 +898,8 @@ def post_settings(user, claims, event):
 # o confirma), para o backup se poder recuperar com "Importar".
 BACKUP_FORMATS = {
     "contas": ["Conta", "Tipo de conta", "Saldo inicial", "Data do saldo inicial"],
-    "movimentos": ["Data", "Conta", "Tipo", "Categoria", "Descrição", "Valor", "Conta destino", "Aproximado"],
+    "movimentos": ["Data", "Conta", "Tipo", "Categoria", "Descrição", "Valor", "Conta destino", "Aproximado", "Etiquetas",
+                   "A receber", "Recebido"],
     "investimentos": ["Data", "Investimento", "Tipo de investimento", "Operação", "Valor", "Descrição"],
     "creditos": ["Mês", "Crédito", "Tipo de crédito", "Saldo em dívida", "Prestação", "Montante inicial",
                  "Data de início", "Taxa (%)", "Banco", "Amortização extra", "Fim do contrato"],
@@ -922,7 +955,8 @@ def backup_rows(items):
 
     mov = [[t["date"], acc(t.get("account_id")), DIRECTION_LABEL.get(t.get("direction"), ""), t.get("category", ""),
             t.get("description", ""), t.get("amount"), acc(t.get("to_account_id")) if t.get("direction") == "transfer" else "",
-            "sim" if t.get("approx") else "não"]
+            "sim" if t.get("approx") else "não", ", ".join(t.get("tags", [])), t.get("due"),
+            ("sim" if t.get("due_paid") else "não") if t.get("due") else ""]
            for t in sorted(by.get("transaction", []), key=lambda t: t["date"])]
 
     inv_type = {x["sk"]: x.get("inv_type", "") for x in by.get("investment", [])}

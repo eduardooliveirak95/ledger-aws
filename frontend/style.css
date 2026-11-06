@@ -421,6 +421,12 @@ table.data .date { font-family: var(--font-num); font-size: 12px; color: var(--m
 .desc { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .chip { display: inline-block; padding: 2px 8px; background: var(--surface2); border: 1px solid var(--border2); border-radius: 4px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+/* etiquetas dos movimentos (clicar mostra os movimentos com essa etiqueta) e o "a receber" */
+/* por baixo da descrição, numa linha própria (a descrição corta-se com reticências; isto não) */
+.desc-extra { white-space: normal; display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.chip.tag { text-decoration: none; cursor: pointer; }
+.chip.tag:hover { color: var(--text); }
+.badge.due { background: color-mix(in srgb, var(--warn) 15%, transparent); color: var(--warn); }
 .badge { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: var(--caps); }
 .badge.in { background: color-mix(in srgb, var(--pos) 12%, transparent); color: var(--pos); }
 .badge.out { background: color-mix(in srgb, var(--neg) 12%, transparent); color: var(--neg); }
