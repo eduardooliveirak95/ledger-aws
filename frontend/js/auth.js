@@ -101,7 +101,8 @@ function isAdmin() {
 }
 
 // Guarda os tokens devolvidos pelo Cognito. O ID token (60 min) vai nos pedidos à API;
-// o access token (60 min) só serve para mudar a password; o refresh token (30 dias) renova os outros.
+// o access token (60 min) serve para falar com o Cognito em nome do utilizador (mudar a password, "Sair em todos" e conferir a
+// sessão); o refresh token (30 dias) renova os outros.
 function saveTokens(result, email) {
   store.set('idToken', result.IdToken);
   store.set('accessToken', result.AccessToken);
@@ -136,8 +137,8 @@ async function completeNewPassword(email, session, newPassword) {
   saveTokens(data.AuthenticationResult, email);
 }
 
-// O access token desta sessão, com pelo menos 1 minuto de validade (se não, renova-o). Só o ChangePassword e o GlobalSignOut
-// o usam; a API usa o ID token.
+// O access token desta sessão, com pelo menos 1 minuto de validade (se não, renova-o). Só o ChangePassword, o GlobalSignOut e
+// o GetUser (checkSession) o usam; a API usa o ID token.
 async function freshAccessToken() {
   let t = store.get('accessToken');
   // sessões abertas antes desta versão não têm access token; a renovação vai buscá-lo
@@ -159,11 +160,28 @@ async function changePassword(oldPassword, newPassword) {
   await cognito('ChangePassword', { AccessToken: await freshAccessToken(), PreviousPassword: oldPassword, ProposedPassword: newPassword });
 }
 
-// "Sair em todos" (botão na barra lateral): o Cognito anula todos os refresh tokens desta conta, em todos os aparelhos. Nos
-// outros, o ID token que lá está ainda é aceite pela API até expirar (no máximo 1 hora); depois não se consegue renovar e a
-// sessão acaba. Quem chama sai também deste aparelho (logout no app.js).
+// "Sair em todos" (botão na barra lateral): o Cognito anula todos os tokens desta conta, em todos os aparelhos. Nos outros,
+// a app dá por isso no checkSession seguinte (em cerca de 1 minuto) e sai. Quem chama sai também deste aparelho (logout no
+// app.js).
 async function globalSignOut() {
   await cognito('GlobalSignOut', { AccessToken: await freshAccessToken() });
+}
+
+// Confere no Cognito se a sessão ainda vale (GetUser com o access token; o app.js chama-a a cada minuto, com a página à
+// vista). O GlobalSignOut anula logo os access tokens, mas o ID token que a API aceita só expira ao fim de até 1 hora: sem
+// isto, um "Sair em todos" noutro aparelho podia demorar esse tempo a fazer efeito aqui. Se o Cognito recusar a sessão,
+// termina-a (onSessionExpired); uma falha passageira (sem internet) não faz nada. O GetUser não tem custo (o Cognito cobra
+// por utilizador ativo no mês, não por pedido). Se, entretanto, a sessão mudou (saíste, ou voltaste a entrar), a resposta
+// já não é desta sessão e não faz nada.
+async function checkSession() {
+  const rt = store.get('refreshToken');
+  if (!rt) return;
+  try { await cognito('GetUser', { AccessToken: await freshAccessToken() }); return; }
+  catch (err) { if (!sessionIsOver(err) || store.get('refreshToken') !== rt) return; }
+  // Recusado: pode ser só o access token expirado para o Cognito (um aparelho com o relógio atrasado não o renovou a tempo).
+  // Confirma-se com uma renovação: depois de um "Sair em todos", o refresh token também foi anulado e ela falha.
+  try { await refreshToken(); }
+  catch (err) { if (sessionIsOver(err) && store.get('refreshToken') === rt) onSessionExpired(); }
 }
 
 // Ao sair: anula o refresh token no Cognito, para não poder voltar a ser usado (mesmo que alguém o

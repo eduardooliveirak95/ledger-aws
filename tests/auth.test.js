@@ -127,6 +127,45 @@ test('sair em todos: renova o access token e pede ao Cognito o GlobalSignOut com
   assert.equal(await vm.runInContext('globalSignOut().then(() => "ok", e => sessionIsOver(e))', gone.ctx), true);
 });
 
+test('conferir a sessão (checkSession): termina-a se o Cognito a recusar, mas não numa falha passageira', async () => {
+  // a sessão vale: pergunta com o access token (renovado, porque não havia) e não sai
+  const { ctx, calls } = setup({ renovacoes: [renovado(), ok({ Username: 'exemplo' })] });
+  await vm.runInContext('checkSession()', ctx);
+  assert.deepEqual(calls.targets, [['InitiateAuth', undefined], ['GetUser', 'acesso-exemplo']]);
+  assert.equal(calls.expired, 0);
+  // "Sair em todos" noutro aparelho: o GetUser recusa o access token e a renovação de confirmação também falha; sai logo,
+  // sem esperar que o ID token expire
+  const revoked = setup({ renovacoes: [renovado(), cognitoError('NotAuthorizedException'), cognitoError('NotAuthorizedException')] });
+  await vm.runInContext('checkSession()', revoked.ctx);
+  assert.deepEqual(revoked.calls.targets.map(t => t[0]), ['InitiateAuth', 'GetUser', 'InitiateAuth']);
+  assert.equal(revoked.calls.expired, 1);
+  // o GetUser recusa só porque o access token expirou (relógio do aparelho atrasado): a renovação funciona e a sessão continua
+  const clock = setup({ renovacoes: [renovado(), cognitoError('NotAuthorizedException'), renovado()] });
+  await vm.runInContext('checkSession()', clock.ctx);
+  assert.equal(clock.calls.expired, 0);
+  // o refresh token já tinha sido recusado: sai
+  const gone = setup({ renovacoes: [cognitoError('NotAuthorizedException'), cognitoError('NotAuthorizedException')] });
+  await vm.runInContext('checkSession()', gone.ctx);
+  assert.equal(gone.calls.expired, 1);
+  // sem internet (na renovação ou no GetUser) ou com demasiados pedidos: fica tudo como está, sem erro
+  for (const renovacoes of [[networkError], [renovado(), networkError], [renovado(), cognitoError('TooManyRequestsException')],
+    [renovado(), cognitoError('NotAuthorizedException'), networkError]]) {
+    const off = setup({ renovacoes });
+    await vm.runInContext('checkSession()', off.ctx);
+    assert.equal(off.calls.expired, 0);
+  }
+  // saíste (ou voltaste a entrar) enquanto o Cognito respondia: a resposta é da sessão antiga e não termina nada
+  const late = setup({ renovacoes: [renovado(), () => { late.ctx.sessionStorage.setItem('ledger.refreshToken', 'outra-sessao');
+    return cognitoError('NotAuthorizedException'); }] });
+  await vm.runInContext('checkSession()', late.ctx);
+  assert.equal(late.calls.expired, 0);
+  // sem sessão, não pergunta nada
+  const none = setup({ renovacoes: [] });
+  none.ctx.sessionStorage.removeItem('ledger.refreshToken');
+  await vm.runInContext('checkSession()', none.ctx);
+  assert.equal(none.calls.cognito, 0);
+});
+
 test('sem internet, o pedido ao Cognito dá a mensagem em português (não o "Failed to fetch" do browser)', async () => {
   const { ctx } = setup({ renovacoes: [renovado(), networkError] });   // renova bem, depois o ChangePassword falha
   await assert.rejects(changePassword(ctx), err => err.message.startsWith('Sem ligação ao serviço de login') && !/Failed to fetch/.test(err.message));

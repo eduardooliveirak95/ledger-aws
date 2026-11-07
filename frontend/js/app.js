@@ -144,7 +144,7 @@ function passwordForm() {
 // Para quando ficou uma sessão aberta noutro PC (o do trabalho, um emprestado). Se o Cognito falhar, não sai de lado nenhum.
 async function logoutEverywhere() {
   if (!await confirmDialog('Sair deste aparelho e de todos os outros onde tens o Ledger aberto? Nos outros, a sessão acaba '
-    + 'no máximo dentro de 1 hora (quando o acesso que lá está expirar).', 'Sair em todos')) return;
+    + 'em cerca de 1 minuto.', 'Sair em todos')) return;
   try { await globalSignOut(); }
   catch (e) {
     if (!sessionIsOver(e)) return toast(e.message, true);   // uma falha passageira: não sai de lado nenhum
@@ -1199,7 +1199,8 @@ function txForm(tx = null, preset = {}) {
         hint: 'Separadas por vírgulas (até 5). Pesquisa "#etiqueta" para ver os movimentos dela, de qualquer categoria.' },
       { name: 'due', label: 'A receber (€, opcional)', type: 'money', positive: true, showIf: v => v.direction === 'out',
         hint: 'A parte que te vão devolver (ex.: pagaste a conta toda e mandam-te a parte deles).' },
-      { name: 'due_paid', label: 'Já recebi', type: 'check', showIf: v => v.direction === 'out' && String(v.due ?? '').trim() !== '' },
+      { name: 'due_paid', label: 'Já recebi', type: 'check', showIf: v => v.direction === 'out' && String(v.due ?? '').trim() !== '',
+        hint: 'Só se te pagaram em mão. Se te mandaram por MB WAY ou transferência, deixa por marcar e usa o "Recebido" no painel "A receber" dos Movimentos, para associar essa entrada.' },
       ...(refundFrom ? [{ name: 'keep_refund', label: `Reembolso de "${refundFrom.description || refundFrom.category}" (${dateLabel(refundFrom.date)})`,
         type: 'check', showIf: v => v.direction === 'in' }] : []),
       { name: 'approx', label: 'Valor aproximado (ex.: reconstituído de papel)', type: 'check' },
@@ -2502,13 +2503,23 @@ function checkIdle() {
   renderAll();
   toast(`Valores escondidos ao fim de ${IDLE_MINUTES} minutos sem mexer (👁 para os mostrar)`);
 }
-// A mesma volta confere a sessão: se o ID token expirou, tokenForApi renova-o; se a sessão acabou (por exemplo, "Sair em
-// todos" noutro aparelho), sai daqui também, mesmo sem nenhum pedido à API. É uma renovação por hora, no máximo.
+// A mesma volta confere a sessão: se o ID token expirou, tokenForApi renova-o (uma renovação por hora, no máximo); e, a cada
+// minuto com a página à vista, checkSession pergunta ao Cognito se a sessão ainda vale: depois de um "Sair em todos" noutro
+// aparelho, sai daqui em cerca de 1 minuto, mesmo sem nenhum pedido à API. Com a página escondida não pergunta (os browsers
+// atrasam os temporizadores); pergunta logo ao voltar a ela.
+let lastSessionCheck = 0;
+function checkSessionNow() { lastSessionCheck = Date.now(); checkSession(); }
 setInterval(() => {
   checkIdle();
-  if (store.get('refreshToken')) tokenForApi().catch(() => {});
+  if (!store.get('refreshToken')) return;
+  tokenForApi().catch(() => {});
+  if (!document.hidden && Date.now() - lastSessionCheck >= 55000) checkSessionNow();
 }, 30000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) checkIdle(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  checkIdle();
+  if (store.get('refreshToken')) checkSessionNow();
+});
 document.addEventListener('ledger-theme', () => {
   applyChartTheme();
   destroyCharts();

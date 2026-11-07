@@ -86,7 +86,7 @@ function formModal({ title, fields, values = {}, submitLabel = 'Guardar', onSubm
 
   for (const f of fields) {
     const w = document.createElement('div');
-    w.className = f.type === 'check' ? 'check' : 'field';
+    w.className = f.type === 'check' ? 'check' + (f.hint ? ' with-hint' : '') : 'field';
     wrappers[f.name] = w;
     const id = `${formId}-${f.name}`;
     const val = state[f.name] ?? f.default ?? '';
@@ -94,7 +94,8 @@ function formModal({ title, fields, values = {}, submitLabel = 'Guardar', onSubm
 
     // Caixa de seleção (checkbox)
     if (f.type === 'check') {
-      w.innerHTML = `<input type="checkbox" id="${id}" ${val ? 'checked' : ''}><label for="${id}">${esc(f.label)}</label>`;
+      w.innerHTML = `<input type="checkbox" id="${id}" ${val ? 'checked' : ''}><label for="${id}">${esc(f.label)}</label>`
+        + (f.hint ? `<div class="hint">${f.hint}</div>` : '');   // a explicação fica numa linha própria, por baixo
       w.querySelector('input').addEventListener('change', e => { state[f.name] = e.target.checked; refresh(); });
     } else {
       w.innerHTML = `<label for="${id}">${esc(f.label)}${f.required ? '' : ' <span style="text-transform:none;letter-spacing:0">(opcional)</span>'}</label>`;

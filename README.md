@@ -8,7 +8,7 @@ Corre na AWS: o site é estático, o login é feito com o Cognito, a API corre e
 
 Não há registo público, só convites. O convite chega por email com o endereço da app e uma password temporária que dura 7 dias (se não aparecer, vê no spam). Se expirar, pede ao administrador para o reenviar.
 
-No primeiro login escolhes a tua password, com pelo menos 10 caracteres, maiúsculas, minúsculas e um número. Mais tarde podes mudá-la no botão Password, na barra lateral. Se ficou uma sessão aberta noutro aparelho (o PC do trabalho, um emprestado), "Sair em todos" termina-a lá e aqui; nos outros aparelhos acaba no máximo dentro de 1 hora.
+No primeiro login escolhes a tua password, com pelo menos 10 caracteres, maiúsculas, minúsculas e um número. Mais tarde podes mudá-la no botão Password, na barra lateral. Se ficou uma sessão aberta noutro aparelho (o PC do trabalho, um emprestado), "Sair em todos" termina-a lá e aqui; nos outros aparelhos acaba em cerca de 1 minuto.
 
 A sessão só dura enquanto o separador estiver aberto. Num separador novo, ou depois de fechares o browser, tens de entrar outra vez. Recarregar a página não te tira da conta.
 
@@ -67,7 +67,7 @@ O cartão "Resumo do ano" (também na barra lateral) mostra o ano num relance: e
 
 A pesquisa procura na descrição, na categoria e no valor, sem ligar a maiúsculas nem acentos ("agua" encontra "Água"). Os totais e os gráficos passam a contar só o que foi encontrado. Nos filtros de entradas e de saídas podes escolher várias categorias. As transferências de e para outras pessoas vão para "Transferências in" e "Transferências out". Cada movimento pode ter até 5 etiquetas (por exemplo "férias 2026"), separadas por vírgulas: pesquisa "#férias" (ou carrega numa etiqueta) para ver os movimentos dela, de qualquer categoria, com os totais.
 
-Num gasto que pagaste por inteiro (a conta do jantar, por exemplo), põe em "A receber" a parte dos outros. O painel "A receber" mostra o que te devem; quando o dinheiro chegar (por MB WAY, por exemplo), regista a entrada (ou importa o extrato) e carrega em "Recebido": escolhes a entrada, ou várias se cada pessoa mandou a sua parte, ou "Recebi sem movimento" se foi em mão. A entrada associada deixa de contar como entrada e abate ao gasto, na categoria dele (o jantar de 80 € em que te devolveram 60 € conta 20 € nos gastos, nos orçamentos e no resumo do ano); o saldo da conta não muda.
+Num gasto que pagaste por inteiro (a conta do jantar, por exemplo), põe em "A receber" a parte dos outros. O painel "A receber" mostra o que te devem; quando o dinheiro chegar (por MB WAY, por exemplo), regista a entrada (ou importa o extrato) e carrega em "Recebido": escolhes a entrada, ou várias se cada pessoa mandou a sua parte, ou "Recebi sem movimento" se foi em mão. O "Já recebi" do formulário é só para quando te pagam em mão: com ele marcado, o gasto sai do painel. A entrada associada deixa de contar como entrada e abate ao gasto, na categoria dele (o jantar de 80 € em que te devolveram 60 € conta 20 € nos gastos, nos orçamentos e no resumo do ano); o saldo da conta não muda.
 
 Para mudar a categoria de vários movimentos de uma vez, marca-os na tabela, escolhe a categoria na barra que aparece e carrega em "Mudar categoria". Só dá com entradas ou com saídas de cada vez, porque as categorias são diferentes.
 
