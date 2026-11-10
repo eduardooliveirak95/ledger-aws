@@ -48,9 +48,11 @@ let formSeq = 0;
 /**
  * Constrói um formulário a partir de uma lista de campos e mostra-o no modal:
  *   { name, label, type: text|password|money|number|date|month|select|suggest|pick|seg|check|textarea,
- *     options, required, hint, showIf(valores), half (dois por linha), placeholder }
+ *     options, required, hint, showIf(valores), half (dois por linha), placeholder, more }
  *
  * - showIf: função que decide se o campo aparece (ex.: "conta de destino" só em transferências)
+ * - more: o campo fica dentro de "Mais opções", fechado até se abrir (abre sozinho se algum desses campos já tiver valor);
+ *   um texto (ex.: 'etiquetas') aparece no título: "Mais opções: etiquetas, …"
  * - onChange / init: reagem a mudanças e preparam valores iniciais
  * - onSubmit(valores): chamado com os valores já validados e convertidos (dinheiro -> número);
  *   se lançar erro, a mensagem aparece no formulário e a janela fica aberta
@@ -69,6 +71,19 @@ function formModal({ title, fields, values = {}, submitLabel = 'Guardar', onSubm
   const wrappers = {};
   const pickOptions = {};   // opções de cada campo "pick" (mudam com setSuggestions)
   let row = null;
+  // "Mais opções": um <details> criado no sítio do primeiro campo com more; os campos seguintes com more entram nele
+  let more = null;
+  const boxFor = f => {
+    if (!f.more) return form;
+    if (!more) {
+      more = document.createElement('details');
+      more.className = 'more-fields';
+      more.innerHTML = '<summary>Mais opções</summary><div class="more-body"></div>';
+      form.appendChild(more);
+    }
+    return more.lastElementChild;
+  };
+  const isShown = f => !f.showIf || f.showIf(state);
 
   // Campo "pick": a mesma lista de caixas do filtro de categorias e da mudança em lote, com escolha única.
   // O resumo mostra a escolha; marcar uma caixa escolhe-a e fecha a lista; "Outra…" escreve uma nova.
@@ -136,14 +151,18 @@ function formModal({ title, fields, values = {}, submitLabel = 'Guardar', onSubm
         el.addEventListener('change', e => {
           if (e.target.type !== 'checkbox') return;
           state[f.name] = e.target.checked ? e.target.value : '';
-          el.open = false; renderPick(f, el); refresh();
+          el.open = false; renderPick(f, el);
+          if (f.onChange) f.onChange(state[f.name], state, api2);
+          refresh();
         });
         el.addEventListener('keydown', e => {
           if (e.key !== 'Enter' || !e.target.matches('[data-newcat]')) return;
           e.preventDefault();   // Enter aqui escolhe a categoria nova, não grava o formulário
           if (!e.target.value.trim()) return;
           state[f.name] = e.target.value.trim().slice(0, 60);
-          el.open = false; renderPick(f, el); refresh();
+          el.open = false; renderPick(f, el);
+          if (f.onChange) f.onChange(state[f.name], state, api2);
+          refresh();
         });
         // escrever uma categoria nova também conta ao gravar, mesmo sem carregar em Enter
         el.addEventListener('input', e => {
@@ -153,6 +172,7 @@ function formModal({ title, fields, values = {}, submitLabel = 'Guardar', onSubm
           el.querySelector('summary').textContent = state[f.name];
           el.classList.remove('pick-empty');
           el.querySelectorAll('input[type=checkbox]').forEach(c => { c.checked = false; });
+          if (f.onChange) f.onChange(state[f.name], state, api2);
         });
       } else if (f.type === 'textarea') {
         input = document.createElement('textarea');
@@ -186,15 +206,18 @@ function formModal({ title, fields, values = {}, submitLabel = 'Guardar', onSubm
     }
 
     // Campos "half" ficam dois a dois na mesma linha
+    const box = boxFor(f);
     if (f.half) {
-      if (!row) { row = document.createElement('div'); row.className = 'field-row'; form.appendChild(row); }
+      if (!row || row.parentNode !== box) { row = document.createElement('div'); row.className = 'field-row'; box.appendChild(row); }
       row.appendChild(w);
       if (row.children.length === 2) row = null;
     } else {
       row = null;
-      form.appendChild(w);
+      box.appendChild(w);
     }
   }
+  // "Mais opções" começa aberto se algum dos campos de lá já tiver valor (ao editar um movimento com etiquetas, por exemplo)
+  if (more) more.open = fields.some(f => f.more && isShown(f) && ![undefined, null, '', false].includes(state[f.name]));
   const errBox = document.createElement('div');
   errBox.className = 'form-error';
   form.appendChild(errBox);
@@ -221,12 +244,29 @@ function formModal({ title, fields, values = {}, submitLabel = 'Guardar', onSubm
       sel.value = options.some(o => (o.value ?? o) === cur) ? cur : sel.options[0]?.value ?? '';
       state[name] = sel.value;
     },
-    setValue(name, v) { const el = form.querySelector(`#${formId}-${name}`); if (el) el.value = v; state[name] = v; },
+    setValue(name, v) {
+      state[name] = v;
+      const el = form.querySelector(`#${formId}-${name}`);
+      if (el?.matches('details.pick')) renderPick(fields.find(f => f.name === name), el);
+      else if (el) el.value = v;
+    },
+    // Põe, muda ou tira ('') a explicação por baixo de um campo (texto fixo do código, como o hint)
+    setHint(name, html) {
+      let h = wrappers[name].querySelector(':scope > .hint');
+      if (!html) return h?.remove();
+      if (!h) { h = document.createElement('div'); h.className = 'hint'; wrappers[name].appendChild(h); }
+      h.innerHTML = html;
+    },
   };
 
   // Mostra/esconde campos conforme as regras showIf e os valores atuais
   function refresh() {
     for (const f of fields) if (f.showIf) wrappers[f.name].classList.toggle('hidden', !f.showIf(state));
+    if (!more) return;
+    // o título diz o que lá está agora (muda com o tipo de movimento); sem nenhum campo à vista, o "Mais opções" esconde-se
+    const names = fields.filter(f => typeof f.more === 'string' && isShown(f)).map(f => f.more);
+    more.firstElementChild.textContent = 'Mais opções' + (names.length ? ': ' + names.join(', ') : '');
+    more.classList.toggle('hidden', !fields.some(f => f.more && isShown(f)));
   }
 
   // Ao gravar: valida os campos visíveis, converte números, chama onSubmit e fecha a janela.
@@ -241,17 +281,17 @@ function formModal({ title, fields, values = {}, submitLabel = 'Guardar', onSubm
       if (typeof v === 'string') v = v.trim();
       if (f.type === 'money' || f.type === 'number') {
         if (v === '' || v === null || v === undefined) {
-          if (f.required) return fail(`Preenche "${f.label}"`);
+          if (f.required) return fail(`Preenche "${f.label}"`, f);
           v = null;
         } else {
           const n = f.type === 'money' ? parseMoney(v) : parseNum(v);
-          if (isNaN(n)) return fail(`"${f.label}" não é um número válido`);
-          if (f.positive && n <= 0) return fail(`"${f.label}" tem de ser maior que 0`);
-          if (f.min !== undefined && n < f.min) return fail(`"${f.label}" não pode ser negativo`);
+          if (isNaN(n)) return fail(`"${f.label}" não é um número válido`, f);
+          if (f.positive && n <= 0) return fail(`"${f.label}" tem de ser maior que 0`, f);
+          if (f.min !== undefined && n < f.min) return fail(`"${f.label}" não pode ser negativo`, f);
           v = n;
         }
       } else if (f.required && (v === '' || v === null || v === undefined)) {
-        return fail(`Preenche "${f.label}"`);
+        return fail(`Preenche "${f.label}"`, f);
       }
       out[f.name] = v;
     }
@@ -265,7 +305,8 @@ function formModal({ title, fields, values = {}, submitLabel = 'Guardar', onSubm
     } finally {
       if (btn) { btn.disabled = false; btn.textContent = btn.dataset.label; }
     }
-    function fail(msg) { errBox.textContent = msg; }
+    // f = o campo com o erro: se estiver dentro do "Mais opções" fechado, abre-o para se ver
+    function fail(msg, f) { errBox.textContent = msg; if (f?.more && more) more.open = true; }
   });
 
   // Botões do fundo: [Apagar (opcional, à esquerda)] ... [Cancelar] [Guardar]

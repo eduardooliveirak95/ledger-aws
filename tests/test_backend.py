@@ -157,6 +157,29 @@ def test_deleting_parents_cascades(table):
     assert all(not v for v in d.values())
 
 
+def test_saving_deleted_items_again_restores_them_with_the_same_ids(table):
+    """O "Anular" da app volta a gravar o que foi apagado: os ids ficam iguais, por isso as ligações não se perdem."""
+    acc = save([{"kind": "account", "name": "A", "opening_balance": 0, "opening_date": "2026-01-01"}])["saved"][0]
+    gasto = save([{"kind": "transaction", "date": "2026-01-02", "account_id": acc["id"], "direction": "out", "category": "Jantar",
+                   "amount": 80, "due": 60, "tags": ["amigos"]}])["saved"][0]
+    mbway = save([{"kind": "transaction", "date": "2026-01-03", "account_id": acc["id"], "direction": "in", "category": "MB WAY",
+                   "amount": 60, "refund_of": gasto["id"]}])["saved"][0]
+    # um movimento sozinho
+    status, body = call("DELETE /items/{id}", path={"id": gasto["id"]})
+    assert status == 200 and body["deleted"] == [gasto["id"]]
+    back = save([gasto])["saved"][0]
+    assert back["id"] == gasto["id"] and back["due"] == 60 and back["tags"] == ["amigos"]
+    # a conta com os movimentos dela (cascata): tudo de volta, com os mesmos ids e o reembolso ainda ligado ao gasto
+    _, body = call("DELETE /items/{id}", path={"id": acc["id"]})
+    assert sorted(body["deleted"]) == sorted([acc["id"], gasto["id"], mbway["id"]])
+    assert all(not v for v in call("GET /data")[1].values())
+    saved = save([acc, gasto, mbway])["saved"]
+    assert sorted(x["id"] for x in saved) == sorted(body["deleted"])
+    _, d = call("GET /data")
+    assert [a["id"] for a in d["accounts"]] == [acc["id"]]
+    assert {t["id"]: t.get("refund_of") for t in d["transactions"]} == {gasto["id"]: None, mbway["id"]: gasto["id"]}
+
+
 def test_loan_balance_keeps_payment_and_extra(table):
     """O saldo mensal guarda a prestação e a amortização extraordinária; extra vazio ou 0 não é gravado."""
     loan = save([{"kind": "loan", "name": "Casa", "principal": 100000, "start_date": "2024-01-15"}])["saved"][0]["id"]

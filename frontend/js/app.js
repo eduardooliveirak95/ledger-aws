@@ -215,12 +215,29 @@ async function saveItems(items, deletes = []) {
   renderAll();
   return res;
 }
-// Apaga um item na API e mostra quantos registos associados também foram apagados (cascata)
+// Apaga um item na API e mostra quantos registos associados também foram apagados (cascata). A mensagem traz um "Anular"
+// (8 s), que volta a gravar tudo o que foi apagado: o backend reaproveita os ids, por isso as ligações entre registos
+// (movimentos de uma conta, reembolsos de um gasto) ficam como estavam.
 async function removeItem(id, done) {   // done: a mensagem, ex.: 'Conta apagada'
   const res = await api.remove(id);
+  const gone = itemsWithIds(res.deleted);   // antes do applyChanges, que os tira de D
+  const session = store.get('refreshToken');
   applyChanges(res);
   renderAll();
-  toast(`${done}${res.deleted.length > 1 ? ` (+${res.deleted.length - 1} registos associados)` : ''}`);
+  toast(`${done}${res.deleted.length > 1 ? ` (+${res.deleted.length - 1} registos associados)` : ''}`, false,
+    gone.length ? { label: 'Anular', onClick: () => restoreItems(gone, session) } : null);
+}
+// Volta a gravar o que foi apagado. Só na mesma sessão (session = o refresh token de quando se apagou): se entretanto saíste
+// (e entrou outra conta), não faz nada. Se falhar (sem rede, ou a meio de muitos registos), a mensagem de erro traz um
+// "Tentar outra vez": gravar tudo de novo é seguro, porque os ids são os mesmos.
+async function restoreItems(items, session) {
+  if (!session || store.get('refreshToken') !== session) return;
+  try {
+    await saveItems(items);
+    toast(items.length === 1 ? 'Anulado: está de volta' : `Anulado: ${items.length} registos de volta`);
+  } catch (e) {
+    toast(`Não deu para anular: ${e.message}`, true, { label: 'Tentar outra vez', onClick: () => restoreItems(items, session) });
+  }
 }
 
 // ════════ PÁGINA INICIAL E SEPARADORES ════════
@@ -1100,7 +1117,7 @@ function accountForm(acc = null, after) {
     },
     danger: acc && { label: 'Apagar conta', onClick: async () => {
       const n = D.transactions.filter(t => t.account_id === acc.id || t.to_account_id === acc.id).length;
-      if (await confirmDialog(`Apagar a conta <b>${esc(acc.name)}</b>${n ? ` e os <b>${n} movimentos</b> dela` : ''}?${reservationsNote(acc.id)} Não dá para desfazer.`)) {
+      if (await confirmDialog(`Apagar a conta <b>${esc(acc.name)}</b>${n ? ` e os <b>${n} movimentos</b> dela` : ''}?${reservationsNote(acc.id)} Só dá para anular nos segundos a seguir.`)) {
         try { await removeItem(acc.id, 'Conta apagada'); } catch (e) { toast(e.message, true); }
       }
     } },
@@ -1181,29 +1198,50 @@ function txForm(tx = null, preset = {}) {
   const accOpts = sortByName(D.accounts).map(a => ({ value: a.id, label: a.name }));
   const defaults = { direction: 'out', date: todayISO(), account_id: S.movAccount || accOpts[0].value, amount: '', category: '', description: '', approx: false, ...preset };
   const refundFrom = tx?.refund_of ? findById('transactions', tx.refund_of) : null;   // esta entrada é o reembolso deste gasto
+  // A categoria segue a descrição (suggestCategory no calc.js) enquanto estiver vazia ou tiver sido posta pela sugestão; a
+  // que a pessoa escolheu à mão (ou a do movimento que se está a editar) nunca é mudada. autoCat = a que a sugestão pôs.
+  let autoCat = null;
+  const suggest = (st, f) => {
+    if (st.direction === 'transfer' || (st.category && st.category !== autoCat)) return;
+    const cat = suggestCategory(st.direction, st.description);
+    if (cat === (st.category || '')) return;
+    autoCat = cat || null;
+    f.setValue('category', cat);
+    f.setHint('category', cat ? 'Sugerida pela descrição (é a que costumas usar). Podes escolher outra.' : '');
+  };
   formModal({
     title: tx ? 'Editar movimento' : 'Novo movimento',
     values: tx ? { ...tx, tags: (tx.tags || []).join(', '), keep_refund: !!refundFrom } : { tags: '', ...defaults },
     fields: [
       { name: 'direction', label: 'Tipo', type: 'seg', required: true,
         options: [{ value: 'out', label: 'Saída' }, { value: 'in', label: 'Entrada' }, { value: 'transfer', label: 'Transferência' }],
-        onChange: (v, st, f) => f.setSuggestions('category', knownCategories(v === 'transfer' ? 'out' : v)) },
+        onChange: (v, st, f) => {
+          f.setSuggestions('category', knownCategories(v === 'transfer' ? 'out' : v));
+          f.setSuggestions('description', knownDescriptions(v));
+          if (!st.category) { autoCat = null; f.setHint('category', ''); }   // a categoria não existe no tipo novo: foi limpa
+          suggest(st, f);
+        } },
       { name: 'amount', label: 'Valor (€)', type: 'money', required: true, positive: true, half: true, placeholder: '0,00' },
       { name: 'date', label: 'Data', type: 'date', required: true, half: true },
       { name: 'account_id', label: 'Conta', type: 'select', options: accOpts, required: true, half: true },
       { name: 'to_account_id', label: 'Para a conta', type: 'select', options: accOpts, required: true, half: true, showIf: v => v.direction === 'transfer' },
+      // a descrição vem antes da categoria: ao escrevê-la (ou ao escolher uma das já usadas), a categoria fica sugerida
+      { name: 'description', label: 'Descrição', type: 'suggest', placeholder: 'ex.: supermercado, renda de março…',
+        init: (st, f) => { f.setSuggestions('description', knownDescriptions(st.direction)); suggest(st, f); },
+        onChange: (v, st, f) => suggest(st, f) },
       { name: 'category', label: 'Categoria', type: 'pick', required: true, showIf: v => v.direction !== 'transfer', placeholder: 'Escolhe uma categoria',
-        init: (st, f) => f.setSuggestions('category', knownCategories(st.direction === 'in' ? 'in' : 'out')) },
-      { name: 'description', label: 'Descrição', type: 'text', placeholder: 'ex.: supermercado, renda de março…' },
-      { name: 'tags', label: 'Etiquetas (opcional)', type: 'text', placeholder: 'ex.: férias 2026, casa',
-        hint: 'Separadas por vírgulas (até 5). Pesquisa "#etiqueta" para ver os movimentos dela, de qualquer categoria.' },
-      { name: 'due', label: 'A receber (€, opcional)', type: 'money', positive: true, showIf: v => v.direction === 'out',
-        hint: 'A parte que te vão devolver (ex.: pagaste a conta toda e mandam-te a parte deles).' },
-      { name: 'due_paid', label: 'Já recebi', type: 'check', showIf: v => v.direction === 'out' && String(v.due ?? '').trim() !== '',
-        hint: 'Só se te pagaram em mão. Se te mandaram por MB WAY ou transferência, deixa por marcar e usa o "Recebido" no painel "A receber" dos Movimentos, para associar essa entrada.' },
+        init: (st, f) => f.setSuggestions('category', knownCategories(st.direction === 'in' ? 'in' : 'out')),
+        onChange: (v, st, f) => { autoCat = null; f.setHint('category', ''); } },   // escolhida à mão: a sugestão já não mexe nela
       ...(refundFrom ? [{ name: 'keep_refund', label: `Reembolso de "${refundFrom.description || refundFrom.category}" (${dateLabel(refundFrom.date)})`,
         type: 'check', showIf: v => v.direction === 'in' }] : []),
-      { name: 'approx', label: 'Valor aproximado (ex.: reconstituído de papel)', type: 'check' },
+      // os campos menos usados ficam em "Mais opções" (abre sozinho se o movimento já tiver algum preenchido)
+      { name: 'tags', label: 'Etiquetas', type: 'text', placeholder: 'ex.: férias 2026, casa', more: 'etiquetas',
+        hint: 'Separadas por vírgulas (até 5). Pesquisa "#etiqueta" para ver os movimentos dela, de qualquer categoria.' },
+      { name: 'due', label: 'A receber (€)', type: 'money', positive: true, showIf: v => v.direction === 'out', more: 'a receber',
+        hint: 'A parte que te vão devolver (ex.: pagaste a conta toda e mandam-te a parte deles).' },
+      { name: 'due_paid', label: 'Já recebi', type: 'check', showIf: v => v.direction === 'out' && String(v.due ?? '').trim() !== '', more: true,
+        hint: 'Só se te pagaram em mão. Se te mandaram por MB WAY ou transferência, deixa por marcar e usa o "Recebido" no painel "A receber" dos Movimentos, para associar essa entrada.' },
+      { name: 'approx', label: 'Valor aproximado (ex.: reconstituído de papel)', type: 'check', more: 'valor aproximado' },
     ],
     onSubmit: async v => {
       if (v.direction === 'transfer' && v.to_account_id === v.account_id) throw new Error('Escolhe duas contas diferentes');
@@ -1592,7 +1630,7 @@ function investmentForm(inv = null, after) {
       if (after) setTimeout(() => after(res.saved[0]), 50);
     },
     danger: inv && { label: 'Apagar investimento', onClick: async () => {
-      if (await confirmDialog(`Apagar <b>${esc(inv.name)}</b> com todos os aportes, resgates e valores mensais?${reservationsNote(inv.id)} Não dá para desfazer.`)) {
+      if (await confirmDialog(`Apagar <b>${esc(inv.name)}</b> com todos os aportes, resgates e valores mensais?${reservationsNote(inv.id)} Só dá para anular nos segundos a seguir.`)) {
         try { await removeItem(inv.id, 'Investimento apagado'); } catch (e) { toast(e.message, true); }
       }
     } },
@@ -2042,7 +2080,7 @@ function loanForm(loan = null, after) {
       if (after) setTimeout(() => after(res.saved[0]), 50);
     },
     danger: loan && { label: 'Apagar crédito', onClick: async () => {
-      if (await confirmDialog(`Apagar <b>${esc(loan.name)}</b> e todo o histórico de saldos? Não dá para desfazer.`)) {
+      if (await confirmDialog(`Apagar <b>${esc(loan.name)}</b> e todo o histórico de saldos? Só dá para anular nos segundos a seguir.`)) {
         try { await removeItem(loan.id, 'Crédito apagado'); } catch (e) { toast(e.message, true); }
       }
     } },
@@ -2187,7 +2225,7 @@ function propertyForm(prop = null) {
       toast(prop ? 'Imóvel atualizado' : 'Imóvel adicionado');
     },
     danger: prop && { label: 'Apagar imóvel', onClick: async () => {
-      if (await confirmDialog(`Apagar <b>${esc(prop.name)}</b>? Não dá para desfazer.`)) {
+      if (await confirmDialog(`Apagar <b>${esc(prop.name)}</b>? Só dá para anular nos segundos a seguir.`)) {
         try { await removeItem(prop.id, 'Imóvel apagado'); } catch (e) { toast(e.message, true); }
       }
     } },

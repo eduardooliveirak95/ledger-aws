@@ -65,6 +65,8 @@ O cartão "Resumo do ano" (também na barra lateral) mostra o ano num relance: e
 
 ### Movimentos
 
+Ao registar um movimento, a descrição sugere as que já usaste e a categoria fica logo escolhida com a que costumas dar a essa descrição (escreves "mercearia" e fica "Supermercado"); podes sempre escolher outra. As etiquetas, o "A receber" e o "Valor aproximado" estão em "Mais opções". Se apagares alguma coisa por engano, a mensagem "… apagado" traz um "Anular" durante uns segundos, que põe tudo como estava.
+
 A pesquisa procura na descrição, na categoria e no valor, sem ligar a maiúsculas nem acentos ("agua" encontra "Água"). Os totais e os gráficos passam a contar só o que foi encontrado. Nos filtros de entradas e de saídas podes escolher várias categorias. As transferências de e para outras pessoas vão para "Transferências in" e "Transferências out". Cada movimento pode ter até 5 etiquetas (por exemplo "férias 2026"), separadas por vírgulas: pesquisa "#férias" (ou carrega numa etiqueta) para ver os movimentos dela, de qualquer categoria, com os totais.
 
 Num gasto que pagaste por inteiro (a conta do jantar, por exemplo), põe em "A receber" a parte dos outros. O painel "A receber" mostra o que te devem; quando o dinheiro chegar (por MB WAY, por exemplo), regista a entrada (ou importa o extrato) e carrega em "Recebido": escolhes a entrada, ou várias se cada pessoa mandou a sua parte, ou "Recebi sem movimento" se foi em mão. O "Já recebi" do formulário é só para quando te pagam em mão: com ele marcado, o gasto sai do painel. A entrada associada deixa de contar como entrada e abate ao gasto, na categoria dele (o jantar de 80 € em que te devolveram 60 € conta 20 € nos gastos, nos orçamentos e no resumo do ano); o saldo da conta não muda.

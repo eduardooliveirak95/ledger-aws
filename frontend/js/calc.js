@@ -33,6 +33,11 @@ function applyChanges({ saved = [], deleted = [] }) {
     if (byKind[col]) D[col].push(...byKind[col]);
   }
 }
+/** Os registos de D com estes ids (de todos os tipos). Guardados antes de se apagarem, servem para o "Anular" os voltar a gravar. */
+function itemsWithIds(ids) {
+  const want = new Set(ids);
+  return Object.values(D).flat().filter(x => want.has(x.id));
+}
 
 // Procurar itens e nomes (com texto de recurso se o item já tiver sido apagado)
 function findById(col, id) { return D[col].find(x => x.id === id); }
@@ -47,6 +52,48 @@ function knownCategories(direction) {
   const set = new Set(CATEGORIES[direction] || []);
   for (const t of D.transactions) if (t.direction === direction && t.category) set.add(t.category);
   return [...set].sort((a, b) => a.localeCompare(b, 'pt'));
+}
+
+/**
+ * Sugestões para o formulário do movimento, tiradas dos movimentos que já existem nesse sentido (in / out / transfer).
+ * knownDescriptions: as descrições já usadas, das mais usadas para as menos (até limit); as que só diferem nas maiúsculas ou
+ * nos acentos contam como uma, com a escrita mais recente.
+ */
+function knownDescriptions(direction, limit = 100) {
+  const seen = Object.create(null);
+  for (const t of D.transactions) {
+    const text = String(t.description || '').trim();
+    if (t.direction !== direction || !text) continue;
+    const e = seen[norm(text)] ||= { text, date: '', n: 0 };
+    e.n++;
+    if (t.date >= e.date) { e.date = t.date; e.text = text; }
+  }
+  return Object.values(seen).sort((x, y) => y.n - x.n || y.date.localeCompare(x.date) || x.text.localeCompare(y.text, 'pt'))
+    .slice(0, limit).map(e => e.text);
+}
+/**
+ * A categoria que costumas dar a uma descrição ('' se não houver): 1) a do movimento mais recente com a mesma descrição;
+ * 2) senão, com 3 letras ou mais, a mais usada entre os movimentos que têm esse texto na descrição (no empate, a do mais
+ * recente). «Outros» não conta (é o "ainda não arrumei"), como na importação (learnedCategories no bank.js).
+ */
+function suggestCategory(direction, description) {
+  const q = norm(description);
+  if (!q || direction === 'transfer') return '';
+  let exact = null;
+  const partial = Object.create(null);
+  for (const t of D.transactions) {
+    if (t.direction !== direction || !t.category || t.category === 'Outros') continue;
+    const d = norm(t.description);
+    if (d === q) { if (!exact || t.date >= exact.date) exact = t; }
+    else if (q.length >= 3 && d.includes(q)) {
+      const c = partial[t.category] ||= { category: t.category, n: 0, date: '' };
+      c.n++;
+      if (t.date > c.date) c.date = t.date;
+    }
+  }
+  if (exact) return exact.category;
+  const best = Object.values(partial).sort((x, y) => y.n - x.n || y.date.localeCompare(x.date))[0];
+  return best ? best.category : '';
 }
 
 // ════════ CONTAS / MOVIMENTOS ════════

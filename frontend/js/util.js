@@ -179,15 +179,25 @@ function parseMonthFlexible(s) {
 }
 
 // ── mensagens e indicadores no ecrã ──
-// Mostra uma mensagem temporária no fundo do ecrã (3 s; os erros ficam 6 s e a vermelho)
+// Mostra uma mensagem temporária no fundo do ecrã (3 s; os erros ficam 6 s e a vermelho). action = { label, onClick } junta
+// um botão à mensagem (o "Anular" depois de apagar), que fica 8 s; quando a mensagem desaparece, o botão deixa de funcionar.
 let toastTimer;
-function toast(msg, isError = false) {
+function toast(msg, isError = false, action = null) {
   const t = $('#toast');
+  const hide = () => { t.classList.remove('show'); const b = t.querySelector('button'); if (b) b.disabled = true; };
   t.textContent = msg;
+  if (action) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = action.label;
+    b.addEventListener('click', () => { clearTimeout(toastTimer); hide(); action.onClick(); });
+    t.appendChild(b);
+  }
   t.classList.toggle('err', isError);
+  t.classList.toggle('with-action', !!action);
   t.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove('show'), isError ? 6000 : 3000);
+  toastTimer = setTimeout(hide, action ? 8000 : isError ? 6000 : 3000);
 }
 // Barra de "a carregar" no topo. Conta os pedidos em curso: só desaparece quando todos acabam.
 let loadingCount = 0;

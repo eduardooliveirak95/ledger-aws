@@ -598,6 +598,12 @@ table.data tr.year-total td { font-weight: 700; border-top: 1px solid var(--bord
 .check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
 .check.with-hint { flex-wrap: wrap; }                  /* só as caixas com explicação: as outras quebram o texto ao lado */
 .check .hint { flex-basis: 100%; margin-top: -4px; }   /* a explicação de uma caixa, na linha de baixo */
+/* "Mais opções" de um formulário: os campos menos usados, fechados até se abrirem (formModal, campos com more) */
+details.more-fields > summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--accent); list-style: none; }
+details.more-fields > summary::-webkit-details-marker { display: none; }
+details.more-fields > summary::after { content: ' ▾'; }
+details.more-fields[open] > summary::after { content: ' ▴'; }
+details.more-fields > .more-body { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; }
 /* Importar extratos de outros bancos: as colunas de cada ficheiro, numa grelha de 3 (1 no telemóvel) */
 .bank-map { margin: 8px 0 12px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .map-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; }
@@ -654,6 +660,9 @@ table.grid-edit .num { font-family: var(--font-num); text-align: right; color: v
 }
 .toast.show { transform: translateY(0); opacity: 1; }
 .toast.err { border-color: var(--neg); color: var(--neg); }
+/* Mensagem com um botão (o "Anular" depois de apagar): só se pode carregar enquanto está à vista */
+.toast.show.with-action { pointer-events: auto; }
+.toast button { margin-left: 14px; padding: 0; border: 0; background: none; font: inherit; font-weight: 700; color: var(--accent); text-decoration: underline; cursor: pointer; }
 .loading-bar { position: fixed; top: 0; left: 0; height: 2px; background: var(--accent); z-index: 500; width: 0; transition: width .3s; }
 .loading-bar.active { width: 70%; }
 

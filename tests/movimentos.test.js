@@ -148,3 +148,75 @@ test('reembolsos: abatem no mês do gasto, nunca mais do que o gasto; o saldo do
     run('D.transactions = txs', { txs: TXS });
   }
 });
+
+test('sugestão de categoria pela descrição: a mesma descrição primeiro, depois a mais usada entre as parecidas', () => {
+  const extra = [
+    tx(10, '2026-08-02', 'out', 30, 'Supermercado', 'Mercearia'),
+    tx(11, '2026-08-20', 'out', 12, 'Casa', 'Mercearia'),              // a mesma descrição, mais recente: é esta que conta
+    tx(12, '2026-08-21', 'out', 40, 'Supermercado', 'Compras Frutaria Exemplo'),
+    tx(13, '2026-08-22', 'out', 35, 'Supermercado', 'Frutaria Exemplo Bairro'),
+    tx(14, '2026-08-30', 'out', 9, 'Restauração', 'Frutaria Exemplo take-away'), // mais recente, mas só 1 contra 2
+    tx(15, '2026-08-05', 'out', 5, 'Outros', 'Café da esquina'),         // «Outros» é o "ainda não arrumei": não se sugere
+    tx(16, '2026-08-06', 'in', 50, 'Reembolsos', 'Mercearia'),          // outro sentido: não entra nas saídas
+    tx(17, '2026-08-07', 'out', 20, 'Combustível', 'Gasolina'),
+    tx(18, '2026-08-09', 'out', 21, 'Carro', 'Gasóleo e gasolina'),      // empate 1 a 1 em "gas": ganha a mais recente
+    tx(19, '2026-08-10', 'transfer', 100, 'Transferência', 'Para a poupança'),   // as transferências não têm categoria a sugerir
+  ];
+  run('D.transactions = txs', { txs: [...TXS, ...extra] });
+  try {
+    const sug = (direction, description) => run('suggestCategory(d, t)', { d: direction, t: description });
+    assert.equal(sug('out', 'mercearia'), 'Casa');
+    assert.equal(sug('out', '  MERCEARIA '), 'Casa');
+    assert.equal(sug('in', 'Mercearia'), 'Reembolsos');
+    assert.equal(sug('out', 'frutaria'), 'Supermercado');
+    assert.equal(sug('out', 'agua'), 'Casa');                // sem acentos: "Conta da água"
+    assert.equal(sug('out', 'gas'), 'Carro');
+    assert.equal(sug('out', 'gasolina'), 'Combustível');     // a descrição igual ganha às parecidas
+    assert.equal(sug('out', 'cafe da esquina'), '');
+    assert.equal(sug('out', 'fr'), '');                      // menos de 3 letras só serve se for a descrição inteira
+    assert.equal(sug('out', 'nunca visto'), '');
+    assert.equal(sug('out', ''), '');
+    assert.equal(sug('transfer', 'Para a poupança'), '');
+  } finally {
+    run('D.transactions = txs', { txs: TXS });
+  }
+});
+
+test('descrições já usadas: as mais usadas primeiro, sem repetir as que só diferem em maiúsculas ou acentos', () => {
+  const extra = [
+    tx(20, '2026-08-01', 'out', 1, 'Restauração', 'café'),
+    tx(21, '2026-08-03', 'out', 1, 'Restauração', 'Café'),               // a escrita mais recente é a que fica
+    tx(22, '2026-08-02', 'out', 1, 'Restauração', 'CAFE'),
+    tx(23, '2026-08-04', 'out', 1, 'Outros', '   '),                     // sem descrição: não entra
+    tx(24, '2026-08-05', 'transfer', 100, 'Transferência', 'Para a poupança'),
+  ];
+  run('D.transactions = txs', { txs: [...TXS, ...extra] });
+  try {
+    assert.deepEqual(run('knownDescriptions("out")'), ['Café', 'Renda de casa', 'Conta da água', 'Compras da semana']);
+    assert.deepEqual(run('knownDescriptions("out", 2)'), ['Café', 'Renda de casa']);
+    assert.deepEqual(run('knownDescriptions("in")'), ['Ordenado de setembro']);
+    assert.deepEqual(run('knownDescriptions("transfer")'), ['Para a poupança']);
+  } finally {
+    run('D.transactions = txs', { txs: TXS });
+  }
+});
+
+test('anular um apagar: os registos apagados guardam-se antes de saírem de D (itemsWithIds) e voltar a gravá-los repõe tudo', () => {
+  const ids = [TXS[1].id, ACC, 'TX_' + 'f'.repeat(12)];   // um movimento, a conta e um id que não existe
+  const gone = run('gone = itemsWithIds(ids)', { ids });
+  assert.deepEqual(gone.map(x => x.id).sort(), [ACC, TXS[1].id].sort());
+  assert.deepEqual(gone.find(x => x.id === TXS[1].id), TXS[1]);
+  try {
+    // depois de apagados, continuam guardados inteiros; voltar a gravá-los repõe D
+    run('applyChanges({ deleted: ids })', { ids });
+    assert.equal(run('D.transactions.length'), TXS.length - 1);
+    assert.equal(run('D.accounts.length'), 0);
+    assert.equal(run('gone.length'), 2);
+    run('applyChanges({ saved: gone })');
+    assert.deepEqual(run('D.transactions.map(t => t.id).sort()'), TXS.map(t => t.id).sort());
+    assert.equal(run('D.accounts[0].name'), 'Conta à ordem');
+  } finally {
+    run('D = { ...emptyData(), accounts: [{ id: acc, kind: "account", name: "Conta à ordem", opening_balance: 0 }], transactions: txs }',
+      { acc: ACC, txs: TXS });
+  }
+});
