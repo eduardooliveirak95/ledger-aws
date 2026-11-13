@@ -336,7 +336,7 @@ def test_transaction_tags_and_due(table):
 def test_backup_csv_content(table):
     """Os CSV gerados no servidor têm as mesmas colunas e o mesmo formato que os do botão "Backup"."""
     s = save([{"kind": "account", "name": "Ordem", "opening_balance": 0, "opening_date": "2026-01-01"},
-              {"kind": "account", "name": "Poupança", "opening_balance": 0, "opening_date": "2026-01-01"},
+              {"kind": "account", "name": "Poupança", "opening_balance": 0, "opening_date": "2026-01-01", "archived": True},
               {"kind": "investment", "name": "ETF", "inv_type": "ETF"},
               {"kind": "investment", "name": "Com ISIN", "inv_type": "ETF", "notes": "ISIN: IE0000000001"},
               {"kind": "investment", "name": "Sem registos", "inv_type": "PPR", "notes": "nota"},
@@ -354,9 +354,9 @@ def test_backup_csv_content(table):
     files = dict(app.backup_files("u1", "2026-10-04"))
     assert list(files) == ["ledger-contas-2026-10-04.csv", "ledger-movimentos-2026-10-04.csv", "ledger-investimentos-2026-10-04.csv",
                            "ledger-creditos-2026-10-04.csv", "ledger-patrimonio-2026-10-04.csv"]
-    # as contas levam o tipo e o saldo inicial (ordenadas por nome)
+    # as contas levam o tipo, o saldo inicial e se estão fechadas (ordenadas por nome)
     assert files["ledger-contas-2026-10-04.csv"].split("\r\n")[1:] == [
-        "Ordem;Conta à ordem;0,00;2026-01-01", "Poupança;Conta à ordem;0,00;2026-01-01"]
+        "Ordem;Conta à ordem;0,00;2026-01-01;não", "Poupança;Conta à ordem;0,00;2026-01-01;sim"]
     assert files["ledger-movimentos-2026-10-04.csv"].split("\r\n")[1:] == [
         "2026-09-01;Ordem;Transferência;Transferência;;10,00;Poupança;não;;;;",
         '2026-09-02;Ordem;Saída;Casa;"Renda; ""set""";1234,50;;não;casa, 2026;600,00;não;']

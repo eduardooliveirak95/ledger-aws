@@ -598,6 +598,9 @@ table.data tr.year-total td { font-weight: 700; border-top: 1px solid var(--bord
 .check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
 .check.with-hint { flex-wrap: wrap; }                  /* só as caixas com explicação: as outras quebram o texto ao lado */
 .check .hint { flex-basis: 100%; margin-top: -4px; }   /* a explicação de uma caixa, na linha de baixo */
+/* Contas fechadas: um grupo fechado por baixo do total das contas */
+details.closed-accs > summary { cursor: pointer; padding: 10px 0 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+details.closed-accs .list-item { opacity: .75; }
 /* "Mais opções" de um formulário: os campos menos usados, fechados até se abrirem (formModal, campos com more) */
 details.more-fields > summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--accent); list-style: none; }
 details.more-fields > summary::-webkit-details-marker { display: none; }

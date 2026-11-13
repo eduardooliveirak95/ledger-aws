@@ -99,6 +99,33 @@ function suggestCategory(direction, description) {
 // ════════ CONTAS / MOVIMENTOS ════════
 
 /**
+ * Contas fechadas (archived): a conta de um banco que se fechou. Guarda o histórico todo (os movimentos e as transferências
+ * continuam a contar nos saldos, nos gráficos e no Resumo do ano), mas deixa de aparecer ao registar movimentos novos.
+ * accountOptions: as contas para escolher num formulário ({ value, label }, por nome): as abertas e, das fechadas, só as que
+ * se pedirem (keepIds: a conta de um movimento antigo que se está a editar); com all, todas (com " (fechada)" no nome).
+ */
+function accountOptions(keepIds = [], all = false) {
+  const keep = new Set(keepIds.filter(Boolean));
+  return sortByName(D.accounts.filter(a => all || !a.archived || keep.has(a.id)))
+    .map(a => ({ value: a.id, label: a.archived ? `${a.name} (fechada)` : a.name }));
+}
+/**
+ * Ao fechar uma conta com dinheiro: a transferência que a deixa a 0 € (o saldo final, com todos os movimentos) para a conta
+ * targetId, com a data date. Com saldo negativo, o dinheiro vem da targetId. null se o saldo já for 0 ou sem targetId.
+ * edit = o que muda na conta na mesma gravação ({ opening_balance, name }): o saldo inicial novo entra na conta (senão a conta
+ * ficava com a diferença) e o nome novo vai na descrição.
+ */
+function closingTransfer(accountId, targetId, date, edit = {}) {
+  const acc = findById('accounts', accountId);
+  if (!acc || !targetId || targetId === accountId) return null;
+  const b = round2(accountBalance(accountId) + (edit.opening_balance ?? acc.opening_balance) - acc.opening_balance);
+  if (!b) return null;
+  return { kind: 'transaction', direction: 'transfer', date, amount: Math.abs(b), category: 'Transferência',
+    account_id: b > 0 ? accountId : targetId, to_account_id: b > 0 ? targetId : accountId,
+    description: `Fecho da conta ${edit.name || acc.name}`, approx: false, tags: [] };
+}
+
+/**
  * Quanto um movimento muda o saldo de uma conta (+ entra, − sai),
  * ou o total de todas as contas quando accountId é vazio.
  */

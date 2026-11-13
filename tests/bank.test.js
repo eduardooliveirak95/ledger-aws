@@ -250,18 +250,18 @@ test('o extrato com os dados da conta continua a ser lido pelo leitor próprio',
 
 // ── contas no backup ──
 
-test('o backup inclui as contas (tipo e saldo inicial) e o importar atualiza as que já existem', () => {
+test('o backup inclui as contas (tipo, saldo inicial e se está fechada) e o importar atualiza as que já existem', () => {
   reset({ accounts: [{ id: 'ACC_aaaaaaaaaaaa', kind: 'account', name: 'Ordem', acc_type: 'Conta à ordem', opening_balance: 0, opening_date: '2026-01-01' }] });
   const csv = run('toCSV(FORMATS.acc.header, [["Ordem", "Conta à ordem", 1250.5, "2025-12-31"], ["Poupança", "Poupança", 3000, "2026-01-01"]])');
   const plan = run('planImport(csv)', { csv });
   assert.equal(plan.format, 'acc');
   assert.deepEqual(plan.errors, []);
   assert.deepEqual(plan.items, [
-    { kind: 'account', id: 'ACC_aaaaaaaaaaaa', name: 'Ordem', acc_type: 'Conta à ordem', opening_balance: 1250.5, opening_date: '2025-12-31' },
-    { kind: 'account', name: 'Poupança', acc_type: 'Poupança', opening_balance: 3000, opening_date: '2026-01-01' }]);
+    { kind: 'account', id: 'ACC_aaaaaaaaaaaa', name: 'Ordem', acc_type: 'Conta à ordem', opening_balance: 1250.5, opening_date: '2025-12-31', archived: false },
+    { kind: 'account', name: 'Poupança', acc_type: 'Poupança', opening_balance: 3000, opening_date: '2026-01-01', archived: false }]);
   reset({ accounts: [{ id: 'ACC_bbbbbbbbbbbb', kind: 'account', name: 'Zeta', acc_type: 'Dinheiro', opening_balance: 20, opening_date: '2026-02-01' },
-    { id: 'ACC_aaaaaaaaaaaa', kind: 'account', name: 'Ordem', acc_type: 'Conta à ordem', opening_balance: 10, opening_date: '2026-01-01' }] });
-  assert.deepEqual(run('exportRows("acc")'), [['Ordem', 'Conta à ordem', 10, '2026-01-01'], ['Zeta', 'Dinheiro', 20, '2026-02-01']]);
+    { id: 'ACC_aaaaaaaaaaaa', kind: 'account', name: 'Ordem', acc_type: 'Conta à ordem', opening_balance: 10, opening_date: '2026-01-01', archived: true }] });
+  assert.deepEqual(run('exportRows("acc")'), [['Ordem', 'Conta à ordem', 10, '2026-01-01', 'sim'], ['Zeta', 'Dinheiro', 20, '2026-02-01', 'não']]);
 });
 
 // API simulada para o runBankImport: devolve os itens gravados com um id

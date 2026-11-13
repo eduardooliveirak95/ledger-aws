@@ -65,6 +65,8 @@ O cartão "Resumo do ano" (também na barra lateral) mostra o ano num relance: e
 
 ### Movimentos
 
+Quando fechas uma conta no banco, não a apagues (apagar leva os movimentos dela): abre-a (✎ na lista das Contas) e marca "Conta fechada". Se ainda tiver dinheiro, a app propõe passá-lo para outra conta, com uma transferência de hoje, e a conta fica a 0 €. Deixa de aparecer ao registar movimentos e passa para "Contas fechadas", mas o histórico fica e continua a contar nos gráficos e no Resumo do ano. Para a reabrir, desmarca a opção.
+
 Ao registar um movimento, a descrição sugere as que já usaste e a categoria fica logo escolhida com a que costumas dar a essa descrição (escreves "mercearia" e fica "Supermercado"); podes sempre escolher outra. As etiquetas, o "A receber" e o "Valor aproximado" estão em "Mais opções". Se apagares alguma coisa por engano, a mensagem "… apagado" traz um "Anular" durante uns segundos, que põe tudo como estava.
 
 A pesquisa procura na descrição, na categoria e no valor, sem ligar a maiúsculas nem acentos ("agua" encontra "Água"). Os totais e os gráficos passam a contar só o que foi encontrado. Nos filtros de entradas e de saídas podes escolher várias categorias. As transferências de e para outras pessoas vão para "Transferências in" e "Transferências out". Cada movimento pode ter até 5 etiquetas (por exemplo "férias 2026"), separadas por vírgulas: pesquisa "#férias" (ou carrega numa etiqueta) para ver os movimentos dela, de qualquer categoria, com os totais.

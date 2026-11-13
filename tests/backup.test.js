@@ -36,7 +36,7 @@ const DATA = {
   accounts: [
     { id: ACC1, kind: 'account', name: 'Conta à ordem', acc_type: 'Conta à ordem', opening_balance: 1250.55, opening_date: '2024-01-01' },
     { id: ACC2, kind: 'account', name: 'Poupança', acc_type: 'Poupança', opening_balance: 3000, opening_date: '2024-02-01' },
-    { id: ACC3, kind: 'account', name: 'Carteira', acc_type: 'Dinheiro', opening_balance: 0, opening_date: '2025-01-01' },
+    { id: ACC3, kind: 'account', name: 'Carteira', acc_type: 'Dinheiro', opening_balance: 0, opening_date: '2025-01-01', archived: true },   // fechada
   ],
   transactions: [
     // dois movimentos iguais no mesmo dia são ambos reais
@@ -80,7 +80,7 @@ const SNAPSHOT = `(() => {
   const acc = id => id ? accountName(id) : '', inv = id => investmentName(id), loan = id => id ? loanName(id) : '';
   const sorted = xs => xs.map(x => JSON.stringify(x)).sort();
   return {
-    accounts: sorted(D.accounts.map(a => [a.name, a.acc_type, a.opening_balance, a.opening_date])),
+    accounts: sorted(D.accounts.map(a => [a.name, a.acc_type, a.opening_balance, a.opening_date, !!a.archived])),
     transactions: sorted(D.transactions.map(t => [t.date, acc(t.account_id), t.direction, t.category, t.description, t.amount, acc(t.to_account_id), !!t.approx, t.tags || [], t.due ?? null, !!t.due_paid, refundLabel(t)])),
     investments: sorted(D.investments.map(i => [i.name, i.inv_type, i.notes || ''])),
     inv_moves: sorted(D.inv_moves.map(m => [m.date, inv(m.investment_id), m.move, m.amount, m.description || ''])),
@@ -155,4 +155,19 @@ test('um backup antigo (sem a linha de cada crédito nem as notas) continua a im
   await vm.runInContext('runImport(plan, true)', ctx);
   assert.deepEqual(run('D.loans.map(l => [l.name, l.payment, l.rate])'), [['Crédito habitação', 660, 3.125]]);
   assert.deepEqual(run('D.loan_balances.map(b => [b.month, b.balance, b.payment, b.extra])').sort(), [['2026-01', 140000, 660, null], ['2026-02', 134500, 650, 5000]]);
+});
+
+test('contas fechadas: o backup guarda-as fechadas; um ficheiro antigo, sem a coluna, não abre nem fecha nenhuma', async () => {
+  run('D = { ...emptyData(), ...data }', { data: DATA });
+  const files = exportAll();
+  assert.deepEqual(files.acc.split('\r\n').slice(1), ['Carteira;Dinheiro;0,00;2025-01-01;sim', 'Conta à ordem;Conta à ordem;1250,55;2024-01-01;não',
+    'Poupança;Poupança;3000,00;2024-02-01;não']);
+  // o ficheiro de antes da coluna "Fechada": a Carteira continua fechada e uma conta nova fica aberta
+  const old = files.acc.replace(/;Fechada|;(sim|não)(?=\r\n|$)/g, '') + '\r\nNova;Conta à ordem;0;2026-01-01';
+  ctx.plan = run('planImport(t)', { t: old });
+  const items = run('plan.items.map(i => [i.name, i.archived])');
+  assert.deepEqual(items, [['Carteira', true], ['Conta à ordem', false], ['Poupança', false], ['Nova', false]]);
+  // e com a coluna, "sim" fecha e "não" reabre
+  ctx.plan = run('planImport(t)', { t: files.acc.replace('Carteira;Dinheiro;0,00;2025-01-01;sim', 'Carteira;Dinheiro;0,00;2025-01-01;não').replace('3000,00;2024-02-01;não', '3000,00;2024-02-01;sim') });
+  assert.deepEqual(run('plan.items.map(i => [i.name, i.archived])'), [['Carteira', false], ['Conta à ordem', false], ['Poupança', true]]);
 });

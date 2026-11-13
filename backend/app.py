@@ -901,7 +901,7 @@ def post_settings(user, claims, event):
 # a partir do DynamoDB. Os cabeçalhos têm de ser iguais aos do FORMATS do csv.js (há um teste que
 # o confirma), para o backup se poder recuperar com "Importar".
 BACKUP_FORMATS = {
-    "contas": ["Conta", "Tipo de conta", "Saldo inicial", "Data do saldo inicial"],
+    "contas": ["Conta", "Tipo de conta", "Saldo inicial", "Data do saldo inicial", "Fechada"],
     "movimentos": ["Data", "Conta", "Tipo", "Categoria", "Descrição", "Valor", "Conta destino", "Aproximado", "Etiquetas",
                    "A receber", "Recebido", "Reembolso de"],
     "investimentos": ["Data", "Investimento", "Tipo de investimento", "Operação", "Valor", "Descrição"],
@@ -953,8 +953,9 @@ def backup_rows(items):
     def inv(i):
         return names["investment"].get(i, "(apagado)")
 
-    # contas: tipo e saldo inicial (os movimentos só têm o nome da conta)
-    accounts = [[a.get("name", ""), a.get("acc_type", ""), a.get("opening_balance"), a.get("opening_date", "")]
+    # contas: tipo, saldo inicial e se está fechada (os movimentos só têm o nome da conta)
+    accounts = [[a.get("name", ""), a.get("acc_type", ""), a.get("opening_balance"), a.get("opening_date", ""),
+                 "sim" if a.get("archived") else "não"]
                 for a in by_name(by.get("account", []))]
 
     # "Reembolso de": a data e o valor do gasto devolvido (os ids mudam ao importar; a importação procura o gasto por eles)

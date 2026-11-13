@@ -51,10 +51,10 @@ function toCSV(header, rows) {
 const FORMATS = {
   acc: {
     label: 'Contas',
-    header: ['Conta', 'Tipo de conta', 'Saldo inicial', 'Data do saldo inicial'],
+    header: ['Conta', 'Tipo de conta', 'Saldo inicial', 'Data do saldo inicial', 'Fechada'],
     example: [
-      ['Conta principal', 'Conta à ordem', 1250, '2024-01-01'],
-      ['Poupança', 'Poupança', 5000, '2024-01-01'],
+      ['Conta principal', 'Conta à ordem', 1250, '2024-01-01', 'não'],
+      ['Poupança', 'Poupança', 5000, '2024-01-01', 'não'],
     ],
   },
   mov: {
@@ -98,7 +98,7 @@ const FORMATS = {
 // Converte os dados da app em linhas de CSV para um formato ('acc', 'mov', 'inv', 'loan' ou 'prop')
 function exportRows(format) {
   if (format === 'acc') {
-    return sortByName(D.accounts).map(a => [a.name, a.acc_type, a.opening_balance, a.opening_date]);
+    return sortByName(D.accounts).map(a => [a.name, a.acc_type, a.opening_balance, a.opening_date, a.archived ? 'sim' : 'não']);
   }
   if (format === 'mov') {
     return [...D.transactions].sort((a, b) => a.date.localeCompare(b.date)).map(t => [
@@ -354,8 +354,10 @@ function planImport(text) {
       const date = dateRaw ? parseDateFlexible(dateRaw) : todayISO();
       if (!date) return err('data do saldo inicial inválida');
       const existing = D.accounts.find(a => norm(a.name) === norm(name));
+      // "Fechada": os ficheiros antigos (antes de 11/2026) não a têm; aí a conta fica como estava (aberta, se for nova)
+      const closed = get(r, 'Fechada');
       plan.items.push({ kind: 'account', id: existing?.id, name, acc_type: get(r, 'Tipo de conta') || existing?.acc_type || 'Conta à ordem',
-        opening_balance: opening, opening_date: date });
+        opening_balance: opening, opening_date: date, archived: closed ? yes(closed) : !!existing?.archived });
     }
 
     if (format === 'prop') {

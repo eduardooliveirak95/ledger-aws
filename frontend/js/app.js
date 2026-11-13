@@ -841,7 +841,7 @@ function fillSelect(sel, options, current, allLabel) {
 
 // Desenha o separador Movimentos: totais, gráficos, lista de contas e tabela de movimentos
 function renderMovements() {
-  S.movAccount = fillSelect($('#mov-filter-account'), sortByName(D.accounts).map(a => ({ value: a.id, label: a.name })), S.movAccount, 'Todas as contas');
+  S.movAccount = fillSelect($('#mov-filter-account'), accountOptions([], true), S.movAccount, 'Todas as contas');   // também as fechadas, para ver o histórico
   const catsOf = dir => [...new Set(D.transactions.filter(t => t.direction === dir).map(t => t.category))].sort((a, b) => a.localeCompare(b, 'pt'));
   const catsIn = catsOf('in'), catsOut = catsOf('out');
   const activeIn = S.movCatIn.some(c => catsIn.includes(c)), activeOut = S.movCatOut.some(c => catsOut.includes(c));
@@ -960,17 +960,21 @@ function renderMovements() {
     },
   }, 'Sem gastos neste período');
 
-  // lista de contas com o saldo de hoje
-  const accs = sortByName(D.accounts);
-  $('#acc-list').innerHTML = accs.length ? accs.map(a => {
+  // lista de contas com o saldo de hoje; as fechadas ficam à parte, por baixo do total (que as conta: o saldo delas, se ainda
+  // tiverem algum, continua a ser dinheiro teu)
+  const accItem = a => {
     const b = accountBalance(a.id, todayISO());
     return `<div class="list-item">
-      <div><div class="li-name">${esc(a.name)}</div><div class="li-sub">${esc(a.acc_type)}</div></div>
+      <div><div class="li-name">${esc(a.name)}</div><div class="li-sub">${esc(a.acc_type)}${a.archived ? ' · fechada' : ''}</div></div>
       <div style="display:flex;align-items:center;gap:6px">
         <div class="li-value ${b < 0 ? 'neg' : ''}">${eur(b)}</div>
         <button class="icon-btn" data-edit-acc="${esc(a.id)}" aria-label="Editar conta ${esc(a.name)}">✎</button>
       </div></div>`;
-  }).join('') + `<div class="list-item"><div class="li-name">Total</div><div class="li-value">${eur(totalAccountsBalance(todayISO()))}</div></div>`
+  };
+  const accsOpen = sortByName(D.accounts.filter(a => !a.archived)), accsClosed = sortByName(D.accounts.filter(a => a.archived));
+  $('#acc-list').innerHTML = D.accounts.length ? accsOpen.map(accItem).join('')
+    + `<div class="list-item"><div class="li-name">Total</div><div class="li-value">${eur(totalAccountsBalance(todayISO()))}</div></div>`
+    + (accsClosed.length ? `<details class="closed-accs"><summary>Contas fechadas (${accsClosed.length})</summary>${accsClosed.map(accItem).join('')}</details>` : '')
     : `<div class="empty">Ainda não tens contas.<br>Cria uma para começares a registar movimentos.<br><button class="btn primary" data-action="acc-new">+ Criar conta</button></div>`;
 
   // gráfico do saldo no fim de cada mês
@@ -1100,24 +1104,41 @@ $('#mov-bulk').addEventListener('click', async e => {
 // ── formulário de conta ──
 // acc = conta a editar (ou null para criar); after = função a chamar depois de criar
 function accountForm(acc = null, after) {
+  // Fechar a conta (só ao editar uma aberta, havendo outra aberta): propõe a transferência do que sobrar para outra conta
+  // (closingTransfer no calc.js, com o saldo inicial que se gravar), para ela ficar a 0 € e o património deixar de a contar.
+  // O saldo vai na explicação; se for 0 €, não se regista nada.
+  const balance = acc ? accountBalance(acc.id) : 0;
+  const others = acc ? accountOptions().filter(o => o.value !== acc.id) : [];
+  const canMove = acc && !acc.archived && others.length > 0;
   formModal({
     title: acc ? 'Editar conta' : 'Nova conta',
-    values: acc || { acc_type: 'Conta à ordem', opening_balance: '', opening_date: todayISO() },
+    values: acc ? { ...acc, close_to: others[0]?.value ?? 'none' } : { acc_type: 'Conta à ordem', opening_balance: '', opening_date: todayISO() },
     fields: [
       { name: 'name', label: 'Nome', type: 'text', required: true, placeholder: 'ex.: Conta à ordem, Poupança, Carteira' },
       { name: 'acc_type', label: 'Tipo', type: 'select', options: ACCOUNT_TYPES, required: true },
       { name: 'opening_balance', label: 'Saldo inicial (€)', type: 'money', required: false,
         hint: 'O dinheiro que já estava na conta antes do primeiro movimento que vais registar. Pode ser 0.' },
+      ...(acc ? [{ name: 'archived', label: 'Conta fechada', type: 'check',
+        hint: 'Fechaste a conta no banco: deixa de aparecer ao registar movimentos, mas o histórico fica e continua a contar nos gráficos e no Resumo do ano.' }] : []),
+      ...(canMove ? [{ name: 'close_to', label: 'Passar o saldo que sobrar para', type: 'select', required: true, showIf: v => !!v.archived,
+        options: [...others, { value: 'none', label: 'Não registar (a conta fica com o saldo)' }],
+        hint: `Saldo agora: ${eur(balance)}. Fica registada uma transferência com a data de hoje, para esta conta ficar a 0 € e o património deixar de a contar (com 0 €, não se regista nada).` }] : []),
     ],
     onSubmit: async v => {
-      const res = await saveItems([{ kind: 'account', id: acc?.id, name: v.name, acc_type: v.acc_type,
-        opening_balance: v.opening_balance ?? 0, opening_date: acc?.opening_date || todayISO() }]);
-      toast(acc ? 'Conta atualizada' : 'Conta criada');
+      const items = [{ kind: 'account', id: acc?.id, name: v.name, acc_type: v.acc_type,
+        opening_balance: v.opening_balance ?? 0, opening_date: acc?.opening_date || todayISO(), archived: !!v.archived }];
+      const move = canMove && v.archived && v.close_to !== 'none'
+        ? closingTransfer(acc.id, v.close_to, todayISO(), { opening_balance: v.opening_balance ?? 0, name: v.name }) : null;
+      if (move) items.push(move);
+      const res = await saveItems(items);
+      toast(!acc ? 'Conta criada' : v.archived && !acc.archived ? (move ? 'Conta fechada e saldo transferido' : 'Conta fechada')
+        : !v.archived && acc.archived ? 'Conta reaberta' : 'Conta atualizada');
       if (after) setTimeout(() => after(res.saved[0]), 50);
     },
     danger: acc && { label: 'Apagar conta', onClick: async () => {
       const n = D.transactions.filter(t => t.account_id === acc.id || t.to_account_id === acc.id).length;
-      if (await confirmDialog(`Apagar a conta <b>${esc(acc.name)}</b>${n ? ` e os <b>${n} movimentos</b> dela` : ''}?${reservationsNote(acc.id)} Só dá para anular nos segundos a seguir.`)) {
+      const keep = n ? ' Se fechaste a conta no banco e queres guardar o histórico, cancela e marca antes "Conta fechada".' : '';
+      if (await confirmDialog(`Apagar a conta <b>${esc(acc.name)}</b>${n ? ` e os <b>${n} movimentos</b> dela` : ''}?${reservationsNote(acc.id)} Só dá para anular nos segundos a seguir.${keep}`)) {
         try { await removeItem(acc.id, 'Conta apagada'); } catch (e) { toast(e.message, true); }
       }
     } },
@@ -1136,8 +1157,8 @@ function balanceCheckModal(accountId = S.movAccount) {
     <div class="modal-hint">Escreve o saldo que o banco mostra (na app do banco ou no fim de um extrato) e a app diz se bate com o
       dela nesse dia. Se não bater, falta algum movimento, há algum repetido ou o saldo inicial da conta está errado.</div>
     <div class="field-row">
-      <div class="field"><label for="chk-acc">Conta</label><select id="chk-acc">${sortByName(D.accounts).map(a =>
-        `<option value="${esc(a.id)}"${a.id === accountId ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}</select></div>
+      <div class="field"><label for="chk-acc">Conta</label><select id="chk-acc">${accountOptions([], true).map(o =>
+        `<option value="${esc(o.value)}"${o.value === accountId ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select></div>
       <div class="field"><label for="chk-date">Dia</label><input id="chk-date" type="date" value="${today}" max="${today}"></div>
     </div>
     <div class="field"><label for="chk-bank">Saldo no banco nesse dia (€)</label><input id="chk-bank" inputmode="decimal" placeholder="ex.: 1234,56"></div>
@@ -1191,12 +1212,13 @@ function balanceCheckModal(accountId = S.movAccount) {
 // ── formulário de movimento ──
 // Sem contas, primeiro abre o formulário de conta e depois volta aqui. preset = valores iniciais.
 function txForm(tx = null, preset = {}) {
-  if (!D.accounts.length) {
-    toast('Primeiro cria uma conta');
+  // só as contas abertas; as fechadas aparecem só no movimento antigo que já é delas
+  const accOpts = accountOptions([tx?.account_id, tx?.to_account_id, preset.account_id, preset.to_account_id]);
+  if (!accOpts.length) {
+    toast(D.accounts.length ? 'Todas as contas estão fechadas: cria uma nova' : 'Primeiro cria uma conta');
     return accountForm(null, () => txForm(tx, preset));
   }
-  const accOpts = sortByName(D.accounts).map(a => ({ value: a.id, label: a.name }));
-  const defaults = { direction: 'out', date: todayISO(), account_id: S.movAccount || accOpts[0].value, amount: '', category: '', description: '', approx: false, ...preset };
+  const defaults = { direction: 'out', date: todayISO(), account_id: accOpts.some(o => o.value === S.movAccount) ? S.movAccount : accOpts[0].value, amount: '', category: '', description: '', approx: false, ...preset };
   const refundFrom = tx?.refund_of ? findById('transactions', tx.refund_of) : null;   // esta entrada é o reembolso deste gasto
   // A categoria segue a descrição (suggestCategory no calc.js) enquanto estiver vazia ou tiver sido posta pela sugestão; a
   // que a pessoa escolheu à mão (ou a do movimento que se está a editar) nunca é mudada. autoCat = a que a sugestão pôs.
@@ -1283,7 +1305,7 @@ function historyGrid() {
       e escreve o <b>total aproximado</b> de cada categoria. Cada valor fica como um movimento marcado com <span class="badge approx">≈</span>
       no último dia do mês. Se os valores forem iguais durante vários meses, escolhe um intervalo e eles repetem-se.</div>
     <div class="field-row" style="grid-template-columns:1fr 1fr 1fr">
-      <div class="field"><label>Conta</label><select id="hg-acc">${sortByName(D.accounts).map(a => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Conta</label><select id="hg-acc">${accountOptions([], true).map(o => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('')}</select></div>
       <div class="field"><label>Do mês</label><input type="month" id="hg-from" value="${addMonths(thisMonth(), -1)}"></div>
       <div class="field"><label>Até ao mês</label><input type="month" id="hg-to" value="${addMonths(thisMonth(), -1)}"></div>
     </div>

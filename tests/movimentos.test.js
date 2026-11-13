@@ -220,3 +220,43 @@ test('anular um apagar: os registos apagados guardam-se antes de saírem de D (i
       { acc: ACC, txs: TXS });
   }
 });
+
+test('contas fechadas: só as abertas para escolher (e a do movimento antigo); fechar com saldo propõe a transferência certa', () => {
+  const OLD = 'ACC_000000000002', NEW = 'ACC_000000000003';
+  const accs = [{ id: ACC, kind: 'account', name: 'Conta à ordem', opening_balance: 0 },
+    { id: OLD, kind: 'account', name: 'Banco antigo', opening_balance: 500, archived: true },
+    { id: NEW, kind: 'account', name: 'Banco novo', opening_balance: 0 }];
+  const extra = [{ ...tx(30, '2026-09-10', 'out', 120.5, 'Casa', 'Última renda'), account_id: OLD }];
+  run('D.accounts = accs; D.transactions = txs', { accs, txs: [...TXS, ...extra] });
+  try {
+    assert.deepEqual(run('accountOptions()'), [{ value: NEW, label: 'Banco novo' }, { value: ACC, label: 'Conta à ordem' }]);
+    assert.deepEqual(run('accountOptions([old])', { old: OLD }).map(o => o.label), ['Banco antigo (fechada)', 'Banco novo', 'Conta à ordem']);
+    assert.equal(run('accountOptions([], true).length'), 3);
+    // a conta fechada continua a contar nos totais e no saldo (o histórico não muda por fechar)
+    const total = run('totalAccountsBalance()');
+    run('D.accounts = D.accounts.map(a => ({ ...a, archived: false }))');
+    assert.equal(run('totalAccountsBalance()'), total);
+    // fechar com 379,50 € lá dentro: transferência da antiga para a nova, com a data dada e a antiga a 0 €
+    const t = run('closingTransfer(old, nw, "2026-11-13")', { old: OLD, nw: NEW });
+    assert.deepEqual([t.direction, t.account_id, t.to_account_id, t.amount, t.date, t.category, t.description],
+      ['transfer', OLD, NEW, 379.5, '2026-11-13', 'Transferência', 'Fecho da conta Banco antigo']);
+    run('D.transactions.push({ ...move, id: "TX_2026-11-13_000000000099" })', { move: t });
+    assert.equal(run('accountBalance(old)', { old: OLD }), 0);
+    assert.equal(run('totalAccountsBalance()'), total);   // passar o dinheiro de uma conta para outra não muda o total
+    // a mudar o saldo inicial (+100 €) e o nome na mesma gravação: a transferência leva a diferença e o nome novo
+    const edit = run('closingTransfer(old, nw, "2026-11-13", { opening_balance: 600, name: "Banco velho" })', { old: OLD, nw: NEW });
+    assert.deepEqual([edit.account_id, edit.amount, edit.description], [OLD, 100, 'Fecho da conta Banco velho']);
+    assert.equal(run('closingTransfer(old, nw, "2026-11-13", { opening_balance: 500 })', { old: OLD, nw: NEW }), null);
+    // a 0 € (ou sem conta de destino, ou a própria) não há transferência
+    assert.equal(run('closingTransfer(old, nw, "2026-11-13")', { old: OLD, nw: NEW }), null);
+    assert.equal(run('closingTransfer(nw, "", "2026-11-13")', { nw: ACC }), null);
+    assert.equal(run('closingTransfer(nw, nw, "2026-11-13")', { nw: ACC }), null);
+    // com saldo negativo (a descoberto), o dinheiro vem da outra conta
+    run('D.transactions.push({ ...move, id: "TX_2026-11-14_000000000098", date: "2026-11-14", amount: 50 })', { move: t });
+    const back = run('closingTransfer(old, nw, "2026-11-15")', { old: OLD, nw: NEW });
+    assert.deepEqual([back.account_id, back.to_account_id, back.amount], [NEW, OLD, 50]);
+  } finally {
+    run('D = { ...emptyData(), accounts: [{ id: acc, kind: "account", name: "Conta à ordem", opening_balance: 0 }], transactions: txs }',
+      { acc: ACC, txs: TXS });
+  }
+});
