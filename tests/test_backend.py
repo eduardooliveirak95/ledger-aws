@@ -141,7 +141,7 @@ def test_invalid_items_are_rejected(table, bad):
 
 
 def test_deleting_parents_cascades(table):
-    """Apagar conta, investimento e crédito apaga também movimentos, aportes, valores e saldos ligados."""
+    """Apagar investimento e crédito apaga também aportes, valores e saldos ligados; uma conta só se apaga sem movimentos."""
     s = save([{"kind": "account", "name": "A", "opening_balance": 0, "opening_date": "2026-01-01"},
               {"kind": "investment", "name": "ETF"},
               {"kind": "loan", "name": "Casa", "principal": 1000, "start_date": "2020-01-01"}])["saved"]
@@ -150,7 +150,20 @@ def test_deleting_parents_cascades(table):
           {"kind": "inv_move", "date": "2026-01-02", "investment_id": inv, "move": "contribution", "amount": 5},
           {"kind": "valuation", "investment_id": inv, "month": "2026-01", "value": 6},
           {"kind": "loan_balance", "loan_id": loan, "month": "2026-01", "balance": 900}])
-    for pid in (acc, inv, loan):
+    # a conta tem um movimento: não se apaga (fecha-se), e nada é apagado
+    status, body = call("DELETE /items/{id}", path={"id": acc})
+    assert status == 409 and "Conta fechada" in body["detail"]
+    _, d = call("GET /data")
+    assert len(d["accounts"]) == 1 and len(d["transactions"]) == 1
+    # o mesmo se a conta for só o destino de uma transferência
+    other = save([{"kind": "account", "name": "B", "opening_balance": 0, "opening_date": "2026-01-01"}])["saved"][0]["id"]
+    save([{"kind": "transaction", "date": "2026-01-03", "account_id": acc, "direction": "transfer", "to_account_id": other, "amount": 1}])
+    assert call("DELETE /items/{id}", path={"id": other})[0] == 409
+    # sem movimentos, apaga-se
+    _, d = call("GET /data")
+    for t in d["transactions"]:
+        assert call("DELETE /items/{id}", path={"id": t["id"]})[0] == 200
+    for pid in (acc, other, inv, loan):
         status, _ = call("DELETE /items/{id}", path={"id": pid})
         assert status == 200
     _, d = call("GET /data")
@@ -159,6 +172,7 @@ def test_deleting_parents_cascades(table):
 
 def test_saving_deleted_items_again_restores_them_with_the_same_ids(table):
     """O "Anular" da app volta a gravar o que foi apagado: os ids ficam iguais, por isso as ligações não se perdem."""
+    # (uma conta com movimentos já não se apaga: ver test_deleting_parents_cascades)
     acc = save([{"kind": "account", "name": "A", "opening_balance": 0, "opening_date": "2026-01-01"}])["saved"][0]
     gasto = save([{"kind": "transaction", "date": "2026-01-02", "account_id": acc["id"], "direction": "out", "category": "Jantar",
                    "amount": 80, "due": 60, "tags": ["amigos"]}])["saved"][0]
@@ -169,15 +183,18 @@ def test_saving_deleted_items_again_restores_them_with_the_same_ids(table):
     assert status == 200 and body["deleted"] == [gasto["id"]]
     back = save([gasto])["saved"][0]
     assert back["id"] == gasto["id"] and back["due"] == 60 and back["tags"] == ["amigos"]
-    # a conta com os movimentos dela (cascata): tudo de volta, com os mesmos ids e o reembolso ainda ligado ao gasto
-    _, body = call("DELETE /items/{id}", path={"id": acc["id"]})
-    assert sorted(body["deleted"]) == sorted([acc["id"], gasto["id"], mbway["id"]])
-    assert all(not v for v in call("GET /data")[1].values())
-    saved = save([acc, gasto, mbway])["saved"]
+    _, d = call("GET /data")
+    assert {t["id"]: t.get("refund_of") for t in d["transactions"]} == {gasto["id"]: None, mbway["id"]: gasto["id"]}
+    # um investimento com os aportes e os valores dele (cascata): tudo de volta, com os mesmos ids
+    inv = save([{"kind": "investment", "name": "ETF", "inv_type": "ETF"}])["saved"][0]
+    kids = save([{"kind": "inv_move", "date": "2026-01-04", "investment_id": inv["id"], "move": "contribution", "amount": 100},
+                 {"kind": "valuation", "investment_id": inv["id"], "month": "2026-01", "value": 101}])["saved"]
+    _, body = call("DELETE /items/{id}", path={"id": inv["id"]})
+    assert sorted(body["deleted"]) == sorted([inv["id"]] + [k["id"] for k in kids])
+    saved = save([inv, *kids])["saved"]
     assert sorted(x["id"] for x in saved) == sorted(body["deleted"])
     _, d = call("GET /data")
-    assert [a["id"] for a in d["accounts"]] == [acc["id"]]
-    assert {t["id"]: t.get("refund_of") for t in d["transactions"]} == {gasto["id"]: None, mbway["id"]: gasto["id"]}
+    assert [i["id"] for i in d["investments"]] == [inv["id"]] and len(d["inv_moves"]) == 1 and d["valuations"][0]["value"] == 101
 
 
 def test_loan_balance_keeps_payment_and_extra(table):

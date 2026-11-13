@@ -40,7 +40,7 @@ movimentos já ordenados por data, sem ser preciso ordenar no código.
 Rotas:
     GET    /data          tudo o que pertence ao utilizador autenticado (os cálculos são feitos no browser)
     POST   /items         criar / atualizar muitos itens de uma vez  {"items": [...], "delete": [...]}
-    DELETE /items/{id}    apagar um item (+ os "filhos" no caso de contas / investimentos / créditos)
+    DELETE /items/{id}    apagar um item (+ os "filhos" no caso de investimentos / créditos / metas; uma conta só sem movimentos)
     GET    /settings      definições do utilizador ({"daily_backup": true/false})
     POST   /settings      mudar as definições  {"daily_backup": true/false} (ao ligar, pode trazer um "warning")
     GET    /admin/users   (função admin, só para o grupo "admin") utilizadores, último login e logins recentes
@@ -807,7 +807,8 @@ def post_items(user, event):
 def delete_item(user, item_id):
     """DELETE /items/{id}: apaga um item e, em cascata, os itens que dependem dele.
 
-    conta        -> também os movimentos dessa conta (como origem ou destino) e as reservas para metas feitas nela
+    conta        -> só sem movimentos (como origem ou destino): uma conta com histórico fecha-se ("archived"), não se apaga,
+                    para um engano não levar os movimentos dela; apaga também as reservas para metas feitas nela
     investimento -> também os aportes/resgates, os valores mensais e as reservas para metas feitas nele
     crédito      -> também os saldos mensais
     meta         -> também as reservas dela (o dinheiro fica livre)
@@ -819,9 +820,8 @@ def delete_item(user, item_id):
 
     to_delete = {item_id}
     if kind == "account":
-        for t in query_all(user, "TX_"):
-            if t.get("account_id") == item_id or t.get("to_account_id") == item_id:
-                to_delete.add(t["sk"])
+        if any(item_id in (t.get("account_id"), t.get("to_account_id")) for t in query_all(user, "TX_")):
+            raise ApiError(409, "Esta conta tem movimentos: em vez de a apagar, marca \"Conta fechada\" (o histórico fica)")
     elif kind == "investment":
         h = hex_of(item_id, "investment")
         to_delete.update(m["sk"] for m in query_all(user, "IMV_") if m.get("investment_id") == item_id)

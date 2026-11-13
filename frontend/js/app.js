@@ -1110,6 +1110,7 @@ function accountForm(acc = null, after) {
   const balance = acc ? accountBalance(acc.id) : 0;
   const others = acc ? accountOptions().filter(o => o.value !== acc.id) : [];
   const canMove = acc && !acc.archived && others.length > 0;
+  const hasMovements = !!acc && D.transactions.some(t => t.account_id === acc.id || t.to_account_id === acc.id);
   formModal({
     title: acc ? 'Editar conta' : 'Nova conta',
     values: acc ? { ...acc, close_to: others[0]?.value ?? 'none' } : { acc_type: 'Conta à ordem', opening_balance: '', opening_date: todayISO() },
@@ -1119,7 +1120,8 @@ function accountForm(acc = null, after) {
       { name: 'opening_balance', label: 'Saldo inicial (€)', type: 'money', required: false,
         hint: 'O dinheiro que já estava na conta antes do primeiro movimento que vais registar. Pode ser 0.' },
       ...(acc ? [{ name: 'archived', label: 'Conta fechada', type: 'check',
-        hint: 'Fechaste a conta no banco: deixa de aparecer ao registar movimentos, mas o histórico fica e continua a contar nos gráficos e no Resumo do ano.' }] : []),
+        hint: 'Fechaste a conta no banco: deixa de aparecer ao registar movimentos, mas o histórico fica e continua a contar nos gráficos e no Resumo do ano.'
+          + (hasMovements ? ' Uma conta com movimentos não se apaga: fecha-se.' : '') }] : []),
       ...(canMove ? [{ name: 'close_to', label: 'Passar o saldo que sobrar para', type: 'select', required: true, showIf: v => !!v.archived,
         options: [...others, { value: 'none', label: 'Não registar (a conta fica com o saldo)' }],
         hint: `Saldo agora: ${eur(balance)}. Fica registada uma transferência com a data de hoje, para esta conta ficar a 0 € e o património deixar de a contar (com 0 €, não se regista nada).` }] : []),
@@ -1135,10 +1137,10 @@ function accountForm(acc = null, after) {
         : !v.archived && acc.archived ? 'Conta reaberta' : 'Conta atualizada');
       if (after) setTimeout(() => after(res.saved[0]), 50);
     },
-    danger: acc && { label: 'Apagar conta', onClick: async () => {
-      const n = D.transactions.filter(t => t.account_id === acc.id || t.to_account_id === acc.id).length;
-      const keep = n ? ' Se fechaste a conta no banco e queres guardar o histórico, cancela e marca antes "Conta fechada".' : '';
-      if (await confirmDialog(`Apagar a conta <b>${esc(acc.name)}</b>${n ? ` e os <b>${n} movimentos</b> dela` : ''}?${reservationsNote(acc.id)} Só dá para anular nos segundos a seguir.${keep}`)) {
+    // Só se apaga uma conta sem movimentos (criada por engano): uma com histórico fecha-se ("Conta fechada"), para um engano
+    // não levar os movimentos dela. O servidor recusa na mesma (409), se algum dia chegar cá um pedido destes.
+    danger: acc && !hasMovements && { label: 'Apagar conta', onClick: async () => {
+      if (await confirmDialog(`Apagar a conta <b>${esc(acc.name)}</b>?${reservationsNote(acc.id)} Só dá para anular nos segundos a seguir.`)) {
         try { await removeItem(acc.id, 'Conta apagada'); } catch (e) { toast(e.message, true); }
       }
     } },
