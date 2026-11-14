@@ -182,9 +182,17 @@ function parseMonthFlexible(s) {
 // Mostra uma mensagem temporária no fundo do ecrã (3 s; os erros ficam 6 s e a vermelho). action = { label, onClick } junta
 // um botão à mensagem (o "Anular" depois de apagar), que fica 8 s; quando a mensagem desaparece, o botão deixa de funcionar.
 let toastTimer;
+// Esconde a mensagem já (ao sair da conta); o botão dela, se tiver, deixa de funcionar
+function hideToast() {
+  clearTimeout(toastTimer);
+  const t = $('#toast');
+  t.classList.remove('show');
+  const b = t.querySelector('button');
+  if (b) b.disabled = true;
+}
 function toast(msg, isError = false, action = null) {
   const t = $('#toast');
-  const hide = () => { t.classList.remove('show'); const b = t.querySelector('button'); if (b) b.disabled = true; };
+  const hide = hideToast;
   t.textContent = msg;
   if (action) {
     const b = document.createElement('button');

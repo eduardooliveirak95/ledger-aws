@@ -62,6 +62,15 @@ jobs:
       - name: JavaScript tests
         run: node --test tests/bank.test.js tests/admin.test.js tests/auth.test.js tests/movimentos.test.js tests/tema.test.js tests/patrimonio.test.js tests/despesas-fixas.test.js tests/amortizacao.test.js tests/comparacao.test.js tests/orcamentos.test.js tests/rentabilidade.test.js tests/backup.test.js tests/metas.test.js tests/avisos.test.js tests/previsao.test.js tests/resumo.test.js
 
+      # A app no browser (Chromium), no PC e no telemóvel, com o login e a API simulados e dados inventados (tests/app.e2e.cjs):
+      # separadores, barra lateral, voltar/F5, formulários e contas. O Playwright fica preso a uma versão (o Chromium vem com ela)
+      # e instala-se só aqui, sem package.json no repositório.
+      - name: Browser tests
+        run: |
+          npm install --no-save --no-package-lock --no-audit --no-fund playwright@1.63.0
+          npx --no-install playwright install --with-deps chromium
+          node tests/app.e2e.cjs
+
   # ── 2.º trabalho: deploy (só se os testes passarem, e só em push para main) ──
   deploy:
     name: Deploy to AWS

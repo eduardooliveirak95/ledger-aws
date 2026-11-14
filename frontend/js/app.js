@@ -61,6 +61,7 @@ function logout() {
   renderNetWorth();  // com os dados já vazios: tira os números, as metas e os avisos de quem saiu (cartões e barra lateral)
   updateAdminUi();   // já sem sessão: esconde o selo e o separador Utilizadores
   modal.close();
+  hideToast();       // uma mensagem com "Anular" de quem saiu não fica por cima do login
   showLogin();
 }
 // Quando o auth.js não consegue renovar a sessão, faz logout
@@ -217,7 +218,7 @@ async function saveItems(items, deletes = []) {
 }
 // Apaga um item na API e mostra quantos registos associados também foram apagados (cascata). A mensagem traz um "Anular"
 // (8 s), que volta a gravar tudo o que foi apagado: o backend reaproveita os ids, por isso as ligações entre registos
-// (movimentos de uma conta, reembolsos de um gasto) ficam como estavam.
+// (aportes de um investimento, reembolsos de um gasto) ficam como estavam.
 async function removeItem(id, done) {   // done: a mensagem, ex.: 'Conta apagada'
   const res = await api.remove(id);
   const gone = itemsWithIds(res.deleted);   // antes do applyChanges, que os tira de D
@@ -551,7 +552,8 @@ function markReceived(id) {
 // Só no mês atual, com a conta escolhida no filtro (ou todas). As entradas e saídas habituais que ainda faltam vêm por nome;
 // os gastos do dia a dia são a média dos últimos meses menos o que já se gastou este mês.
 function renderForecast() {
-  const show = S.movMode === 'month' && S.movAnchor === thisMonth();
+  // numa conta fechada não há futuro a prever (sem movimentos novos)
+  const show = S.movMode === 'month' && S.movAnchor === thisMonth() && !findById('accounts', S.movAccount)?.archived;
   const f = show && monthForecast(S.movAccount);
   const visible = f && (f.scheduled || f.incoming.length || f.outgoing.length || f.daily);
   $('#forecast-panel').classList.toggle('hidden', !visible);
@@ -1111,6 +1113,8 @@ function accountForm(acc = null, after) {
   const others = acc ? accountOptions().filter(o => o.value !== acc.id) : [];
   const canMove = acc && !acc.archived && others.length > 0;
   const hasMovements = !!acc && D.transactions.some(t => t.account_id === acc.id || t.to_account_id === acc.id);
+  // reservas de metas feitas nesta conta: ao fechá-la, continuavam lá (numa conta a 0 €) e a meta avisava "reservaste a mais"
+  const reserved = acc ? reservedTotal({ sourceId: acc.id, upTo: '9999-12-31' }) : 0;
   formModal({
     title: acc ? 'Editar conta' : 'Nova conta',
     values: acc ? { ...acc, close_to: others[0]?.value ?? 'none' } : { acc_type: 'Conta à ordem', opening_balance: '', opening_date: todayISO() },
@@ -1121,7 +1125,8 @@ function accountForm(acc = null, after) {
         hint: 'O dinheiro que já estava na conta antes do primeiro movimento que vais registar. Pode ser 0.' },
       ...(acc ? [{ name: 'archived', label: 'Conta fechada', type: 'check',
         hint: 'Fechaste a conta no banco: deixa de aparecer ao registar movimentos, mas o histórico fica e continua a contar nos gráficos e no Resumo do ano.'
-          + (hasMovements ? ' Uma conta com movimentos não se apaga: fecha-se.' : '') }] : []),
+          + (hasMovements ? ' Uma conta com movimentos não se apaga: fecha-se.' : '')
+          + (reserved > 0 && !acc.archived ? ` Tem ${eur(reserved)} reservados para metas: tira-os ou passa-os para outra conta nas metas.` : '') }] : []),
       ...(canMove ? [{ name: 'close_to', label: 'Passar o saldo que sobrar para', type: 'select', required: true, showIf: v => !!v.archived,
         options: [...others, { value: 'none', label: 'Não registar (a conta fica com o saldo)' }],
         hint: `Saldo agora: ${eur(balance)}. Fica registada uma transferência com a data de hoje, para esta conta ficar a 0 € e o património deixar de a contar (com 0 €, não se regista nada).` }] : []),

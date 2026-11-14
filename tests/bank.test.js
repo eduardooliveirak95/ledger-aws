@@ -158,6 +158,26 @@ test('importar o mesmo extrato outra vez não duplica nada', () => {
   assert.equal(plan.accounts[0].diff, 0);   // o saldo da app antes do extrato bate com o do banco
 });
 
+test('extrato de uma conta fechada: aparece "(fechada)" na lista e acertar o saldo inicial não vem marcado', () => {
+  const acc = 'ACC_00000000abcd';
+  const tx = (date, direction, amount) => ({ id: `TX_${date}_${Math.random().toString(16).slice(2, 14).padEnd(12, '0')}`, kind: 'transaction',
+    date, account_id: acc, direction, amount, category: 'Outros', description: 'x' });
+  // a conta fechada tem o nome do extrato, mas a app tem 50 € a mais do que o banco antes dele
+  reset({ accounts: [{ id: acc, kind: 'account', name: 'Conta à ordem', opening_balance: 350.5, opening_date: '2026-09-01', archived: true }],
+    transactions: [tx('2026-09-28', 'out', 30)] });
+  const plan = run('planBankImport([parseStatementCsv(a)])', { a: ORDEM });
+  assert.equal(plan.accounts[0].choice, acc);
+  assert.equal(plan.accounts[0].diff, -50);
+  assert.equal(plan.accounts[0].fixOpening, false);
+  assert.equal(plan.updates.filter(u => u.kind === 'account').length, 0);   // o saldo inicial da conta fechada não muda
+  assert.match(run('bankPreviewHTML(plan)', { plan }), /Conta à ordem \(fechada\)<\/option>/);
+  // marcado à mão, acerta
+  assert.equal(run('planBankImport([parseStatementCsv(a)], {}, { [n]: true })', { a: ORDEM, n: plan.accounts[0].number }).updates.filter(u => u.kind === 'account').length, 1);
+  // numa conta aberta, continua marcado por omissão
+  run('D.accounts[0].archived = false');
+  assert.equal(run('planBankImport([parseStatementCsv(a)])', { a: ORDEM }).accounts[0].fixOpening, true);
+});
+
 test('textos começados por = + - @ não viram fórmulas no Excel, e voltam iguais ao importar', () => {
   const csv = run('toCSV(["Descrição", "Valor"], rows)', { rows: [['=HYPERLINK("x")', 12.5], ['-desconto', -3], ['@SUM(A1)', 1], ['Renda', 2]] });
   assert.equal(csv.split('\r\n').slice(1).join('|'), '"\'=HYPERLINK(""x"")";12,50|\'-desconto;-3,00|\'@SUM(A1);1,00|Renda;2,00');

@@ -65,7 +65,7 @@ O cartão "Resumo do ano" (também na barra lateral) mostra o ano num relance: e
 
 ### Movimentos
 
-Quando fechas uma conta no banco, abre-a (✎ na lista das Contas) e marca "Conta fechada". Uma conta com movimentos não se pode apagar, para não perderes o histórico por engano; só uma conta vazia (criada por engano, por exemplo) tem o botão "Apagar conta". Se ainda tiver dinheiro, a app propõe passá-lo para outra conta, com uma transferência de hoje, e a conta fica a 0 €. Deixa de aparecer ao registar movimentos e passa para "Contas fechadas", mas o histórico fica e continua a contar nos gráficos e no Resumo do ano. Para a reabrir, desmarca a opção.
+Quando fechas uma conta no banco, abre-a (✎ na lista das Contas) e marca "Conta fechada". Se ainda tiver dinheiro, a app propõe passá-lo para outra conta, com uma transferência de hoje, e a conta fica a 0 €. Deixa de aparecer ao registar movimentos e passa para "Contas fechadas", mas o histórico fica e continua a contar nos gráficos e no Resumo do ano. Para a reabrir, desmarca a opção. Uma conta com movimentos não se pode apagar, para não perderes o histórico por engano; só uma conta vazia (criada por engano, por exemplo) tem o botão "Apagar conta".
 
 Ao registar um movimento, a descrição sugere as que já usaste e a categoria fica logo escolhida com a que costumas dar a essa descrição (escreves "mercearia" e fica "Supermercado"); podes sempre escolher outra. As etiquetas, o "A receber" e o "Valor aproximado" estão em "Mais opções". Se apagares alguma coisa por engano, a mensagem "… apagado" traz um "Anular" durante uns segundos, que põe tudo como estava.
 

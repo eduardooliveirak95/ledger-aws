@@ -3,7 +3,8 @@
 # Gerado pelo deploy.sh / deploy.ps1 (aponta para a tua API e o teu login)
 frontend/config.js
 
-# Restos do SAM / Python
+# Restos do SAM / Python / Node (o Playwright dos testes no browser instala-se só no Actions)
+node_modules/
 .aws-sam/
 samconfig.toml
 __pycache__/

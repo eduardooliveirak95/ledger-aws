@@ -1,4 +1,5 @@
-// Testes da pesquisa nos Movimentos (filterTx com texto e os totais por mês), com dados inventados.
+// Testes dos Movimentos, com dados inventados: a pesquisa (filterTx com texto e os totais por mês), os reembolsos do "a receber",
+// a categoria sugerida pela descrição, o "Anular" e as contas fechadas.
 // Correm no Node, sem browser: os ficheiros do site são carregados num contexto isolado (vm).
 //
 //     node --test tests/movimentos.test.js

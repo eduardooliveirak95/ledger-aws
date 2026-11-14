@@ -186,7 +186,7 @@ function formModal({ title, fields, values = {}, submitLabel = 'Guardar', onSubm
         // Dinheiro com vírgula e, com cêntimos, sempre 2 casas (12.5 -> "12,50"; numInput, no util.js); a taxa só com vírgula
         input.value = val === null || val === undefined ? '' : f.type === 'money' ? numInput(val)
           : f.type === 'number' && val !== '' ? String(val).replace('.', ',') : val;
-        // "suggest": campo de texto com sugestões (datalist), ex.: categorias já usadas
+        // "suggest": campo de texto com sugestões (datalist), ex.: as descrições já usadas nos movimentos
         if (f.type === 'suggest') {
           const dl = document.createElement('datalist');
           dl.id = id + '-list';
@@ -301,7 +301,7 @@ function formModal({ title, fields, values = {}, submitLabel = 'Guardar', onSubm
       await onSubmit(out);
       modal.close();
     } catch (err) {
-      fail(err.message);
+      fail(err.message, { more: true });   // o erro pode ser de um campo do "Mais opções": abre-o, para se ver
     } finally {
       if (btn) { btn.disabled = false; btn.textContent = btn.dataset.label; }
     }

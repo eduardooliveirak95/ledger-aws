@@ -400,7 +400,8 @@ function planBankImport(statements, choice = {}, fixOpening = {}) {
       acc.appOpening = a && a.opening_date > dayBefore && !D.transactions.some(t => t.date <= dayBefore && (t.account_id === a.id || t.to_account_id === a.id))
         ? a.opening_balance : round2(accountBalance(acc.choice, dayBefore));
       acc.diff = round2(acc.opening - acc.appOpening);
-      acc.fixOpening = fixOpening[acc.number] ?? true;
+      // numa conta fechada (extratos antigos dela), acertar o saldo inicial não vem marcado: mexia no histórico de uma conta a 0 €
+      acc.fixOpening = fixOpening[acc.number] ?? !a?.archived;
       if (acc.diff && acc.fixOpening && a) {
         plan.updates.push({ ...a, kind: 'account', opening_balance: round2(a.opening_balance + acc.diff),
           opening_date: a.opening_date < acc.from ? a.opening_date : acc.from });
@@ -518,7 +519,7 @@ function importBalanceChecks(plan) {
 function bankPreviewHTML(plan) {
   const accOpts = acc => [
     `<option value="new" ${acc.choice === 'new' ? 'selected' : ''}>Criar «${esc(acc.defaultName)}»</option>`,
-    ...sortByName(D.accounts).map(a => `<option value="${esc(a.id)}" ${acc.choice === a.id ? 'selected' : ''}>${esc(a.name)}</option>`),
+    ...accountOptions([], true).map(o => `<option value="${esc(o.value)}" ${acc.choice === o.value ? 'selected' : ''}>${esc(o.label)}</option>`),
     `<option value="skip" ${acc.choice === 'skip' ? 'selected' : ''}>Não importar</option>`,
   ].join('');
   const accounts = plan.accounts.map(acc => `

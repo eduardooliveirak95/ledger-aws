@@ -159,6 +159,15 @@ def test_deleting_parents_cascades(table):
     other = save([{"kind": "account", "name": "B", "opening_balance": 0, "opening_date": "2026-01-01"}])["saved"][0]["id"]
     save([{"kind": "transaction", "date": "2026-01-03", "account_id": acc, "direction": "transfer", "to_account_id": other, "amount": 1}])
     assert call("DELETE /items/{id}", path={"id": other})[0] == 409
+    # pelo POST /items (a lista "delete") também não; com os movimentos no mesmo pedido, sim
+    status, body = call("POST /items", body={"items": [], "delete": [acc]})
+    assert status == 409 and "Conta fechada" in body["detail"]
+    _, d = call("GET /data")
+    assert len(d["accounts"]) == 2 and len(d["transactions"]) == 2
+    tx_other = next(t["id"] for t in d["transactions"] if t.get("to_account_id") == other)
+    status, body = call("POST /items", body={"items": [], "delete": [other, tx_other]})
+    assert status == 200 and sorted(body["deleted"]) == sorted([other, tx_other])
+    other = save([{"kind": "account", "name": "B", "opening_balance": 0, "opening_date": "2026-01-01"}])["saved"][0]["id"]
     # sem movimentos, apaga-se
     _, d = call("GET /data")
     for t in d["transactions"]:

@@ -798,10 +798,28 @@ def post_items(user, event):
     # Nunca apagar uma chave que vai ser gravada neste mesmo pedido
     put_keys = {p["sk"] for p in puts}
     deletes -= put_keys
+    # uma conta só se apaga sem movimentos (os que também se apagam neste pedido não contam)
+    refuse_accounts_with_movements(user, {d for d in deletes if kind_of(d) == "account"}, deletes)
     # Remove repetidos com a mesma chave (fica o último)
     unique = {p["sk"]: p for p in puts}
     write_and_delete(user, list(unique.values()), sorted(deletes))
     return {"saved": [to_public(p) for p in unique.values()], "deleted": sorted(deletes)}
+
+
+ACCOUNT_HAS_MOVEMENTS = "Esta conta tem movimentos: em vez de a apagar, marca \"Conta fechada\" (o histórico fica)"
+
+
+def refuse_accounts_with_movements(user, account_ids, also_deleting=frozenset()):
+    """409 se alguma destas contas ainda tiver movimentos (como origem ou destino), fora dos que se apagam no mesmo pedido.
+
+    Uma conta com histórico fecha-se ("archived"), não se apaga: assim um engano não leva os movimentos dela. Vale para o
+    DELETE /items/{id} e para a lista "delete" do POST /items.
+    """
+    if not account_ids:
+        return
+    for t in query_all(user, "TX_"):
+        if t["sk"] not in also_deleting and (t.get("account_id") in account_ids or t.get("to_account_id") in account_ids):
+            raise ApiError(409, ACCOUNT_HAS_MOVEMENTS)
 
 
 def delete_item(user, item_id):
@@ -820,8 +838,7 @@ def delete_item(user, item_id):
 
     to_delete = {item_id}
     if kind == "account":
-        if any(item_id in (t.get("account_id"), t.get("to_account_id")) for t in query_all(user, "TX_")):
-            raise ApiError(409, "Esta conta tem movimentos: em vez de a apagar, marca \"Conta fechada\" (o histórico fica)")
+        refuse_accounts_with_movements(user, {item_id})
     elif kind == "investment":
         h = hex_of(item_id, "investment")
         to_delete.update(m["sk"] for m in query_all(user, "IMV_") if m.get("investment_id") == item_id)
