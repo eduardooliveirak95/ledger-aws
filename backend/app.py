@@ -421,12 +421,16 @@ def build(user, raw):
         tags = v_tags(raw.get("tags"))
         if tags:
             item["tags"] = tags
-        # Dinheiro a receber: num gasto, a parte que outros te vão devolver (até ao valor) e se já foi recebida
+        # Dinheiro a receber: num gasto, a parte que outros te vão devolver (até ao valor), se já foi recebida e de quem
+        # (um nome ou um grupo, para o painel "A receber" juntar por pessoa)
         due = v_num(raw.get("due"), "due", positive=True, optional=True) if direction == "out" else None
         if due is not None:
             if due > item["amount"]:
                 raise ValueError("due: não pode ser maior do que o valor do movimento")
             item.update(due=due, due_paid=bool(raw.get("due_paid", False)))
+            due_from = v_text(raw.get("due_from"), "due_from", MAX_NAME)
+            if due_from:
+                item["due_from"] = due_from
         # Reembolso: uma entrada que é a devolução de um gasto com "a receber" (o id do gasto). Não conta como entrada:
         # abate a esse gasto (calc.js, refundTargets)
         if direction == "in" and raw.get("refund_of"):
@@ -920,7 +924,7 @@ def post_settings(user, claims, event):
 BACKUP_FORMATS = {
     "contas": ["Conta", "Tipo de conta", "Saldo inicial", "Data do saldo inicial", "Fechada"],
     "movimentos": ["Data", "Conta", "Tipo", "Categoria", "Descrição", "Valor", "Conta destino", "Aproximado", "Etiquetas",
-                   "A receber", "Recebido", "Reembolso de"],
+                   "A receber", "De quem", "Recebido", "Reembolso de"],
     "investimentos": ["Data", "Investimento", "Tipo de investimento", "Operação", "Valor", "Descrição"],
     "creditos": ["Mês", "Crédito", "Tipo de crédito", "Saldo em dívida", "Prestação", "Montante inicial",
                  "Data de início", "Taxa (%)", "Banco", "Amortização extra", "Fim do contrato"],
@@ -985,7 +989,7 @@ def backup_rows(items):
     mov = [[t["date"], acc(t.get("account_id")), DIRECTION_LABEL.get(t.get("direction"), ""), t.get("category", ""),
             t.get("description", ""), t.get("amount"), acc(t.get("to_account_id")) if t.get("direction") == "transfer" else "",
             "sim" if t.get("approx") else "não", ", ".join(t.get("tags", [])), t.get("due"),
-            ("sim" if t.get("due_paid") else "não") if t.get("due") else "", refund(t)]
+            t.get("due_from", "") if t.get("due") else "", ("sim" if t.get("due_paid") else "não") if t.get("due") else "", refund(t)]
            for t in sorted(by.get("transaction", []), key=lambda t: t["date"])]
 
     inv_type = {x["sk"]: x.get("inv_type", "") for x in by.get("investment", [])}

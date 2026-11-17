@@ -94,6 +94,45 @@ test('a receber: os gastos com uma parte por devolver, ainda não recebidos', ()
   }
 });
 
+test('a receber por pessoa: junta pelo "De quem" (sem acentos nem maiúsculas), primeiro quem deve mais, os sem nome no fim', () => {
+  const list = [...TXS, { ...tx(6, '2026-09-20', 'out', 80, 'Restauração', 'Jantar'), due: 60, due_from: 'Joao' },
+    { ...tx(7, '2026-09-02', 'out', 40, 'Restauração', 'Almoço'), due: 25.5, due_from: 'Ana' },
+    { ...tx(8, '2026-09-26', 'out', 30, 'Lazer', 'Cinema'), due: 10, due_from: ' JOÃO ' },
+    { ...tx(9, '2026-09-27', 'out', 20, 'Lazer', 'Bowling'), due: 70, due_from: 'Rui', due_paid: true },
+    { ...tx(10, '2026-09-28', 'out', 15, 'Lazer', 'Café'), due: 5 }];
+  run('D.transactions = txs', { txs: list });
+  try {
+    const g = run('receivablesByPerson()');
+    // o João junta os dois (escrito como no gasto mais recente); o Rui já pagou; o café não tem nome e fica no fim
+    assert.deepEqual(g.map(x => [x.person, x.total, x.list.map(y => y.t.id.slice(-2))]),
+      [['JOÃO', 70, ['06', '08']], ['Ana', 25.5, ['07']], ['', 5, ['10']]]);
+    // as sugestões do campo: do gasto mais recente para o mais antigo, sem repetir
+    assert.deepEqual(run('knownPeople()'), ['Rui', 'JOÃO', 'Ana']);
+  } finally {
+    run('D.transactions = txs', { txs: TXS });
+  }
+});
+
+test('a receber: "Dividir por N" dá a parte dos outros; no "Recebido", as entradas que falam da pessoa vêm primeiro', () => {
+  assert.deepEqual([run('splitDue(80, 4)'), run('splitDue(10, 3)'), run('splitDue(84, 2)')], [60, 6.67, 42]);
+  const jantar = { ...tx(6, '2026-09-20', 'out', 84, 'Restauração', 'Jantar'), due: 21, due_from: 'João Silva' };
+  const perto = tx(7, '2026-09-21', 'in', 21, 'Transferências in', 'MB WAY Eva');
+  const dele = tx(8, '2026-09-22', 'in', 25, 'Transferências in', 'MB WAY de JOAO S.');
+  const silvana = tx(9, '2026-09-23', 'in', 22, 'Transferências in', 'Silvana');   // "silva" dentro de outra palavra não conta
+  run('D.transactions = txs', { txs: [...TXS, jantar, perto, dele, silvana] });
+  try {
+    // (o ordenado de setembro, dos dados de base, também é uma entrada sem ligação: fica no fim, o valor mais longe)
+    assert.deepEqual(run('refundCandidates(id).map(t => t.id.slice(-2))', { id: jantar.id }), ['08', '07', '09', '04']);
+    assert.deepEqual([run('mentionsPerson(t, "João Silva")', { t: dele }), run('mentionsPerson(t, "João Silva")', { t: silvana }),
+      run('mentionsPerson(t, "Amigos dos jantares")', { t: { description: 'jantar dos amigos' } })], [true, false, true]);
+    // sem "De quem", fica como antes: o valor mais perto primeiro
+    run('D.transactions = txs', { txs: [...TXS, { ...jantar, due_from: undefined }, perto, dele, silvana] });
+    assert.deepEqual(run('refundCandidates(id).map(t => t.id.slice(-2))', { id: jantar.id }), ['07', '09', '08', '04']);
+  } finally {
+    run('D.transactions = txs', { txs: TXS });
+  }
+});
+
 test('reembolsos: a entrada associada abate ao gasto, na categoria dele, e não conta como entrada', () => {
   const jantar = { ...tx(6, '2026-09-20', 'out', 84, 'Restauração', 'Jantar'), due: 63 };
   const mbway1 = { ...tx(7, '2026-09-21', 'in', 21, 'Transferências in', 'MB WAY Ana'), refund_of: jantar.id };

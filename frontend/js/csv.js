@@ -59,13 +59,13 @@ const FORMATS = {
   },
   mov: {
     label: 'Movimentos',
-    header: ['Data', 'Conta', 'Tipo', 'Categoria', 'Descrição', 'Valor', 'Conta destino', 'Aproximado', 'Etiquetas', 'A receber', 'Recebido', 'Reembolso de'],
+    header: ['Data', 'Conta', 'Tipo', 'Categoria', 'Descrição', 'Valor', 'Conta destino', 'Aproximado', 'Etiquetas', 'A receber', 'De quem', 'Recebido', 'Reembolso de'],
     example: [
-      ['2024-01-31', 'Conta principal', 'Saída', 'Supermercado', 'Total aproximado do mês', 320, '', 'sim', '', '', '', ''],
-      ['2024-01-25', 'Conta principal', 'Entrada', 'Salário', '', 1450, '', 'não', '', '', '', ''],
-      ['2024-02-01', 'Conta principal', 'Transferência', 'Transferência', 'Para poupança', 200, 'Poupança', 'não', '', '', '', ''],
-      ['2024-02-10', 'Conta principal', 'Saída', 'Restauração', 'Jantar de grupo', 80, '', 'não', 'férias 2024, amigos', 60, 'sim', ''],
-      ['2024-02-11', 'Conta principal', 'Entrada', 'Transferências in', 'MB WAY do jantar', 60, '', 'não', '', '', '', '2024-02-10 80,00'],
+      ['2024-01-31', 'Conta principal', 'Saída', 'Supermercado', 'Total aproximado do mês', 320, '', 'sim', '', '', '', '', ''],
+      ['2024-01-25', 'Conta principal', 'Entrada', 'Salário', '', 1450, '', 'não', '', '', '', '', ''],
+      ['2024-02-01', 'Conta principal', 'Transferência', 'Transferência', 'Para poupança', 200, 'Poupança', 'não', '', '', '', '', ''],
+      ['2024-02-10', 'Conta principal', 'Saída', 'Restauração', 'Jantar de grupo', 80, '', 'não', 'férias 2024, amigos', 60, 'Amigos do jantar', 'sim', ''],
+      ['2024-02-11', 'Conta principal', 'Entrada', 'Transferências in', 'MB WAY do jantar', 60, '', 'não', '', '', '', '', '2024-02-10 80,00'],
     ],
   },
   inv: {
@@ -104,7 +104,7 @@ function exportRows(format) {
     return [...D.transactions].sort((a, b) => a.date.localeCompare(b.date)).map(t => [
       t.date, accountName(t.account_id), DIRECTION_LABEL[t.direction], t.category, t.description, t.amount,
       t.direction === 'transfer' ? accountName(t.to_account_id) : '', t.approx ? 'sim' : 'não',
-      (t.tags || []).join(', '), t.due ?? '', t.due ? (t.due_paid ? 'sim' : 'não') : '', refundLabel(t),
+      (t.tags || []).join(', '), t.due ?? '', t.due ? t.due_from || '' : '', t.due ? (t.due_paid ? 'sim' : 'não') : '', refundLabel(t),
     ]);
   }
   if (format === 'inv') {
@@ -271,7 +271,7 @@ function planImport(text) {
         const tags = get(r, 'Etiquetas').split(',').map(s => s.trim()).filter(Boolean);
         if (tags.length) it.tags = tags;
         const due = parseNum(get(r, 'A receber'));
-        if (direction === 'out' && due > 0) Object.assign(it, { due, due_paid: yes(get(r, 'Recebido')) });
+        if (direction === 'out' && due > 0) Object.assign(it, { due, due_paid: yes(get(r, 'Recebido')) }, get(r, 'De quem') ? { due_from: get(r, 'De quem') } : {});
         const ref = get(r, 'Reembolso de').match(/^(\d{4}-\d{2}-\d{2})\s+([\d.,]+)$/);
         if (direction === 'in' && ref) it._refund = { date: ref[1], amount: parseNum(ref[2]) };
       }

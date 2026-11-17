@@ -250,15 +250,57 @@ function receivables() {
   return { list, total: round2(list.reduce((s, x) => s + x.left, 0)) };
 }
 
-/** As entradas que podem ser o reembolso de um gasto: sem ligação, de 3 dias antes do gasto até 90 dias depois, primeiro as
- *  de valor mais perto do que falta receber (e depois as mais antigas). */
+/** As entradas que podem ser o reembolso de um gasto: sem ligação, de 3 dias antes do gasto até 90 dias depois. Primeiro as
+ *  que falam de quem deve (mentionsPerson, com o "De quem" do gasto), depois as de valor mais perto do que falta receber e
+ *  depois as mais antigas. */
 function refundCandidates(id) {
   const o = findById('transactions', id);
   if (!o) return [];
   const left = o.due - (refundsReceived().get(o.id) || 0), from = addDays(o.date, -3), to = addDays(o.date, 90), targets = refundTargets();
+  const person = o.due_from || '', near = t => Math.abs(t.amount - left);
   // sem ligação, ou ligadas a um gasto que já não existe (refundOf null)
   return D.transactions.filter(t => t.direction === 'in' && !refundOf(t, targets) && t.date >= from && t.date <= to)
-    .sort((a, b) => Math.abs(a.amount - left) - Math.abs(b.amount - left) || a.date.localeCompare(b.date));
+    .sort((a, b) => (person ? mentionsPerson(b, person) - mentionsPerson(a, person) : 0) || near(a) - near(b) || a.date.localeCompare(b.date));
+}
+
+/** Se a descrição de um movimento fala de uma pessoa do "De quem": uma palavra inteira do nome, com 3 letras ou mais, sem ligar
+ *  a acentos nem maiúsculas ("MB WAY de JOAO S." fala de "João Silva"). Os MB WAY costumam trazer o nome de quem mandou. */
+function mentionsPerson(t, person) {
+  const words = norm(person).split(/[^a-z0-9]+/).filter(w => w.length >= 3 && !['dos', 'das'].includes(w));
+  const desc = ` ${norm(t.description).replace(/[^a-z0-9]+/g, ' ')} `;
+  return words.some(w => desc.includes(` ${w} `));
+}
+
+/** Os nomes já usados no "De quem", do gasto mais recente para o mais antigo, sem repetir (sem ligar a acentos nem
+ *  maiúsculas): as sugestões do campo no formulário do movimento. */
+function knownPeople() {
+  const seen = new Set(), out = [];
+  for (const t of [...D.transactions].sort((a, b) => b.date.localeCompare(a.date))) {
+    const k = norm(t.due_from);
+    if (t.due > 0 && k && !seen.has(k)) { seen.add(k); out.push(t.due_from.trim()); }
+  }
+  return out;
+}
+
+/** O que falta receber, por pessoa (o "De quem", sem ligar a acentos nem maiúsculas, escrito como no gasto mais recente):
+ *  [{ person, total, list }], primeiro quem deve mais; os gastos sem nome ficam no fim, com person ''. list é a do
+ *  receivables() (por data), total a soma do que falta. */
+function receivablesByPerson(r = receivables()) {
+  const groups = new Map();
+  for (const x of r.list) {
+    const k = norm(x.t.due_from);
+    if (!groups.has(k)) groups.set(k, { person: '', total: 0, list: [] });
+    const g = groups.get(k);
+    if (k) g.person = x.t.due_from.trim();
+    g.list.push(x);
+    g.total = round2(g.total + x.left);
+  }
+  return [...groups.values()].sort((a, b) => (!a.person) - (!b.person) || b.total - a.total || a.person.localeCompare(b.person, 'pt'));
+}
+
+/** "Dividir por N" (N pessoas, contigo): a parte dos outros num gasto de amount €, para o "A receber" (80 € por 4 → 60 €). */
+function splitDue(amount, n) {
+  return round2(amount - round2(amount / n));
 }
 
 /** Totais de entradas e saídas. As transferências só contam quando se olha para uma conta.
@@ -1047,17 +1089,25 @@ function futureDefaults() {
  * target, eta = em quantos meses se chega lá (0 se já lá está; procura até 100 anos, mesmo depois do prazo; null se nunca).
  * Com fire (a independência financeira: 25 × os gastos de um ano, a regra dos 4%), fireEta = o mesmo, mas com o valor em
  * euros de hoje, porque os gastos também sobem com a inflação.
+ * Com oneOff = { month, amount }, uma compra grande (amount < 0) ou uma entrada pontual (amount > 0) daqui a month meses (pelo
+ * menos 1), no fim desse mês, que também conta no contributed. Se a compra levar o valor abaixo de 0, short = o que faltou
+ * nesse mês; enquanto o valor estiver abaixo de 0 não rende (é dinheiro que não há).
  * É uma simulação: rentabilidade igual todos os anos e sem impostos.
  * { rows: um por ano, a começar em hoje (year 0): { year, value, contributed, real }, end: a última, com gain = value −
- * contributed, eta, fireEta }; contributed = start + o que se juntou.
+ * contributed, eta, fireEta, short }; contributed = start + o que se juntou.
  */
-function futureProjection({ start = 0, monthly = 0, ret = 0, years = 10, inflation = 0, target = null, fire = null }) {
-  const rm = Math.pow(1 + ret / 100, 1 / 12) - 1, horizon = years * 12;
-  let v = start, c = start, eta = target !== null && start >= target ? 0 : null, fireEta = fire !== null && start >= fire ? 0 : null;
+function futureProjection({ start = 0, monthly = 0, ret = 0, years = 10, inflation = 0, target = null, fire = null, oneOff = null }) {
+  const rm = Math.pow(1 + ret / 100, 1 / 12) - 1, horizon = years * 12, oneAt = oneOff ? Math.max(1, oneOff.month) : 0;
+  let v = start, c = start, eta = target !== null && start >= target ? 0 : null, fireEta = fire !== null && start >= fire ? 0 : null, short = 0;
   const rows = [{ year: 0, value: round2(v), contributed: round2(c), real: round2(v) }];
   for (let m = 1; m <= Math.max(horizon, target === null && fire === null ? 0 : 1200); m++) {
-    v = v * (1 + rm) + monthly;
+    v = (v > 0 ? v * (1 + rm) : v) + monthly;
     c += monthly;
+    if (m === oneAt) {
+      v += oneOff.amount;
+      c += oneOff.amount;
+      if (v < 0) short = round2(-v);
+    }
     if (eta === null && target !== null && v >= target) eta = m;
     if (fireEta === null && fire !== null && v / Math.pow(1 + inflation / 100, m / 12) >= fire) fireEta = m;
     if (m <= horizon && m % 12 === 0) {
@@ -1066,7 +1116,7 @@ function futureProjection({ start = 0, monthly = 0, ret = 0, years = 10, inflati
     if (m >= horizon && (target === null || eta !== null) && (fire === null || fireEta !== null)) break;
   }
   const end = rows[rows.length - 1];
-  return { rows, end: { ...end, gain: round2(end.value - end.contributed) }, eta, fireEta };
+  return { rows, end: { ...end, gain: round2(end.value - end.contributed) }, eta, fireEta, short };
 }
 
 /**
@@ -1224,9 +1274,32 @@ function goalsStatus() {
 // ════════ AVISOS DA PÁGINA INICIAL ════════
 
 /**
+ * Gastos fora do normal num mês (por omissão, o atual; como nos orçamentos, o mês inteiro, também o já registado para os
+ * próximos dias): as categorias sem orçamento (as que têm já levam o aviso dos orçamentos) em que o gasto do mês já vai em
+ * pelo menos 2 × a média mensal dos 6 meses completos antes dele e 50 € acima dela. A média conta os meses sem gastos (a 0) e
+ * só desde o primeiro movimento; com menos de 3 meses não se sabe o que é normal e não há avisos. Como no categoryTotals,
+ * cada gasto conta menos o que já foi devolvido e os investimentos e as amortizações ficam de fora.
+ * [{ category, spent, avg, months }], do maior excesso (spent − avg) para o menor; avg = 0 se não houve gastos nesses meses.
+ */
+function unusualSpending(month = thisMonth()) {
+  const first = firstTxMonth(), to = addMonths(month, -1);
+  if (!first || first > to) return [];
+  const from = [addMonths(month, -6), first].sort().pop(), months = monthRange(from, to).length;
+  if (months < 3) return [];
+  const budgeted = new Set(D.budgets.map(b => b.category));
+  const before = Object.create(null);   // sem protótipo: uma categoria chamada "constructor" conta como as outras
+  for (const [c, v] of categoryTotals(filterTx({ from, to }))) before[c] = v;
+  return categoryTotals(filterTx({ from: month, to: month })).filter(([c]) => !budgeted.has(c))
+    .map(([category, spent]) => ({ category, spent, avg: round2((before[category] || 0) / months), months }))
+    .filter(x => x.spent >= 2 * x.avg && x.spent - x.avg >= 50)
+    .sort((a, b) => b.spent - b.avg - (a.spent - a.avg) || a.category.localeCompare(b.category, 'pt'));
+}
+
+/**
  * O que precisa de atenção, para o painel "A ver" da página inicial, dos mais graves para os menos:
  *   - reservou-se numa conta mais do que lá há; uma meta cujo prazo passou ou a que o ritmo já não chega a tempo
  *   - orçamentos deste mês a 80% ou mais
+ *   - categorias sem orçamento com gastos fora do normal este mês (unusualSpending)
  *   - investimentos ainda com valor e créditos ainda por pagar sem o valor / saldo do mês passado
  *   - reservas mensais das metas por fazer este mês; despesas fixas que subiram de preço (priceRises); tipos de investimento
  *     a mais de 5 pontos percentuais do alvo da alocação (allocation)
@@ -1269,6 +1342,13 @@ function homeAlerts() {
         return b.state === 'over' ? `${b.category} ${eur(-b.left)} acima do limite${ofYear}`
           : `${b.category} a ${Math.round(b.ratio * 100)}%${ofYear ? ' do limite do ano' : ''}`;
       }).join(', ')}.`, 'Ver movimentos', 'mov');
+  }
+  // categorias sem orçamento muito acima do costume (unusualSpending); o id leva as categorias: uma nova volta a avisar
+  const unusual = unusualSpending(now);
+  if (unusual.length) {
+    add(`unusual:${now}:${unusual.map(x => x.category).join('|')}`, 'warn', `Gastos fora do normal em ${monthLabel(now)}: ${unusual.map(x =>
+      `${x.category} ${eur(x.spent)} (${x.avg > 0 ? `${String(Math.round(x.spent / x.avg * 10) / 10).replace('.', ',')}× a média de ${eur(x.avg)}/mês`
+        : `sem gastos nos ${x.months} meses antes`})`).join(', ')}.`, 'Ver movimentos', 'mov');
   }
 
   const invs = D.investments.filter(i => !i.archived && (firstInvestmentMonth([i.id]) || now) < now && investmentSummary(i.id).value > 0)
@@ -1322,6 +1402,31 @@ function yearPeriod(year) {
 // Os movimentos de um período, pela data (no ano atual, os já registados com data futura ainda não contam, como no
 // património líquido)
 function periodTx(p) { return D.transactions.filter(t => t.date >= p.start && t.date <= p.end); }
+
+/**
+ * "Para onde foi o dinheiro" (o diagrama de fluxo do Resumo do ano): de onde veio o dinheiro e para onde foi. totals é o
+ * flowTotals do período; inCats e outCats as categorias das entradas e dos gastos ({ category, amount }, do maior para o menor,
+ * como as do yearSummary). À esquerda (sources), as entradas por categoria (as maxIn maiores; com mais, as últimas juntas em
+ * "Outras entradas") e, se os gastos, o investido e o amortizado passaram o que entrou, "Do que já tinhas" (o que saiu das
+ * contas); à direita (targets), os gastos por categoria (o mesmo com maxOut, em "Outros gastos"), o investido, o amortizado e
+ * "Ficou nas contas" (o que sobrou). Os dois lados somam total. Cada um: { label, amount, kind }, com kind in, stock, out,
+ * invested, amortized ou kept. Sem entradas nem gastos, null.
+ */
+function moneyFlow(totals, inCats, outCats, maxIn = 4, maxOut = 6) {
+  const top = (cats, max, kind, rest) => {
+    const list = cats.filter(c => c.amount > 0), shown = list.length > max ? list.slice(0, max - 1) : list;
+    const other = round2(list.slice(shown.length).reduce((sum, c) => sum + c.amount, 0));
+    return [...shown.map(c => ({ label: c.category, amount: c.amount, kind })), ...(other > 0 ? [{ label: rest, amount: other, kind }] : [])];
+  };
+  const used = round2(totals.out + totals.invested + totals.amortized), left = round2(totals.in - used);
+  const sources = [...top(inCats, maxIn, 'in', 'Outras entradas'), ...(left < 0 ? [{ label: 'Do que já tinhas', amount: -left, kind: 'stock' }] : [])];
+  const targets = [...top(outCats, maxOut, 'out', 'Outros gastos'),
+    ...(totals.invested > 0 ? [{ label: 'Investido', amount: totals.invested, kind: 'invested' }] : []),
+    ...(totals.amortized > 0 ? [{ label: 'Amortizado', amount: totals.amortized, kind: 'amortized' }] : []),
+    ...(left > 0 ? [{ label: 'Ficou nas contas', amount: left, kind: 'kept' }] : [])];
+  const total = round2(Math.max(totals.in, used));
+  return total > 0 ? { sources, targets, total } : null;
+}
 
 /**
  * Resumo de um ano, para a página "Resumo do ano" (que também se imprime), com o período de yearPeriod. Compara com o

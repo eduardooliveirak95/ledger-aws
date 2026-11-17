@@ -159,6 +159,27 @@ test('simulador do futuro: independência financeira (25 × os gastos de um ano)
   assert.equal(proj({ start: 100, years: 1 }).fireEta, null);
 });
 
+test('simulador do futuro: uma compra grande ou uma entrada pontual, num mês à escolha', () => {
+  const proj = p => run('futureProjection(p)', { p });
+  // sem rentabilidade: 100 €/mês e uma compra de 500 € daqui a 6 meses; conta também no que se juntou
+  const buy = proj({ monthly: 100, years: 1, oneOff: { month: 6, amount: -500 } });
+  assert.deepEqual(buy.rows.map(r => [r.value, r.contributed]), [[0, 0], [700, 700]]);
+  assert.equal(buy.short, 0);
+  // uma entrada pontual adianta o objetivo: 1000 € chegam ao 5.º mês em vez do 10.º
+  assert.deepEqual([proj({ monthly: 100, years: 1, target: 1000 }).eta, proj({ monthly: 100, years: 1, target: 1000, oneOff: { month: 5, amount: 500 } }).eta], [10, 5]);
+  // a compra perde também o que esse dinheiro ia render: 10 000 € a 12% com 2000 € tirados ao 6.º mês
+  const base = proj({ start: 10000, ret: 12, years: 1 }), car = proj({ start: 10000, ret: 12, years: 1, oneOff: { month: 6, amount: -2000 } });
+  assert.ok(Math.abs(car.end.value - (10000 * 1.12 - 2000 * Math.sqrt(1.12))) < 0.01, String(car.end.value));
+  assert.ok(base.end.value - car.end.value > 2000);
+  // sem dinheiro que chegue: diz quanto faltou e, abaixo de 0, não rende nem perde
+  const short = proj({ start: 1000, ret: 12, years: 1, oneOff: { month: 1, amount: -3000 } });
+  assert.ok(Math.abs(short.short - (3000 - 1000 * Math.pow(1.12, 1 / 12))) < 0.01, String(short.short));
+  assert.equal(proj({ start: 0, years: 1, ret: 12, oneOff: { month: 1, amount: -100 } }).end.value, -100);
+  // depois do prazo, não muda o fim do prazo, mas conta para o objetivo procurado depois dele
+  const late = proj({ monthly: 100, years: 1, target: 2000, oneOff: { month: 15, amount: 600 } });
+  assert.deepEqual([late.end.value, late.eta], [1200, 15]);
+});
+
 test('simular a venda: o custo é a parte do investido, o imposto só sobre o ganho', () => {
   const inv = value => ({
     investments: [{ id: INV, kind: 'investment', name: 'ETF', inv_type: 'ETF' }],

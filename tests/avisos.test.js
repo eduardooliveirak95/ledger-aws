@@ -132,6 +132,32 @@ test('avisos: os orçamentos por ano contam desde janeiro e dizem que o limite �
   assert.equal(N(list[0].text), 'Orçamentos de outubro 2026: Seguros 50,00 € acima do limite do ano, Férias a 85% do limite do ano.');
 });
 
+test('gastos fora do normal: categorias sem orçamento a 2× a média dos 6 meses antes e 50 € acima dela', () => {
+  // os dados começam em junho: a média é de junho a setembro (4 meses, os sem gastos contam a 0)
+  load({ transactions: [...DATA.transactions,
+    out('2026-06-20', 60, 'Saúde', 'Farmácia'), out('2026-08-20', 60, 'Saúde', 'Dentista'), out('2026-10-08', 180, 'Saúde', 'Óculos'),   // média 30: 6×
+    ...['06', '07', '08', '09'].map(m => out(`2026-${m}-03`, 70, 'Combustível', 'Gasolina')), out('2026-10-03', 120, 'Combustível', 'Gasolina'),   // 1,7×: não
+    out('2026-10-11', 300, 'Reparações', 'Canalizador'),   // nada nos meses antes
+    out('2026-10-12', 40, 'Café', 'Cafés'),                // nada antes, mas menos de 50 €
+    out('2026-10-13', 500, 'Investimentos', 'Compra ETF'), // não é um gasto
+  ] });
+  // a Restauração (90 €, nada antes) tem orçamento: já tem o aviso dele
+  assert.deepEqual(run('unusualSpending()'), [
+    { category: 'Reparações', spent: 300, avg: 0, months: 4 }, { category: 'Saúde', spent: 180, avg: 30, months: 4 }]);
+  const a = run('homeAlerts()').find(x => x.id.startsWith('unusual:'));
+  assert.deepEqual([a.id, a.level, a.action.type], ['unusual:2026-10:Reparações|Saúde', 'warn', 'mov']);
+  assert.equal(N(a.text), 'Gastos fora do normal em outubro 2026: Reparações 300,00 € (sem gastos nos 4 meses antes), Saúde 180,00 € (6× a média de 30,00 €/mês).');
+  // um reembolso abate ao gasto: com 150 € devolvidos dos óculos, a Saúde fica nos 30 € e sai do aviso
+  load({ transactions: [...DATA.transactions, out('2026-06-20', 60, 'Saúde', 'Farmácia'), out('2026-08-20', 60, 'Saúde', 'Dentista'),
+    { ...out('2026-10-08', 180, 'Saúde', 'Óculos'), id: 'TX_2026-10-08_' + 'a'.repeat(12), due: 150 },
+    { id: 'TX_2026-10-09_' + 'b'.repeat(12), kind: 'transaction', date: '2026-10-09', direction: 'in', amount: 150, category: 'Outros',
+      description: 'Seguro', account_id: ACC1, refund_of: 'TX_2026-10-08_' + 'a'.repeat(12) }] });
+  assert.deepEqual(run('unusualSpending()'), []);
+  // com menos de 3 meses de dados não se sabe o que é normal
+  run('D = { ...emptyData(), transactions: txs }', { txs: [out('2026-08-01', 10, 'Saúde', 'x'), out('2026-10-02', 500, 'Saúde', 'y')] });
+  assert.deepEqual(run('unusualSpending()'), []);
+});
+
 test('sem nada a apontar, não há avisos', () => {
   assert.deepEqual(run('D = emptyData(); homeAlerts()'), []);
 });

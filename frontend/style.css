@@ -418,6 +418,9 @@ table.data th.num { text-align: right; font-family: inherit; }   /* os títulos 
 table.data .actions { text-align: right; white-space: nowrap; width: 1%; }
 table.data .muted { color: var(--muted); }
 table.data .date { font-family: var(--font-num); font-size: 12px; color: var(--muted); white-space: nowrap; }
+/* painel "A receber" por pessoa: a linha com o nome e o total (não fica presa no topo, como os títulos das colunas) */
+table.data tr.due-person th { position: static; background: var(--surface2); color: var(--text); font-size: 13px; text-transform: none; letter-spacing: 0; }
+table.data tr.due-person th.num { font-family: var(--font-num); }
 .desc { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .chip { display: inline-block; padding: 2px 8px; background: var(--surface2); border: 1px solid var(--border2); border-radius: 4px; font-size: 11px; color: var(--muted); white-space: nowrap; }
@@ -561,6 +564,22 @@ table.budget-edit td.budget-cap { width: 240px; }
 .year-bar span.out { background: var(--series-2); }
 .year-bar-labels { display: grid; grid-template-columns: repeat(12, 1fr); gap: 6px; margin-top: 6px; font-size: 11px; color: var(--muted); text-align: center; }
 .year-bar-labels .later { opacity: .5; }   /* os meses que ainda não chegaram (no ano atual) */
+/* "Para onde foi o dinheiro" (flowDiagram): no telemóvel não encolhe abaixo de 560 px (os nomes ficavam ilegíveis) e
+   desliza para o lado dentro do painel */
+.flow-wrap { overflow-x: auto; }
+.flow { display: block; width: 100%; min-width: 560px; max-width: 820px; height: auto; margin: 0 auto; }
+.flow text { fill: var(--text); font-size: 12px; font-weight: 600; }
+.flow text.sub { fill: var(--muted); font-size: 11px; font-weight: 400; font-family: var(--font-num); }
+.flow text.mid-label { fill: var(--muted); font-weight: 600; }
+.flow-node.in, .flow-band.in { fill: var(--series-1); }
+.flow-node.stock, .flow-band.stock { fill: var(--muted); }
+.flow-node.out, .flow-band.out { fill: var(--series-2); }
+.flow-node.invested, .flow-band.invested { fill: var(--series-3); }
+.flow-node.amortized, .flow-band.amortized { fill: var(--series-4); }
+.flow-node.kept, .flow-band.kept { fill: var(--accent); }
+.flow-node.mid { fill: var(--text); }
+.flow-band { opacity: .3; }
+.flow-band:hover { opacity: .55; }
 .year-legend { display: flex; justify-content: flex-end; gap: 16px; margin-top: 8px; font-size: 11px; color: var(--muted); }
 .year-legend .key { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 2px; vertical-align: -1px; background: var(--series-1); }
 .year-legend .key.out { background: var(--series-2); }
@@ -595,6 +614,7 @@ table.data tr.year-total td { font-weight: 700; border-top: 1px solid var(--bord
 .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent); }
 .field textarea { resize: vertical; min-height: 60px; }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.field-row.three { grid-template-columns: 1fr 1fr 1fr; }   /* o "E se…" do simulador do futuro */
 .check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
 .check.with-hint { flex-wrap: wrap; }                  /* só as caixas com explicação: as outras quebram o texto ao lado */
 .check .hint { flex-basis: 100%; margin-top: -4px; }   /* a explicação de uma caixa, na linha de baixo */
@@ -687,7 +707,8 @@ table.grid-edit .num { font-family: var(--font-num); text-align: right; color: v
   .home-card-admin, .home-card-wide { grid-column: auto; }
   .home-total-value { font-size: 34px; }
   .stat-value { font-size: 18px; }
-  .field-row, .map-grid { grid-template-columns: 1fr; }
+  .field-row, .field-row.three, .map-grid { grid-template-columns: 1fr; }
+  .flow text { font-size: 14px; } .flow text.sub { font-size: 12px; }   /* o diagrama encolhe: letras maiores */
   .alert { flex-wrap: wrap; row-gap: 6px; }   /* avisos: os botões passam para baixo do texto */
   .alert-actions { width: 100%; padding-left: 20px; }
   .alloc-row { grid-template-columns: 1fr auto auto; row-gap: 4px; }   /* alocação: a barra passa para baixo do nome */
@@ -731,7 +752,8 @@ table.grid-edit .num { font-family: var(--font-num); text-align: right; color: v
   .table-wrap { max-height: none; overflow: visible; }
   table.data th { position: static; }
   table.data tr:hover td { background: none; }
-  table.data tr, .stat, .year-head, .year-bars, .year-highlights li { break-inside: avoid; }
+  table.data tr, .stat, .year-head, .year-bars, .year-highlights li, .flow { break-inside: avoid; }
+  .flow-wrap { overflow: visible; }
   .panel-header { break-after: avoid; }
   .year-report { display: block; margin-top: 0; }
   .year-report > * + * { margin-top: 12px; }

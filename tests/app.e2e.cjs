@@ -73,6 +73,10 @@ function makeData() {
     data.loan_balances.push({ id: `LBAL_${hex(1)}_${monthsAgo(k)}`, kind: 'loan_balance', loan_id: CASA, month: monthsAgo(k),
       balance: 98000 - (5 - k) * 250, payment: 520, extra: 0 });
   }
+  // um jantar com 60 € a receber da Rita (e dois MB WAY, um com o nome dela) e um gasto fora do normal este mês
+  data.transactions.push(tx(day(1, 15), 'out', 80, 'Restauração', 'Jantar de grupo', { due: 60, due_from: 'Rita' }),
+    tx(day(1, 16), 'in', 30, 'Transferências in', 'MB WAY Joana'), tx(day(1, 17), 'in', 20, 'Transferências in', 'MB WAY de RITA S.'),
+    tx(day(0, 2), 'out', 250, 'Reparações', 'Canalizador'));
   return data;
 }
 const ADMIN_USERS = { users: [{ email: 'chefe@example.com', status: 'CONFIRMED', enabled: true, created: '2026-01-01T09:00:00+00:00',
@@ -236,7 +240,7 @@ async function runForms(browser, SITE) {
   // categoria sugerida pela descrição; a escolhida à mão não muda
   await page.click('#tab-mov [data-action="tx-new"]');
   await pause(page);
-  const desc = page.locator('#modal input[list]');
+  const desc = page.locator('#modal input[id$="-description"]');
   await desc.fill('mercearia');
   await pause(page, 150);
   check('formulários: a descrição sugere a categoria que se costuma usar', await catText() === 'Supermercado', await catText());
@@ -248,13 +252,13 @@ async function runForms(browser, SITE) {
   // um erro num campo do "Mais opções" abre-o (aqui, o "A receber" maior do que o valor, que só se vê ao gravar)
   await page.locator('#modal input[inputmode=decimal]').first().fill('10');
   await page.click('#modal details.more-fields > summary');
-  await page.locator('#modal details.more-fields input[inputmode=decimal]').fill('50');
+  await page.locator('#modal input[id$="-due"]').fill('50');
   await page.click('#modal details.more-fields > summary');
   await page.click('#modal-footer button[type=submit]');
   await pause(page, 300);
   check('formulários: o erro do "A receber" abre o "Mais opções"', await page.locator('#modal details.more-fields').evaluate(e => e.open) &&
     /A receber/.test(await page.textContent('#modal .form-error')));
-  await page.locator('#modal details.more-fields input[inputmode=decimal]').fill('');
+  await page.locator('#modal input[id$="-due"]').fill('');
   await page.click('#modal-footer button[type=submit]');
   await pause(page, 500);
   const sent = posts.at(-1)?.items[0] || {};
@@ -319,6 +323,74 @@ async function runForms(browser, SITE) {
   await page.close();
 }
 
+// ── o "A receber" por pessoa, o "Dividir por", o "E se…" do simulador, os gastos fora do normal e o Resumo do ano (no PC) ──
+async function runMoney(browser, SITE) {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
+  const { posts } = await setup(page, true, 'dinheiro');
+  await page.goto(SITE + '/#inicio');
+  await login(page);
+  check('avisos: um gasto fora do normal aparece no "A ver"', /Gastos fora do normal em .*Reparações 250,00/.test(
+    (await page.textContent('#alerts-panel')).replace(/\s+/g, ' ')));
+
+  // simular o futuro com uma compra grande: compara com a simulação sem ela e desenha as duas
+  await page.click('[data-action="future"]');
+  await pause(page, 400);
+  await page.fill('#fut-one', '15000');
+  await pause(page, 300);
+  const fut = (await page.textContent('#fut-result')).replace(/\s+/g, ' ');
+  check('simular o futuro: a compra grande compara com a simulação sem ela', /Com a compra de 15 000,00 € em .* do que sem ela/.test(fut) &&
+    await page.evaluate(() => charts['chart-future'].data.datasets.length) === 4, fut.slice(0, 200));
+  await shot(page, 'dinheiro-simular-compra');
+  await page.keyboard.press('Escape');
+  await pause(page);
+
+  // "A receber" por pessoa e, no "Recebido", o MB WAY com o nome dela primeiro
+  await page.evaluate(() => { location.hash = '#mov'; });
+  await pause(page, 500);
+  check('a receber: o painel junta por pessoa', /Rita · 1 gasto\s*60,00/.test((await page.textContent('#due-table tr.due-person')).replace(/\s+/g, ' ').trim()),
+    await page.textContent('#due-table'));
+  await page.click('#due-table [data-due-paid]');
+  await pause(page, 300);
+  check('a receber: no "Recebido", primeiro o MB WAY com o nome da pessoa', /RITA S\./.test(await page.textContent('#modal tbody tr:first-child')) &&
+    await page.locator('#modal tbody tr:first-child .badge.due').count() === 1);
+  await shot(page, 'dinheiro-recebido');
+  await page.keyboard.press('Escape');
+  await pause(page);
+
+  // "Dividir por" preenche o "A receber" (e não se grava); o "De quem" grava-se
+  await page.click('#tab-mov [data-action="tx-new"]');
+  await pause(page);
+  await page.locator('#modal input[id$="-amount"]').fill('90');
+  await page.locator('#modal input[id$="-description"]').fill('Jantar');
+  await page.click('#modal details.more-fields > summary');
+  await page.locator('#modal input[id$="-split"]').fill('3');
+  await pause(page, 150);
+  check('a receber: "Dividir por 3" põe 60 € no "A receber"', await page.inputValue('#modal input[id$="-due"]') === '60');
+  await page.locator('#modal input[id$="-due_from"]').fill('Rui');
+  await shot(page, 'dinheiro-dividir');
+  await page.click('#modal-footer button[type=submit]');
+  await pause(page, 500);
+  const sent = posts.at(-1)?.items[0] || {};
+  check('a receber: grava o "A receber" e o "De quem", sem o "Dividir por"', sent.due === 60 && sent.due_from === 'Rui' && !('split' in sent),
+    JSON.stringify(sent));
+
+  // o Resumo do ano com o diagrama "Para onde foi o dinheiro"
+  await page.evaluate(() => { location.hash = '#year'; });
+  await pause(page, 600);
+  const flow = await page.evaluate(() => ({ bands: document.querySelectorAll('#year-report svg.flow path.flow-band').length,
+    text: document.querySelector('#year-report svg.flow')?.textContent || '' }));
+  check('resumo do ano: o diagrama "Para onde foi o dinheiro"', flow.bands >= 4 && /Salário/.test(flow.text) && /Ficou nas contas/.test(flow.text),
+    `${flow.bands} faixas`);
+  await page.locator('#year-report svg.flow').screenshot({ path: path.join(OUT, 'dinheiro-fluxo.png') });
+  await sideClick(page, false, '#theme-btn');   // automático → claro → escuro
+  await sideClick(page, false, '#theme-btn');
+  await sideClick(page, false, '#private-btn');
+  await pause(page, 400);
+  check('resumo do ano: no modo privado, o diagrama sem valores', !/\d,\d\d/.test(await page.textContent('#year-report svg.flow')));
+  await page.locator('#year-report svg.flow').screenshot({ path: path.join(OUT, 'dinheiro-fluxo-escuro-privado.png') });
+  await page.close();
+}
+
 async function runNonAdmin(browser, SITE) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
   await setup(page, false, 'sem-admin');
@@ -354,6 +426,7 @@ async function waitFor(url, ms = 10000) {
     await runViewport(browser, 'pc', { width: 1280, height: 860 }, SITE);
     await runViewport(browser, 'telemóvel', { width: 390, height: 844 }, SITE);
     await runForms(browser, SITE);
+    await runMoney(browser, SITE);
     await runNonAdmin(browser, SITE);
   } catch (e) {
     check('o teste chegou ao fim', false, e.message.split('\n')[0]);

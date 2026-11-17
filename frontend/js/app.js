@@ -418,6 +418,13 @@ function futureModal() {
     ${field('fut-spend', 'Gastos por mês (€, opcional)', def.spend || null, `${def.months ? `A tua média dos últimos ${def.months} ${
       def.months === 1 ? 'mês' : 'meses'}. ` : ''}Para a independência financeira: quando tiveres 25 vezes os gastos de um ano, tirar
       4% por ano chega para os pagar (a regra dos 4%).`)}
+    <div class="field-row three">
+      <div class="field"><label for="fut-one-kind">E se… (opcional)</label>
+        <select id="fut-one-kind"><option value="-1">Compra grande (sai)</option><option value="1">Entrada pontual (entra)</option></select></div>
+      ${field('fut-one', 'Valor (€)', null, 'ex.: um carro, a entrada de uma casa, uma herança.')}
+      <div class="field"><label for="fut-one-when">Quando</label>
+        <input id="fut-one-when" type="month" min="${addMonths(thisMonth(), 1)}" value="${addMonths(thisMonth(), 12)}"></div>
+    </div>
     <div id="fut-result"></div>
     <div class="chart-box"><canvas id="chart-future"></canvas></div>`;
   const val = id => $('#' + id, body).value.trim();
@@ -425,18 +432,36 @@ function futureModal() {
     const n = id => (val(id) ? parseMoney(val(id)) : NaN);
     const p = { start: n('fut-start'), monthly: n('fut-monthly'), ret: n('fut-ret'), inflation: n('fut-inf'), years: n('fut-years'),
       target: val('fut-target') ? n('fut-target') : null, spend: val('fut-spend') ? n('fut-spend') : null };
+    // "E se…": uma compra grande ou uma entrada pontual num mês (daqui a quantos meses: oneOff.month no futureProjection)
+    const one = val('fut-one') ? n('fut-one') : null, oneWhen = val('fut-one-when'), oneSign = Number(val('fut-one-kind'));
+    const oneMonths = /^\d{4}-\d{2}$/.test(oneWhen) ? monthsDiff(thisMonth(), oneWhen) : NaN;
     const out = $('#fut-result', body);
     const bad = [!(p.start >= 0) && 'ponto de partida', !(p.monthly >= 0) && 'poupança por mês', !(p.ret > -100 && p.ret <= 100) && 'rentabilidade',
       !(p.inflation > -100 && p.inflation <= 100) && 'inflação', !(Number.isInteger(p.years) && p.years >= 1 && p.years <= 60) && 'prazo (1 a 60 anos)',
-      p.target !== null && !(p.target > 0) && 'objetivo', p.spend !== null && !(p.spend >= 0) && 'gastos por mês'].filter(Boolean);
+      p.target !== null && !(p.target > 0) && 'objetivo', p.spend !== null && !(p.spend >= 0) && 'gastos por mês',
+      one !== null && !(one > 0) && 'valor da compra ou entrada',
+      one !== null && !(oneMonths >= 1 && oneMonths <= 1200) && 'quando (a partir do próximo mês)'].filter(Boolean);
     if (bad.length) {
       drawChart('chart-future', { type: 'line', data: { labels: [], datasets: [] } }, 'Corrige os valores acima');
       return (out.innerHTML = `<div class="form-error">Valor inválido em: ${bad.join(', ')}</div>`);
     }
     const fire = p.spend > 0 ? round2(p.spend * 12 * 25) : null;   // a regra dos 4%: 25 × os gastos de um ano
-    const r = futureProjection({ ...p, fire });
-    const when = m => `${monthLabel(addMonths(thisMonth(), m))} (daqui a ${m >= 12 ? `${Math.floor(m / 12)} ${m >= 24 ? 'anos' : 'ano'}` : ''}${
-      m >= 12 && m % 12 ? ' e ' : ''}${m % 12 ? `${m % 12} ${m % 12 === 1 ? 'mês' : 'meses'}` : ''})`;
+    const oneOff = one !== null ? { month: oneMonths, amount: round2(oneSign * one) } : null;
+    // com o "E se…", r é a simulação com a compra ou a entrada e base a mesma sem ela (para comparar)
+    const r = futureProjection({ ...p, fire, oneOff }), base = oneOff && futureProjection({ ...p, fire });
+    const span = m => `${m >= 12 ? `${Math.floor(m / 12)} ${m >= 24 ? 'anos' : 'ano'}` : ''}${
+      m >= 12 && m % 12 ? ' e ' : ''}${m % 12 ? `${m % 12} ${m % 12 === 1 ? 'mês' : 'meses'}` : ''}`;
+    const when = m => `${monthLabel(addMonths(thisMonth(), m))} (daqui a ${span(m)})`;
+    // quanto a compra (ou a entrada) atrasa ou adianta o objetivo e a independência financeira
+    const moved = (a, b, what) => (a === b || a === null && b === null ? '' : b === null ? ` Sem ela, não chegavas ${what}.`
+      : a === null ? ` Com ela, deixas de chegar ${what}.` : ` Chegas ${what} ${span(Math.abs(a - b))} ${a > b ? 'mais tarde' : 'mais cedo'}.`);
+    const oneText = !oneOff ? '' : `<br>${oneSign < 0 ? 'Com a compra' : 'Com a entrada'} de ${eur(one)} em ${monthLabel(oneWhen)}${
+      oneMonths > p.years * 12 ? ' (depois do prazo, por isso só conta para o objetivo e a independência financeira)'
+        : `, daqui a ${p.years} ${p.years === 1 ? 'ano' : 'anos'} tens <b class="${signClass(r.end.value - base.end.value)}">${
+          r.end.value < base.end.value ? 'menos' : 'mais'} ${eur(Math.abs(round2(r.end.value - base.end.value)))}</b>`
+        + ` do que sem ela (${oneSign < 0 ? 'o que gastas e o que esse dinheiro ia render' : 'o que entra e o que rende'})`}.${
+      r.short ? ` Nesse mês <b class="neg">faltam ${eur(r.short)}</b>: não tens que chegue.` : ''}${
+      p.target === null ? '' : moved(r.eta, base.eta, `aos ${eur(p.target)}`)}${fire === null ? '' : moved(r.fireEta, base.fireEta, 'à independência financeira')}`;
     out.innerHTML = `<div class="preview-box">Daqui a ${p.years} ${p.years === 1 ? 'ano' : 'anos'}: <b>${eur(r.end.value)}</b>
       (em euros de hoje, ${eur(r.end.real)}): ${eur(r.end.contributed)} do que juntaste ${r.end.gain >= 0
         ? `e <b class="pos">${eur(r.end.gain)}</b> do que rendeu` : `menos <b class="neg">${eur(-r.end.gain)}</b> que se perderam`}.
@@ -444,13 +469,14 @@ function futureModal() {
         : r.eta === null ? `<br>Com estes valores não chegas aos ${eur(p.target)}.`
         : `<br>Chegas aos ${eur(p.target)} em <b>${when(r.eta)}</b>.`}
       ${fire === null ? '' : `<br>Independência financeira (25 × os gastos de um ano, em euros de hoje: ${eur(fire)}): ${
-        r.fireEta === 0 ? '<b>já lá estás</b>.' : r.fireEta === null ? 'com estes valores não chegas lá.' : `chegas lá em <b>${when(r.fireEta)}</b>.`}`}</div>`;
+        r.fireEta === 0 ? '<b>já lá estás</b>.' : r.fireEta === null ? 'com estes valores não chegas lá.' : `chegas lá em <b>${when(r.fireEta)}</b>.`}`}${oneText}</div>`;
     drawChart('chart-future', {
       type: 'line',
       data: { labels: r.rows.map(x => (x.year ? `${x.year} ${x.year === 1 ? 'ano' : 'anos'}` : 'Hoje')), datasets: [
         lineDataset('Valor', r.rows.map(x => x.value), SERIES[0]),
         lineDataset('Em euros de hoje', r.rows.map(x => x.real), SERIES[2], { borderDash: [5, 4] }),
         lineDataset('Dinheiro que juntaste', r.rows.map(x => x.contributed), SERIES[1]),
+        ...(oneOff ? [lineDataset(oneSign < 0 ? 'Sem a compra' : 'Sem a entrada', base.rows.map(x => x.value), SERIES[3], { borderDash: [2, 3] })] : []),
       ] },
       options: { interaction: INDEX_HOVER, scales: { x: catAxis(), y: moneyAxis() },
         plugins: { tooltip: { callbacks: { label: tooltipMoney } } } },
@@ -500,18 +526,23 @@ const shortText = (s, n) => (String(s).length > n ? String(s).slice(0, n - 1).tr
 
 // ── dinheiro a receber (painel dos Movimentos; receivables no calc.js) ──
 // Os gastos com uma parte a devolver ainda por receber, de todas as contas e meses. "Recebido" (markReceived) associa as
-// entradas com esse dinheiro (refund_of) ou só o marca como recebido (due_paid).
+// entradas com esse dinheiro (refund_of) ou só o marca como recebido (due_paid). Com algum "De quem", junta por pessoa
+// (receivablesByPerson): uma linha com o nome e o total e, por baixo, os gastos dela.
 function renderReceivables() {
   const r = receivables();
   $('#due-panel').classList.toggle('hidden', !r.list.length);
   if (!r.list.length) return;
   $('#due-total').textContent = eur(r.total);
-  $('#due-table').innerHTML = `<table class="data"><tbody>${r.list.map(({ t, received, left }) => `<tr>
+  const groups = receivablesByPerson(r), named = groups.some(g => g.person);
+  const rows = list => list.map(({ t, received, left }) => `<tr>
     <td class="date">${dateLabel(t.date)}</td>
     <td>${esc(t.description) || esc(t.category)}<div class="li-sub">pagaste ${eur(t.amount)}${received ? ` · já recebeste ${eur(received)}` : ''}</div></td>
     <td class="num">${eur(left)}</td>
     <td class="actions"><button class="btn" data-due-paid="${esc(t.id)}">Recebido</button></td>
-  </tr>`).join('')}</tbody></table>`;
+  </tr>`).join('');
+  $('#due-table').innerHTML = `<table class="data"><tbody>${named ? groups.map(g => `<tr class="due-person">
+    <th colspan="2" scope="rowgroup">${g.person ? esc(g.person) : 'Sem nome'}<span class="li-sub"> · ${g.list.length} ${g.list.length === 1 ? 'gasto' : 'gastos'}</span></th>
+    <th class="num">${eur(g.total)}</th><th></th></tr>${rows(g.list)}`).join('') : rows(r.list)}</tbody></table>`;
 }
 // "Recebido": escolher a(s) entrada(s) que são esse dinheiro (refundCandidates), que deixam de contar como entradas e abatem
 // ao gasto; ou "Recebi sem movimento" (em mão), que só o marca como recebido.
@@ -521,12 +552,14 @@ function markReceived(id) {
   const left = round2(o.due - (refundsReceived().get(o.id) || 0)), cands = refundCandidates(id).slice(0, 30);
   const body = document.createElement('div');
   body.style.cssText = 'display:flex;flex-direction:column;gap:12px';
-  body.innerHTML = `<div class="modal-hint">Falta receber <b>${eur(left)}</b> de "${esc(o.description || o.category)}" (${dateLabel(o.date)}).
+  // com o "De quem", as entradas que falam dessa pessoa vêm primeiro (refundCandidates) e levam um selo
+  const person = o.due_from || '', mention = t => person && mentionsPerson(t, person);
+  body.innerHTML = `<div class="modal-hint">Falta receber <b>${eur(left)}</b>${person ? ` de ${esc(person)}` : ''}, de "${esc(o.description || o.category)}" (${dateLabel(o.date)}).
       Escolhe a entrada (ou as entradas, se cada pessoa mandou a sua parte) com esse dinheiro: deixa de contar como entrada e abate
       ao gasto. O saldo da conta não muda.</div>
     ${cands.length ? `<div class="table-wrap"><table class="data"><tbody>${cands.map(t => `<tr>
       <td class="sel"><input type="checkbox" data-refund="${esc(t.id)}" aria-label="Associar a entrada de ${eur(t.amount)} de ${dateLabel(t.date)}"></td>
-      <td class="date">${dateLabel(t.date)}</td><td>${esc(t.description) || esc(t.category)}<div class="li-sub">${esc(accountName(t.account_id))}</div></td>
+      <td class="date">${dateLabel(t.date)}</td><td>${esc(t.description) || esc(t.category)}${mention(t) ? ` <span class="badge due">${esc(shortText(person, 20))}</span>` : ''}<div class="li-sub">${esc(accountName(t.account_id))}</div></td>
       <td class="num pos">${eur(t.amount)}</td></tr>`).join('')}</tbody></table></div>`
       : '<div class="empty">Não há entradas por associar entre 3 dias antes e 90 dias depois do gasto.</div>'}`;
   const chosen = () => $$('[data-refund]:checked', body).map(x => findById('transactions', x.dataset.refund)).filter(Boolean);
@@ -1238,6 +1271,14 @@ function txForm(tx = null, preset = {}) {
     f.setValue('category', cat);
     f.setHint('category', cat ? 'Sugerida pela descrição (é a que costumas usar). Podes escolher outra.' : '');
   };
+  // "Dividir por" N pessoas: o "A receber" fica com a parte dos outros (splitDue no calc.js) e acompanha o valor, se mudar
+  const split = (st, f) => {
+    const n = parseNum(st.split), amount = parseMoney(st.amount);
+    if (!(Number.isInteger(n) && n >= 2 && n <= 100 && amount > 0)) return;
+    const due = splitDue(amount, n);
+    f.setValue('due', numInput(due));
+    f.setHint('split', `Cada um paga ${eur(round2(amount / n))}: ficam ${eur(due)} a receber.`);
+  };
   formModal({
     title: tx ? 'Editar movimento' : 'Novo movimento',
     values: tx ? { ...tx, tags: (tx.tags || []).join(', '), keep_refund: !!refundFrom } : { tags: '', ...defaults },
@@ -1250,7 +1291,8 @@ function txForm(tx = null, preset = {}) {
           if (!st.category) { autoCat = null; f.setHint('category', ''); }   // a categoria não existe no tipo novo: foi limpa
           suggest(st, f);
         } },
-      { name: 'amount', label: 'Valor (€)', type: 'money', required: true, positive: true, half: true, placeholder: '0,00' },
+      { name: 'amount', label: 'Valor (€)', type: 'money', required: true, positive: true, half: true, placeholder: '0,00',
+        onChange: (v, st, f) => split(st, f) },   // com o "Dividir por" preenchido, o "A receber" acompanha o valor
       { name: 'date', label: 'Data', type: 'date', required: true, half: true },
       { name: 'account_id', label: 'Conta', type: 'select', options: accOpts, required: true, half: true },
       { name: 'to_account_id', label: 'Para a conta', type: 'select', options: accOpts, required: true, half: true, showIf: v => v.direction === 'transfer' },
@@ -1266,8 +1308,15 @@ function txForm(tx = null, preset = {}) {
       // os campos menos usados ficam em "Mais opções" (abre sozinho se o movimento já tiver algum preenchido)
       { name: 'tags', label: 'Etiquetas', type: 'text', placeholder: 'ex.: férias 2026, casa', more: 'etiquetas',
         hint: 'Separadas por vírgulas (até 5). Pesquisa "#etiqueta" para ver os movimentos dela, de qualquer categoria.' },
-      { name: 'due', label: 'A receber (€)', type: 'money', positive: true, showIf: v => v.direction === 'out', more: 'a receber',
+      { name: 'due', label: 'A receber (€)', type: 'money', positive: true, showIf: v => v.direction === 'out', more: 'a receber', half: true,
         hint: 'A parte que te vão devolver (ex.: pagaste a conta toda e mandam-te a parte deles).' },
+      // só ajuda a preencher o "A receber" (não se grava): com 4 pessoas num jantar de 80 €, ficam 60 € a receber
+      { name: 'split', label: 'Dividir por', type: 'number', placeholder: 'ex.: 4', showIf: v => v.direction === 'out', more: true, half: true,
+        hint: 'Quantas pessoas, contigo. O "A receber" fica com a parte dos outros.', onChange: (v, st, f) => split(st, f) },
+      { name: 'due_from', label: 'De quem', type: 'suggest', placeholder: 'ex.: João, amigos do jantar', more: true,
+        showIf: v => v.direction === 'out' && String(v.due ?? '').trim() !== '',
+        init: (st, f) => f.setSuggestions('due_from', knownPeople()),
+        hint: 'Junta no painel "A receber" o que cada pessoa te deve. No "Recebido", as entradas com este nome (ex.: um MB WAY) vêm primeiro.' },
       { name: 'due_paid', label: 'Já recebi', type: 'check', showIf: v => v.direction === 'out' && String(v.due ?? '').trim() !== '', more: true,
         hint: 'Só se te pagaram em mão. Se te mandaram por MB WAY ou transferência, deixa por marcar e usa o "Recebido" no painel "A receber" dos Movimentos, para associar essa entrada.' },
       { name: 'approx', label: 'Valor aproximado (ex.: reconstituído de papel)', type: 'check', more: 'valor aproximado' },
@@ -1276,7 +1325,7 @@ function txForm(tx = null, preset = {}) {
       if (v.direction === 'transfer' && v.to_account_id === v.account_id) throw new Error('Escolhe duas contas diferentes');
       if (v.due > v.amount) throw new Error('"A receber" não pode ser maior do que o valor');
       const tags = String(v.tags || '').split(',').map(s => s.trim()).filter(Boolean);
-      const { keep_refund, ...rest } = v;
+      const { keep_refund, split: _split, ...rest } = v;
       const res = await saveItems([{ kind: 'transaction', id: tx?.id, ...rest, tags, due_paid: !!(v.due && v.due_paid),
         refund_of: v.direction === 'in' && keep_refund && tx?.refund_of ? tx.refund_of : undefined,
         category: v.direction === 'transfer' ? 'Transferência' : v.category }]);
@@ -2274,6 +2323,55 @@ $$('#year-nav .nav-btn').forEach(b => b.addEventListener('click', () => {
 const YEAR_RETURN_TITLE = 'o ganho a dividir pelo valor no início mais os aportes líquidos, cada um a contar só pela parte do período '
   + 'em que esteve investido. Não é ao ano.';
 
+// "Para onde foi o dinheiro": o diagrama de fluxo do Resumo do ano, em SVG (moneyFlow no calc.js dá os números). À
+// esquerda, de onde veio; ao meio, o total; à direita, para onde foi. A grossura de cada faixa é proporcional ao valor.
+// As cores vêm das variáveis do tema (classes .flow-* no style.css) e os valores das funções eur* (respeitam o modo privado).
+function flowDiagram(f) {
+  const W = 720, NW = 10, SLOT = 34, GAP = 8, TOP = 34, BAR = 260;   // largura, nós, lugar de cada nome, intervalo, topo, altura do total
+  const X = { left: 170, mid: 355, right: 540 }, k = BAR / f.total;
+  // cada nó ocupa pelo menos SLOT (para o nome e o valor caberem), com o retângulo ao meio do seu lugar
+  const column = list => {
+    const slots = list.map(x => Math.max(SLOT, x.amount * k));
+    return { list, slots, height: slots.reduce((s, h) => s + h, 0) + GAP * Math.max(0, list.length - 1) };
+  };
+  const L = column(f.sources), R = column(f.targets), inner = Math.max(L.height, R.height, BAR), H = TOP + inner + 8;
+  const place = c => {
+    let y = TOP + (inner - c.height) / 2;
+    return c.list.map((x, i) => { const h = Math.max(2, x.amount * k), top = y + (c.slots[i] - h) / 2; y += c.slots[i] + GAP; return { ...x, y: top, h }; });
+  };
+  const band = (x0, a0, a1, x1, b0, b1) => {
+    const xm = (x0 + x1) / 2, n = v => v.toFixed(1);
+    return `M${n(x0)} ${n(a0)} C${n(xm)} ${n(a0)} ${n(xm)} ${n(b0)} ${n(x1)} ${n(b0)} L${n(x1)} ${n(b1)} C${n(xm)} ${n(b1)} ${n(xm)} ${n(a1)} ${n(x0)} ${n(a1)} Z`;
+  };
+  const midTop = TOP + (inner - BAR) / 2, label = x => esc(shortText(x.label, 20));
+  const svg = [];
+  let cum = midTop;
+  for (const x of place(L)) {   // de onde veio: faixa até ao total, nó e nome à esquerda
+    const h = x.amount * k;
+    svg.push(`<path class="flow-band ${x.kind}" d="${band(X.left + NW, x.y, x.y + x.h, X.mid, cum, cum + h)}"><title>${esc(x.label)}: ${eur(x.amount)}</title></path>`,
+      `<rect class="flow-node ${x.kind}" x="${X.left}" y="${x.y.toFixed(1)}" width="${NW}" height="${x.h.toFixed(1)}"/>`,
+      `<text x="${X.left - 8}" y="${(x.y + x.h / 2 - 2).toFixed(1)}" text-anchor="end">${label(x)}</text>`,
+      `<text class="sub" x="${X.left - 8}" y="${(x.y + x.h / 2 + 12).toFixed(1)}" text-anchor="end">${eurShort(x.amount)}</text>`);
+    cum += h;
+  }
+  cum = midTop;
+  for (const x of place(R)) {   // para onde foi: do total até ao nó, com o nome à direita
+    const h = x.amount * k;
+    svg.push(`<path class="flow-band ${x.kind}" d="${band(X.mid + NW, cum, cum + h, X.right, x.y, x.y + x.h)}"><title>${esc(x.label)}: ${eur(x.amount)}</title></path>`,
+      `<rect class="flow-node ${x.kind}" x="${X.right}" y="${x.y.toFixed(1)}" width="${NW}" height="${x.h.toFixed(1)}"/>`,
+      `<text x="${X.right + NW + 8}" y="${(x.y + x.h / 2 - 2).toFixed(1)}">${label(x)}</text>`,
+      `<text class="sub" x="${X.right + NW + 8}" y="${(x.y + x.h / 2 + 12).toFixed(1)}">${eurShort(x.amount)}</text>`);
+    cum += h;
+  }
+  const stock = f.sources.some(x => x.kind === 'stock');
+  svg.push(`<rect class="flow-node mid" x="${X.mid}" y="${midTop.toFixed(1)}" width="${NW}" height="${BAR}"/>`,
+    `<text class="mid-label" x="${X.mid + NW / 2}" y="${(midTop - 12).toFixed(1)}" text-anchor="middle">${stock ? 'Entradas e o que já tinhas' : 'Entradas'}: ${eurShort(f.total)}</text>`);
+  // para os leitores de ecrã, o mesmo em texto
+  const said = list => list.map(x => `${x.label} ${eurShort(x.amount)}`).join(', ');
+  return `<div class="flow-wrap"><svg class="flow" viewBox="0 0 ${W} ${Math.ceil(H)}" role="img"
+    aria-label="${esc(`De onde veio: ${said(f.sources)}. Para onde foi: ${said(f.targets)}.`)}">${svg.join('')}</svg></div>`;
+}
+
 function renderYear() {
   const years = summaryYears();
   if (!years.includes(S.year)) S.year = years[years.length - 1];
@@ -2461,7 +2559,12 @@ function renderYear() {
         ${loans.rows.some(x => x.start === null) ? ` "—" no ${esc(startHead.toLowerCase())}: não há nenhum saldo registado até lá.` : ''}</div></div>`;
   }
 
-  $('#year-report').innerHTML = head + stats + highlights + networth + monthly + catTable('Gastos por categoria', r.outCats, true)
+  // ── para onde foi o dinheiro (moneyFlow e flowDiagram) ──
+  const mf = moneyFlow(t, r.inCats, r.outCats);
+  const flow = mf ? `<div class="panel year-section"><div class="panel-header"><div><div class="panel-title">Para onde foi o dinheiro</div>
+      <div class="li-sub">o que entrou e onde acabou: gastos (já sem o que te devolveram), investido, amortizado e o que ficou nas contas</div></div></div>
+    ${flowDiagram(mf)}</div>` : '';
+  $('#year-report').innerHTML = head + stats + highlights + flow + networth + monthly + catTable('Gastos por categoria', r.outCats, true)
     + catTable('Entradas por categoria', r.inCats, false) + investments + loanSection;
 }
 

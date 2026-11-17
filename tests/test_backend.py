@@ -335,16 +335,22 @@ def test_backup_day_is_the_day_that_just_ended():
 
 
 def test_transaction_tags_and_due(table):
-    """Etiquetas (limpas, sem repetidas) e dinheiro a receber (só nos gastos, até ao valor)."""
+    """Etiquetas (limpas, sem repetidas) e dinheiro a receber (só nos gastos, até ao valor, com o "de quem")."""
     acc = save([{"kind": "account", "name": "Ordem", "opening_balance": 0, "opening_date": "2026-01-01"}])["saved"][0]["id"]
     save([{"kind": "transaction", "date": "2026-09-02", "account_id": acc, "direction": "out", "category": "Restauração",
-           "amount": 80, "tags": [" Férias 2026 ", "casa", "férias 2026", ""], "due": 60, "due_paid": True},
+           "amount": 80, "tags": [" Férias 2026 ", "casa", "férias 2026", ""], "due": 60, "due_paid": True, "due_from": " João Silva "},
           {"kind": "transaction", "date": "2026-09-03", "account_id": acc, "direction": "in", "category": "Outros",
-           "amount": 60, "tags": "", "due": 10}])
+           "amount": 60, "tags": "", "due": 10, "due_from": "Ana"}])
     _, d = call("GET /data")
     out, inn = sorted(d["transactions"], key=lambda t: t["date"])
-    assert (out["tags"], out["due"], out["due_paid"]) == (["Férias 2026", "casa"], 60, True)
-    assert "tags" not in inn and "due" not in inn   # numa entrada não há "a receber"
+    assert (out["tags"], out["due"], out["due_paid"], out["due_from"]) == (["Férias 2026", "casa"], 60, True, "João Silva")
+    assert "tags" not in inn and "due" not in inn and "due_from" not in inn   # numa entrada não há "a receber"
+    # o "de quem" só fica com um "a receber" e é cortado aos 60 caracteres
+    save([{"kind": "transaction", "date": "2026-09-07", "account_id": acc, "direction": "out", "amount": 10, "due_from": "Ana"},
+          {"kind": "transaction", "date": "2026-09-08", "account_id": acc, "direction": "out", "amount": 10, "due": 5, "due_from": "A" * 80}])
+    _, d = call("GET /data")
+    by_date = {t["date"]: t for t in d["transactions"]}
+    assert "due_from" not in by_date["2026-09-07"] and by_date["2026-09-08"]["due_from"] == "A" * 60
     # o reembolso: só numa entrada, com um id de movimento válido
     save([{"kind": "transaction", "date": "2026-09-04", "account_id": acc, "direction": "in", "amount": 60, "refund_of": out["id"]},
           {"kind": "transaction", "date": "2026-09-05", "account_id": acc, "direction": "out", "amount": 5, "refund_of": out["id"]}])
@@ -370,7 +376,7 @@ def test_backup_csv_content(table):
                "rate": "3.125", "payment": 50, "lender": "Banco"}])["saved"]
     acc, sav, etf, isin, loan = s[0]["id"], s[1]["id"], s[2]["id"], s[3]["id"], s[5]["id"]
     save([{"kind": "transaction", "date": "2026-09-02", "account_id": acc, "direction": "out", "category": "Casa",
-           "description": 'Renda; "set"', "amount": 1234.5, "tags": ["casa", "2026"], "due": 600},
+           "description": 'Renda; "set"', "amount": 1234.5, "tags": ["casa", "2026"], "due": 600, "due_from": "Ana"},
           {"kind": "transaction", "date": "2026-09-01", "account_id": acc, "direction": "transfer", "to_account_id": sav, "amount": 10},
           {"kind": "inv_move", "date": "2026-09-05", "investment_id": etf, "move": "contribution", "amount": 200},
           {"kind": "valuation", "investment_id": etf, "month": "2026-09", "value": 204.5},
@@ -384,8 +390,8 @@ def test_backup_csv_content(table):
     assert files["ledger-contas-2026-10-04.csv"].split("\r\n")[1:] == [
         "Ordem;Conta à ordem;0,00;2026-01-01;não", "Poupança;Conta à ordem;0,00;2026-01-01;sim"]
     assert files["ledger-movimentos-2026-10-04.csv"].split("\r\n")[1:] == [
-        "2026-09-01;Ordem;Transferência;Transferência;;10,00;Poupança;não;;;;",
-        '2026-09-02;Ordem;Saída;Casa;"Renda; ""set""";1234,50;;não;casa, 2026;600,00;não;']
+        "2026-09-01;Ordem;Transferência;Transferência;;10,00;Poupança;não;;;;;",
+        '2026-09-02;Ordem;Saída;Casa;"Renda; ""set""";1234,50;;não;casa, 2026;600,00;Ana;não;']
     assert files["ledger-investimentos-2026-10-04.csv"].split("\r\n")[1:] == [
         # uma linha sem operação para os investimentos sem registos e para os que têm notas (as notas vão na descrição)
         ";Com ISIN;ETF;;;ISIN: IE0000000001", ";Sem registos;PPR;;;nota", "2026-09;Com ISIN;ETF;Valor;10,00;",

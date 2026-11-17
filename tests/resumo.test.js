@@ -165,6 +165,27 @@ test('gastos e entradas por categoria: peso, ano anterior e orçamento do ano (�
   assert.deepEqual(r.inCats.map(c => [c.category, c.amount, c.share, c.prev, c.budget]), [['Salário', 18900, 1, 18000, null]]);
 });
 
+test('para onde foi o dinheiro: entradas de um lado, gastos, investido e o que ficou do outro, a somar o mesmo', () => {
+  load(DATA);
+  const r = run('yearSummary("2026")');
+  const f = run('moneyFlow(t, i, o)', { t: r.totals, i: r.inCats, o: r.outCats });
+  const sum = list => Math.round(list.reduce((s, x) => s + x.amount, 0) * 100) / 100;
+  assert.deepEqual(f.sources, [{ label: 'Salário', amount: 18900, kind: 'in' }]);
+  // 18 900 − 13 550 de gastos − 3000 investidos = 2350 que ficaram nas contas
+  assert.deepEqual(f.targets.map(x => [x.label, x.amount, x.kind]), [['Habitação', 7500, 'out'], ['Supermercado', 3100, 'out'],
+    ['Restauração', 2000, 'out'], ['Compras', 900, 'out'], ['constructor', 50, 'out'], ['Investido', 3000, 'invested'], ['Ficou nas contas', 2350, 'kept']]);
+  assert.deepEqual([f.total, sum(f.sources), sum(f.targets)], [18900, 18900, 18900]);
+  // com menos lugares, as categorias mais pequenas juntam-se
+  const small = run('moneyFlow(t, i, o, 1, 3)', { t: r.totals, i: r.inCats, o: r.outCats });
+  assert.deepEqual(small.targets.slice(0, 3).map(x => [x.label, x.amount]), [['Habitação', 7500], ['Supermercado', 3100], ['Outros gastos', 2950]]);
+  // gastar mais do que entrou: a diferença vem do que já havia nas contas
+  const more = run('moneyFlow(t, i, o)', { t: { in: 100, out: 120, invested: 20, amortized: 10 },
+    i: [{ category: 'Salário', amount: 100 }], o: [{ category: 'Casa', amount: 120 }] });
+  assert.deepEqual(more, { total: 150, sources: [{ label: 'Salário', amount: 100, kind: 'in' }, { label: 'Do que já tinhas', amount: 50, kind: 'stock' }],
+    targets: [{ label: 'Casa', amount: 120, kind: 'out' }, { label: 'Investido', amount: 20, kind: 'invested' }, { label: 'Amortizado', amount: 10, kind: 'amortized' }] });
+  assert.equal(run('moneyFlow({ in: 0, out: 0, invested: 0, amortized: 0 }, [], [])'), null);
+});
+
 test('investimentos: valor no início e no fim, aportes, ganho e rentabilidade do período', () => {
   load(DATA);
   const r = run('yearSummary("2026")');
