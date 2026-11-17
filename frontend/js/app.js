@@ -634,6 +634,7 @@ function alertAction(type, arg) {
   if (type === 'loan-month') return loanMonthGrid();
   if (type === 'mov') return go('mov');
   if (type === 'inv') return go('inv');
+  if (type === 'loan') return go('loan');
   if (type === 'recurring') { go('mov'); return recurringModal(); }
   if (type === 'goals') return $('#goals').closest('.panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
   const goal = findById('goals', arg);
@@ -863,6 +864,62 @@ for (const [id, key] of [['#mov-filter-in', 'movCatIn'], ['#mov-filter-out', 'mo
   });
   el.addEventListener('click', e => { if (e.target.matches('[data-clear]')) { e.preventDefault(); S[key] = []; renderMovements(); } });
 }
+// ── filtros guardados dos Movimentos (movFilterState, currentMovFilter e movFilterFields no calc.js) ──
+// "★ Filtros": a lista dos guardados (carregar no nome aplica a conta, as categorias e a pesquisa dele; o período fica o que
+// estiver escolhido; ✕ apaga, com "Anular") e "Guardar o filtro atual…". O título mostra o nome do filtro que está aplicado.
+const movFilterNow = () => ({ account: S.movAccount, catIn: S.movCatIn, catOut: S.movCatOut, search: S.movSearch });
+function renderSavedFilters() {
+  const now = movFilterNow(), cur = currentMovFilter(now), list = sortByName(D.mov_filters);
+  $('#mov-saved').innerHTML = `<summary>★ ${cur ? esc(shortText(cur.name, 24)) : 'Filtros'}</summary>
+    <div class="multi-panel">
+      ${list.length ? list.map(f => `<div class="saved-filter${cur?.id === f.id ? ' active' : ''}">
+        <button class="link-btn" data-mfl-apply="${esc(f.id)}">${esc(f.name)}</button>
+        <button class="icon-btn" data-mfl-del="${esc(f.id)}" aria-label="Apagar o filtro ${esc(f.name)}" title="Apagar">✕</button></div>`).join('')
+        : '<div class="muted">Ainda não tens filtros guardados.</div>'}
+      ${movFilterEmpty(now) ? '<div class="muted">Para guardar um filtro, escolhe primeiro uma conta, categorias ou uma pesquisa.</div>'
+        : '<button class="btn" data-mfl-save>Guardar o filtro atual…</button>'}
+    </div>`;
+}
+$('#mov-saved').addEventListener('click', async e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  e.preventDefault();
+  if (b.dataset.mflApply) {
+    const f = findById('mov_filters', b.dataset.mflApply);
+    if (!f) return;
+    const st = movFilterState(f);
+    Object.assign(S, { movAccount: st.account, movCatIn: st.catIn, movCatOut: st.catOut, movSearch: st.search });
+    $('#mov-search').value = st.search;
+    $('#mov-saved').open = false;
+    renderMovements();
+  } else if (b.dataset.mflDel) {
+    try { await removeItem(b.dataset.mflDel, 'Filtro apagado'); } catch (err) { toast(err.message, true); }
+  } else if ('mflSave' in b.dataset) {
+    $('#mov-saved').open = false;
+    movFilterForm();
+  }
+});
+// Guardar os filtros de agora com um nome; com o nome de um que já existe (sem ligar a maiúsculas nem acentos), fica no lugar dele
+function movFilterForm() {
+  const now = movFilterNow(), cur = currentMovFilter(now);
+  const list = cats => cats.map(esc).join(', ');
+  const what = [now.account && `a conta <b>${esc(accountName(now.account))}</b>`, now.catIn.length && `as entradas <b>${list(now.catIn)}</b>`,
+    now.catOut.length && `as saídas <b>${list(now.catOut)}</b>`, now.search.trim() && `a pesquisa <b>"${esc(now.search.trim())}"</b>`].filter(Boolean);
+  formModal({
+    title: 'Guardar filtro',
+    intro: `Guarda ${what.join(', ')}. Para voltar a ele, carrega no nome em "★ Filtros". O período não fica guardado: o filtro serve
+      para qualquer mês ou ano.`,
+    values: { name: cur?.name || '' },
+    fields: [{ name: 'name', label: 'Nome', type: 'text', required: true, placeholder: 'ex.: Restauração, Férias',
+      hint: 'Com o nome de um filtro que já existe, este fica no lugar dele.' }],
+    onSubmit: async v => {
+      const same = movFilterNamed(v.name);
+      await saveItems([{ kind: 'mov_filter', id: same?.id, name: v.name, ...movFilterFields(now) }]);
+      toast(same ? 'Filtro atualizado' : 'Filtro guardado');
+    },
+  });
+}
+
 // Clicar fora de um filtro aberto fecha-o
 document.addEventListener('click', e => $$('details.multi[open]').forEach(d => { if (!d.contains(e.target)) d.open = false; }));
 
@@ -882,6 +939,7 @@ function renderMovements() {
   const activeIn = S.movCatIn.some(c => catsIn.includes(c)), activeOut = S.movCatOut.some(c => catsOut.includes(c));
   S.movCatIn = renderCatFilter($('#mov-filter-in'), 'movCatIn', 'Entradas', catsIn, activeOut);
   S.movCatOut = renderCatFilter($('#mov-filter-out'), 'movCatOut', 'Saídas', catsOut, activeIn);
+  renderSavedFilters();
 
   // Período escolhido e os movimentos que lhe pertencem
   const { from, to } = periodBounds(S.movMode, S.movAnchor);
@@ -1905,6 +1963,12 @@ function renderLoans() {
   $('#loan-total').textContent = eur(total);
   $('#loan-total-sub').textContent = `${active.length} crédito(s) ativo(s)`;
   $('#loan-payments').textContent = eur(active.reduce((s, l) => s + (l.payment || 0), 0));
+  // taxa de esforço (debtBurden): as prestações a dividir pela média das entradas dos últimos 12 meses
+  const burden = debtBurden();
+  $('#loan-payments-sub').innerHTML = 'soma dos créditos ativos' + (burden.ratio === null ? ''
+    : ` · <span class="${{ ok: '', high: 'warn', over: 'neg' }[burden.level]}" title="${esc(`Taxa de esforço: as prestações a dividir pela média `
+      + `das tuas entradas dos últimos ${burden.months} ${burden.months === 1 ? 'mês' : 'meses'} (${eur(burden.income)}/mês). Até 35% é confortável; `
+      + `o Banco de Portugal usa 50% como limite nos créditos novos.`)}">${Math.round(burden.ratio * 100)}% das entradas</span>`);
   $('#loan-paid').textContent = eur(Math.max(0, principal - total));
   $('#loan-paid-sub').textContent = principal > 0 ? `${Math.round(Math.max(0, principal - total) / principal * 100)}% do montante inicial` : '—';
   // "Livre de dívidas em": o crédito que acaba mais tarde (— se algum não der para estimar)

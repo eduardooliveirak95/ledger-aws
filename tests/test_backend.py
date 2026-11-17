@@ -600,6 +600,30 @@ def test_alloc_targets_are_saved_and_validated(table):
     assert [x["inv_type"] for x in d["alloc_targets"]] == ["PPR"]
 
 
+def test_mov_filters_are_saved_and_validated(table):
+    """Os filtros guardados dos Movimentos (nome, conta, categorias e pesquisa) ficam guardados, atualizam-se e apagam-se,
+    e não vão para o backup."""
+    acc = save([{"kind": "account", "name": "Ordem", "opening_balance": 0, "opening_date": "2026-01-01"}])["saved"][0]["id"]
+    f = save([{"kind": "mov_filter", "name": " Restaurantes ", "account_id": acc,
+               "cat_out": [" Restauração ", "Restauração", "", "Café"], "search": "  #férias  "}])["saved"][0]
+    assert f["id"].startswith("MFL_")
+    assert (f["name"], f["account_id"], f["cat_in"], f["cat_out"], f["search"]) == ("Restaurantes", acc, [], ["Restauração", "Café"], "#férias")
+    assert save([dict(f, name="Comer fora")])["saved"][0]["id"] == f["id"]   # atualizar mantém o id
+    # sem conta, fica sem conta (todas); o nome, as categorias e a pesquisa são cortados
+    g = save([{"kind": "mov_filter", "name": "x" * 80, "cat_in": ["y" * 80], "search": "z" * 150}])["saved"][0]
+    assert "account_id" not in g and (g["name"], g["cat_in"], g["search"]) == ("x" * 60, ["y" * 60], "z" * 100)
+    base = {"kind": "mov_filter", "name": "F"}
+    for bad in ({"name": ""}, {"account_id": "nope"}, {"cat_in": "Salário"}, {"cat_out": [1]},
+                {"cat_out": [f"c{i}" for i in range(101)]}, {"id": "MFL_xyz"}):
+        status, body = call("POST /items", body={"items": [{**base, **bad}]})
+        assert status == 400 and body["detail"], bad
+    # o backup não inclui os filtros (tal como os orçamentos)
+    assert not any("Comer fora" in content for _, content in app.backup_files("u1", "2026-11-17"))
+    save([], delete=[f["id"]])
+    _, d = call("GET /data")
+    assert [x["name"] for x in d["mov_filters"]] == ["x" * 60]
+
+
 def test_request_size_limit(table):
     """Mais de 300 itens num pedido dá 400."""
     acc = save([{"kind": "account", "name": "A", "opening_balance": 0, "opening_date": "2026-01-01"}])["saved"][0]["id"]

@@ -1,5 +1,5 @@
 // Testes dos Movimentos, com dados inventados: a pesquisa (filterTx com texto e os totais por mês), os reembolsos do "a receber",
-// a categoria sugerida pela descrição, o "Anular" e as contas fechadas.
+// a categoria sugerida pela descrição, o "Anular", as contas fechadas e os filtros guardados.
 // Correm no Node, sem browser: os ficheiros do site são carregados num contexto isolado (vm).
 //
 //     node --test tests/movimentos.test.js
@@ -298,5 +298,30 @@ test('contas fechadas: só as abertas para escolher (e a do movimento antigo); f
   } finally {
     run('D = { ...emptyData(), accounts: [{ id: acc, kind: "account", name: "Conta à ordem", opening_balance: 0 }], transactions: txs }',
       { acc: ACC, txs: TXS });
+  }
+});
+
+test('filtros guardados: os campos a gravar, aplicar (sem a conta apagada), qual está aplicado e procurar pelo nome', () => {
+  const mfl = (n, name, extra = {}) => ({ id: 'MFL_' + String(n).padStart(12, '0'), kind: 'mov_filter', name, cat_in: [], cat_out: [], search: '', ...extra });
+  const now = { account: ACC, catIn: [], catOut: ['Restauração', 'Casa'], search: ' #férias ' };
+  // gravar: a pesquisa sem espaços nas pontas e, sem conta, sem o account_id (todas as contas)
+  assert.deepEqual(run('movFilterFields(s)', { s: now }), { account_id: ACC, cat_in: [], cat_out: ['Restauração', 'Casa'], search: '#férias' });
+  assert.ok(!('account_id' in run('movFilterFields(s)', { s: { ...now, account: '' } })));
+  run('D.mov_filters = l', { l: [mfl(1, 'Restauração', { account_id: ACC, cat_out: ['Casa', 'Restauração'], search: '#férias' }),
+    mfl(2, 'Antiga', { account_id: 'ACC_999999999999', cat_in: ['Salário'] })] });
+  try {
+    // aplicar: a conta que já não existe fica "Todas as contas"
+    assert.deepEqual(run('movFilterState(D.mov_filters[1])'), { account: '', catIn: ['Salário'], catOut: [], search: '' });
+    // o aplicado: as categorias por outra ordem e a pesquisa com espaços contam como iguais
+    assert.equal(run('currentMovFilter(s)?.name', { s: now }), 'Restauração');
+    assert.equal(run('currentMovFilter(s)', { s: { ...now, search: '' } }), null);
+    assert.equal(run('currentMovFilter(s)?.name', { s: { account: '', catIn: ['Salário'], catOut: [], search: '' } }), 'Antiga');
+    // sem nada escolhido não há nada para guardar nem filtro aplicado
+    const none = { account: '', catIn: [], catOut: [], search: '  ' };
+    assert.deepEqual([run('movFilterEmpty(s)', { s: none }), run('movFilterEmpty(s)', { s: now }), run('currentMovFilter(s)', { s: none })], [true, false, null]);
+    // o mesmo nome, sem ligar a maiúsculas nem acentos, para gravar por cima
+    assert.deepEqual([run('movFilterNamed("restauracao")?.id'), run('movFilterNamed("outro")')], ['MFL_000000000001', null]);
+  } finally {
+    run('D.mov_filters = []');
   }
 });

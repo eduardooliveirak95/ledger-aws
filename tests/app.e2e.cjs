@@ -56,7 +56,7 @@ function makeData() {
     loan_balances: [],
     properties: [{ id: 'PROP_' + hex(1), kind: 'property', name: 'Casa', prop_type: 'Habitação própria', value: 250000,
       purchase_price: 180000, purchase_date: '2020-01-15', loan_id: CASA, notes: '', archived: false }],
-    bank_formats: [], budgets: [], alloc_targets: [],
+    bank_formats: [], budgets: [], alloc_targets: [], mov_filters: [],
     goals: [{ id: 'GOAL_' + hex(1), kind: 'goal', name: 'Fundo de emergência', target: 12000, source: 'reserve' }],
     reservations: [{ id: `GRES_${day(2, 6)}_${hex(500)}`, kind: 'reservation', goal_id: 'GOAL_' + hex(1), source_id: POUP,
       date: day(2, 6), move: 'reserve', amount: 3000 }],
@@ -107,7 +107,7 @@ async function setup(page, admin, label) {
     body: "window.LEDGER_CONFIG = { apiUrl: 'https://api.example.test', region: 'eu-west-1', clientId: 'cliente-falso' };" }));
   await page.route('https://cognito-idp.eu-west-1.amazonaws.com/', r =>
     r.fulfill({ contentType: 'application/json', body: JSON.stringify({ Username: 'x', AuthenticationResult: tokens(admin) }) }));
-  const cols = { account: 'accounts', transaction: 'transactions', investment: 'investments', inv_move: 'inv_moves' };
+  const cols = { account: 'accounts', transaction: 'transactions', investment: 'investments', inv_move: 'inv_moves', mov_filter: 'mov_filters' };
   let next = 900;
   await page.route('https://api.example.test/**', r => {
     const req = r.request(), p = new URL(req.url()).pathname;
@@ -118,7 +118,8 @@ async function setup(page, admin, label) {
     if (p === '/items' && req.method() === 'POST') {
       const body = JSON.parse(req.postData());
       posts.push(body);
-      const saved = body.items.map(it => ({ ...it, id: it.id || (it.kind === 'transaction' ? `TX_${it.date}_${hex(next++)}` : `ACC_${hex(next++)}`) }));
+      const saved = body.items.map(it => ({ ...it, id: it.id || (it.kind === 'transaction' ? `TX_${it.date}_${hex(next++)}`
+        : `${it.kind === 'mov_filter' ? 'MFL' : 'ACC'}_${hex(next++)}`) }));
       for (const it of saved) {
         const col = data[cols[it.kind]];
         if (col) { const i = col.findIndex(x => x.id === it.id); if (i >= 0) col[i] = it; else col.push(it); }
@@ -388,6 +389,43 @@ async function runMoney(browser, SITE) {
   await pause(page, 400);
   check('resumo do ano: no modo privado, o diagrama sem valores', !/\d,\d\d/.test(await page.textContent('#year-report svg.flow')));
   await page.locator('#year-report svg.flow').screenshot({ path: path.join(OUT, 'dinheiro-fluxo-escuro-privado.png') });
+  await sideClick(page, false, '#private-btn');
+  await sideClick(page, false, '#theme-btn');   // escuro → automático
+
+  // a taxa de esforço nos Créditos: 520 € de prestação sobre a média das entradas (5 meses de 1800 € e os dois MB WAY)
+  await page.evaluate(() => { location.hash = '#loan'; });
+  await pause(page, 500);
+  const burden = (await page.textContent('#loan-payments-sub')).replace(/\s+/g, ' ');
+  check('créditos: a taxa de esforço no cartão das prestações', /29% das entradas/.test(burden), burden);
+
+  // filtros guardados: guardar a pesquisa de agora com um nome, limpar, aplicar outra vez e apagar
+  await page.evaluate(() => { location.hash = '#mov'; });
+  await pause(page, 500);
+  await page.fill('#mov-search', 'mercearia');
+  await pause(page, 400);
+  await page.click('#mov-saved > summary');
+  await page.click('#mov-saved [data-mfl-save]');
+  await pause(page, 300);
+  await page.locator('#modal input[id$="-name"]').fill('Mercearia');
+  await page.click('#modal-footer button[type=submit]');
+  await pause(page, 500);
+  const savedFilter = posts.at(-1)?.items[0] || {};
+  check('filtros guardados: grava o nome e a pesquisa (sem o período)', savedFilter.kind === 'mov_filter' && savedFilter.name === 'Mercearia' &&
+    savedFilter.search === 'mercearia' && !('from' in savedFilter) && (await page.textContent('#mov-saved > summary')).trim() === '★ Mercearia',
+    JSON.stringify(savedFilter));
+  await page.fill('#mov-search', '');
+  await pause(page, 400);
+  await page.click('#mov-saved > summary');
+  await shot(page, 'filtros-guardados');
+  await page.click('#mov-saved [data-mfl-apply]');
+  await pause(page, 400);
+  check('filtros guardados: carregar no nome volta a pôr a pesquisa', await page.inputValue('#mov-search') === 'mercearia' &&
+    await page.evaluate(() => S.movSearch) === 'mercearia');
+  await page.click('#mov-saved > summary');
+  await page.click('#mov-saved [data-mfl-del]');
+  await pause(page, 500);
+  check('filtros guardados: o ✕ apaga, com "Anular"', await page.evaluate(() => D.mov_filters.length) === 0 &&
+    (await page.textContent('#toast')).startsWith('Filtro apagado'));
   await page.close();
 }
 

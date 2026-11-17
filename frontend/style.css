@@ -361,6 +361,13 @@ details.multi[open] > summary { border-color: var(--accent); }
   display: flex; flex-direction: column; gap: 8px; box-shadow: var(--shadow-pop);
 }
 .multi-panel .link-btn { align-self: flex-start; }
+/* Filtros guardados (renderSavedFilters): o nome (aplica) e o ✕ (apaga) numa linha; o que está aplicado a negrito */
+.saved-filters .multi-panel { min-width: 240px; }
+.saved-filter { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.saved-filter .link-btn { font-size: 13px; text-decoration: none; text-align: left; color: var(--text); }
+.saved-filter .link-btn:hover { color: var(--accent); }
+.saved-filter.active .link-btn { font-weight: 700; color: var(--accent); }
+.saved-filters .multi-panel > .btn { align-self: flex-start; }
 /* A mesma lista nos formulários (campo "pick", ex.: categoria de um movimento): parece um campo e
    abre por baixo dele, dentro da janela (uma lista a flutuar podia ficar cortada) */
 .field details.pick > summary { background: var(--field); font-size: 13px; padding: 9px 28px 9px 12px; white-space: normal; text-align: left; }

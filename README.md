@@ -35,7 +35,7 @@ O que vai em cada um e o que fazer todos os meses:
 
 ### Avisos
 
-Por baixo do património líquido aparece "A ver", com o que precisa de atenção: investimentos sem o valor do mês passado, créditos sem o saldo do mês passado, orçamentos deste mês (nos anuais, desde janeiro) a 80% ou mais, gastos fora do normal (uma categoria sem orçamento que este mês já vai no dobro da média dos 6 meses antes, e pelo menos 50 € acima dela), despesas fixas que subiram de preço, metas que já não chegam a tempo ou cujo prazo passou, dinheiro reservado a mais numa conta e a reserva mensal de uma meta por fazer. Cada aviso tem um botão para o resolver e um ✕ para o dispensar. Um aviso dispensado só volta se mudar, por exemplo no mês seguinte. Sem avisos, a secção não aparece.
+Por baixo do património líquido aparece "A ver", com o que precisa de atenção: investimentos sem o valor do mês passado, créditos sem o saldo do mês passado, orçamentos deste mês (nos anuais, desde janeiro) a 80% ou mais, gastos fora do normal (uma categoria sem orçamento que este mês já vai no dobro da média dos 6 meses antes, e pelo menos 50 € acima dela), uma taxa de esforço acima de 50%, despesas fixas que subiram de preço, metas que já não chegam a tempo ou cujo prazo passou, dinheiro reservado a mais numa conta e a reserva mensal de uma meta por fazer. Cada aviso tem um botão para o resolver e um ✕ para o dispensar. Um aviso dispensado só volta se mudar, por exemplo no mês seguinte. Sem avisos, a secção não aparece.
 
 ### Metas de poupança
 
@@ -51,7 +51,7 @@ Cada meta mostra quanto já tens, quanto falta e o ritmo, que é quanto reservas
 
 Ao criar uma meta, a app sugere quanto juntar para um fundo de emergência: 3 a 6 meses dos teus gastos.
 
-As metas e as reservas, tal como os orçamentos e os alvos da alocação, não entram no backup.
+As metas e as reservas, tal como os orçamentos, os alvos da alocação e os filtros guardados dos Movimentos, não entram no backup.
 
 ### Simular o futuro
 
@@ -70,6 +70,8 @@ Quando fechas uma conta no banco, abre-a (✎ na lista das Contas) e marca "Cont
 Ao registar um movimento, a descrição sugere as que já usaste e a categoria fica logo escolhida com a que costumas dar a essa descrição (escreves "mercearia" e fica "Supermercado"); podes sempre escolher outra. As etiquetas, o "A receber" e o "Valor aproximado" estão em "Mais opções". Se apagares alguma coisa por engano, a mensagem "… apagado" traz um "Anular" durante uns segundos, que põe tudo como estava.
 
 A pesquisa procura na descrição, na categoria e no valor, sem ligar a maiúsculas nem acentos ("agua" encontra "Água"). Os totais e os gráficos passam a contar só o que foi encontrado. Nos filtros de entradas e de saídas podes escolher várias categorias. As transferências de e para outras pessoas vão para "Transferências in" e "Transferências out". Cada movimento pode ter até 5 etiquetas (por exemplo "férias 2026"), separadas por vírgulas: pesquisa "#férias" (ou carrega numa etiqueta) para ver os movimentos dela, de qualquer categoria, com os totais.
+
+Para voltar depressa a uma combinação de filtros (a conta, as categorias e a pesquisa), escolhe-a e, em "★ Filtros", carrega em "Guardar o filtro atual…" e dá-lhe um nome. Depois, carregar no nome volta a pôr esses filtros, no mês ou no ano que estiver escolhido (o período não fica guardado). O ✕ apaga o filtro. Os filtros ficam guardados na tua conta, por isso aparecem no PC e no telemóvel.
 
 Num gasto que pagaste por inteiro (a conta do jantar, por exemplo), põe em "A receber" a parte dos outros; "Dividir por" faz a conta (num jantar de 80 € a quatro, ficam 60 € a receber) e em "De quem" escreves quem te deve. O painel "A receber" mostra o que te devem, junto por pessoa; quando o dinheiro chegar (por MB WAY, por exemplo), regista a entrada (ou importa o extrato) e carrega em "Recebido": escolhes a entrada, ou várias se cada pessoa mandou a sua parte, ou "Recebi sem movimento" se foi em mão. As entradas que trazem o nome de quem te deve aparecem primeiro. O "Já recebi" do formulário é só para quando te pagam em mão: com ele marcado, o gasto sai do painel. A entrada associada deixa de contar como entrada e abate ao gasto, na categoria dele (o jantar de 80 € em que te devolveram 60 € conta 20 € nos gastos, nos orçamentos e no resumo do ano); o saldo da conta não muda.
 
@@ -98,6 +100,8 @@ Na tabela dos investimentos, o botão € simula uma venda: quanto recebes se ve
 Ao lado do ganho em percentagem aparece a rentabilidade por ano, que conta com a data de cada aporte e resgate (ganhar 10% num ano não é o mesmo que ganhar 10% em cinco). Só aparece quando há um valor registado e já passou pelo menos um ano desde o primeiro aporte.
 
 ### Créditos
+
+No cartão "Prestações mensais" aparece a taxa de esforço: quanto das tuas entradas vai para as prestações, com a média das entradas dos últimos 12 meses completos. Até 35% é confortável; acima de 50% (o limite que o Banco de Portugal usa nos créditos novos), aparece também um aviso em "A ver".
 
 Os juros de cada mês saem do saldo e da prestação que registas. Para saber quando acabas de pagar, preenche o fim do contrato na ficha do crédito. Para registar uma amortização antiga, abre "Atualizar mês", escolhe esse mês e preenche a amortização extra.
 

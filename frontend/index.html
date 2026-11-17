@@ -228,6 +228,8 @@
         <details class="multi" id="mov-filter-out"></details>
         <!-- Pesquisa na descrição, na categoria e no valor (ver matchesSearch no calc.js) -->
         <input type="search" class="inline search" id="mov-search" placeholder="Pesquisar…" aria-label="Pesquisar nos movimentos" autocomplete="off">
+        <!-- Filtros guardados: um nome para a conta, as categorias e a pesquisa de agora (ver renderSavedFilters) -->
+        <details class="multi saved-filters" id="mov-saved"></details>
       </div>
       <div class="toolbar-right">
         <button class="btn" data-action="budgets">◎ Orçamentos</button>
@@ -384,7 +386,7 @@
 
     <div class="stats" style="margin-top:16px">
       <div class="stat"><div class="stat-label">Total em dívida</div><div class="stat-value" id="loan-total">—</div><div class="stat-sub" id="loan-total-sub"></div></div>
-      <div class="stat"><div class="stat-label">Prestações mensais</div><div class="stat-value" id="loan-payments">—</div><div class="stat-sub">soma dos créditos ativos</div></div>
+      <div class="stat"><div class="stat-label">Prestações mensais</div><div class="stat-value" id="loan-payments">—</div><div class="stat-sub" id="loan-payments-sub">soma dos créditos ativos</div></div>
       <div class="stat"><div class="stat-label">Já amortizado</div><div class="stat-value" id="loan-paid">—</div><div class="stat-sub" id="loan-paid-sub"></div></div>
       <div class="stat"><div class="stat-label">Livre de dívidas</div><div class="stat-value" id="loan-free">—</div><div class="stat-sub" id="loan-free-sub">estimativa</div></div>
     </div>

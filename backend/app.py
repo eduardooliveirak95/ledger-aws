@@ -27,6 +27,7 @@ Todos os dados vivem numa ÚNICA tabela DynamoDB ("single-table design"):
     GOAL_<hex>                   meta de poupança (quanto juntar, até quando e se conta com reservas ou com o património)
     GRES_<AAAA-MM-DD>_<hex>      reserva para uma meta: parte do saldo de uma conta ou investimento posta de lado (ou tirada)
     ALT_<hex>                    alvo da alocação dos investimentos: a percentagem da carteira para um tipo (ETF, PPR...)
+    MFL_<hex>                    filtro guardado dos Movimentos: um nome para uma conta, categorias e pesquisa
 
 Além das partições dos utilizadores há partições do sistema:
     user_id = "DAILY_BACKUP", sk = <sub>               um item por utilizador que ativou o backup diário por email
@@ -75,6 +76,8 @@ MAX_ITEMS_PER_REQUEST = 300   # máximo de itens (gravar + apagar) num único PO
 MAX_NAME = 60                 # comprimento máximo de nomes (conta, investimento, categoria...)
 MAX_TEXT = 500                # comprimento máximo de descrições e notas
 MAX_TAGS, MAX_TAG = 5, 30     # etiquetas de um movimento: quantas e quantos caracteres cada uma
+MAX_FILTER_CATS = 100         # categorias de entradas (ou de saídas) num filtro guardado dos Movimentos
+MAX_SEARCH = 100              # comprimento máximo da pesquisa num filtro guardado
 MAX_BACKUP_BYTES = 6_000_000  # tamanho total dos CSV num email (o SES aceita até 10 MB com os anexos)
 
 # Partição do sistema com quem ativou o backup diário (sk = sub do utilizador; ver o início do ficheiro)
@@ -106,6 +109,7 @@ KIND_PREFIX = {
     "goal": "GOAL",
     "reservation": "GRES",
     "alloc_target": "ALT",
+    "mov_filter": "MFL",
 }
 # O mesmo mapa ao contrário: prefixo -> tipo (para descobrir o tipo a partir da sk)
 PREFIX_KIND = {v: k for k, v in KIND_PREFIX.items()}
@@ -124,6 +128,7 @@ COLLECTION = {
     "goal": "goals",
     "reservation": "reservations",
     "alloc_target": "alloc_targets",
+    "mov_filter": "mov_filters",
 }
 
 # Expressões regulares que validam o formato de cada id (= sort key).
@@ -143,6 +148,7 @@ ID_RE = {
     "goal": re.compile(rf"^GOAL_({HEX})$"),
     "reservation": re.compile(rf"^GRES_\d{{4}}-\d{{2}}-\d{{2}}_({HEX})$"),
     "alloc_target": re.compile(rf"^ALT_({HEX})$"),
+    "mov_filter": re.compile(rf"^MFL_({HEX})$"),
 }
 # Formato das chaves da primeira versão da app ("AAAA-MM-DD_<16 hex>"), para as migrar
 LEGACY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_[0-9a-f]{16}$")
@@ -353,6 +359,23 @@ def v_tags(value):
     return out
 
 
+def v_categories(value, field):
+    """Uma lista de categorias (filtro guardado): textos limpos e cortados a MAX_NAME caracteres, sem vazios nem repetidos,
+    até MAX_FILTER_CATS. Vazio devolve []."""
+    if value is None or value == "":
+        return []
+    if not isinstance(value, list) or not all(isinstance(c, str) for c in value):
+        raise ValueError(f"{field}: tem de ser uma lista de categorias")
+    out = []
+    for c in value:
+        c = c.strip()[:MAX_NAME].strip()
+        if c and c not in out:
+            out.append(c)
+    if len(out) > MAX_FILTER_CATS:
+        raise ValueError(f"{field}: no máximo {MAX_FILTER_CATS} categorias")
+    return out
+
+
 def v_ref(value, kind, field):
     """Valida uma referência a outro item (ex.: account_id de um movimento tem de ser um id ACC_ válido)."""
     if not ID_RE[kind].match(str(value or "")):
@@ -389,7 +412,7 @@ def build(user, raw):
         raise ValueError("id inválido")
     # Ao editar, reaproveita o hex do id existente; ao criar, gera um novo.
     # (valuation e loan_balance não têm hex próprio: a chave é o investimento/crédito + o mês)
-    h = hex_of(old_id, kind) if old_id and kind in ("account", "transaction", "investment", "inv_move", "loan", "property", "bank_format", "budget", "goal", "reservation", "alloc_target") else None
+    h = hex_of(old_id, kind) if old_id and kind in ("account", "transaction", "investment", "inv_move", "loan", "property", "bank_format", "budget", "goal", "reservation", "alloc_target", "mov_filter") else None
     h = h or new_hex()
 
     item = {"user_id": user, "updated_at": now_iso()}
@@ -619,6 +642,20 @@ def build(user, raw):
             inv_type=v_text(raw.get("inv_type"), "inv_type", 30, required=True),
             pct=pct,
         )
+
+    elif kind == "mov_filter":
+        # Filtro guardado dos Movimentos: um nome para uma combinação de conta, categorias de entradas e de saídas e pesquisa
+        # (vazias = todas; sem o período, que fica o que estiver escolhido). O browser grava um filtro por nome (atualiza o
+        # que já existe em vez de criar outro) e ignora uma conta que já não exista.
+        item.update(
+            sk=f"MFL_{h}",
+            name=v_text(raw.get("name"), "name", MAX_NAME, required=True),
+            cat_in=v_categories(raw.get("cat_in"), "cat_in"),
+            cat_out=v_categories(raw.get("cat_out"), "cat_out"),
+            search=v_text(raw.get("search"), "search", MAX_SEARCH),
+        )
+        if raw.get("account_id"):
+            item["account_id"] = v_ref(raw.get("account_id"), "account", "account_id")
 
     # Se o id mudou (ex.: nova data), o antigo tem de ser apagado
     stale = old_id if old_id and old_id != item["sk"] else None

@@ -1,7 +1,7 @@
 // ── calc.js: todos os números que a app mostra são calculados aqui, a partir dos dados em bruto ──
 // O backend só guarda e devolve os registos; saldos, ganhos e dívidas são calculados no browser.
 // D = { accounts, transactions, investments, inv_moves, valuations, loans, loan_balances, properties, bank_formats, budgets, goals,
-//       reservations, alloc_targets }
+//       reservations, alloc_targets, mov_filters }
 // é a cópia local de tudo o que veio de GET /data (uma lista por tipo de item).
 
 let D = emptyData();
@@ -11,13 +11,14 @@ function emptyData() {
     budgets: [],        // budgets: orçamentos por categoria de saídas (limite por mês ou por ano; ver budgetStatus)
     goals: [],          // goals: metas de poupança (ver goalStatus)
     reservations: [],   // reservations: dinheiro de contas e investimentos posto de lado para as metas (ver reservedTotal)
-    alloc_targets: [] };// alloc_targets: percentagem alvo de cada tipo de investimento (ver allocation)
+    alloc_targets: [],  // alloc_targets: percentagem alvo de cada tipo de investimento (ver allocation)
+    mov_filters: [] };  // mov_filters: filtros guardados dos Movimentos (ver movFilterState)
 }
 // Tipo de item -> nome da lista em D (o mesmo mapa que existe no backend)
 const COLLECTION_OF = {
   account: 'accounts', transaction: 'transactions', investment: 'investments', inv_move: 'inv_moves',
   valuation: 'valuations', loan: 'loans', loan_balance: 'loan_balances', property: 'properties', bank_format: 'bank_formats',
-  budget: 'budgets', goal: 'goals', reservation: 'reservations', alloc_target: 'alloc_targets',
+  budget: 'budgets', goal: 'goals', reservation: 'reservations', alloc_target: 'alloc_targets', mov_filter: 'mov_filters',
 };
 
 /**
@@ -368,6 +369,37 @@ function balanceSeries(accountId = '') {
                     : D.accounts.reduce((s, a) => s + a.opening_balance, 0);
   const values = months.map(m => (b += perMonth[m] || 0, round2(b)));
   return { months, values };
+}
+
+// ════════ FILTROS GUARDADOS DOS MOVIMENTOS ════════
+// Um filtro guardado (mov_filter) é um nome para a conta, as categorias de entradas e de saídas e a pesquisa dos Movimentos
+// (vazias = todas). O período não: o filtro aplica-se ao mês ou ao ano que estiver escolhido.
+
+/** Os campos a gravar de um filtro, a partir dos filtros de agora ({ account, catIn, catOut, search }). */
+function movFilterFields({ account = '', catIn = [], catOut = [], search = '' }) {
+  return { account_id: account || undefined, cat_in: [...catIn], cat_out: [...catOut], search: String(search).trim() };
+}
+/** Os filtros a pôr ao aplicar um filtro guardado ({ account, catIn, catOut, search }); uma conta que já não existe fica
+ *  "Todas as contas". */
+function movFilterState(f) {
+  return { account: f.account_id && findById('accounts', f.account_id) ? f.account_id : '', catIn: [...(f.cat_in || [])],
+           catOut: [...(f.cat_out || [])], search: f.search || '' };
+}
+/** Se os filtros de agora não filtram nada (todas as contas e categorias, sem pesquisa): aí não há nada para guardar. */
+function movFilterEmpty({ account = '', catIn = [], catOut = [], search = '' }) {
+  return !account && !catIn.length && !catOut.length && !String(search).trim();
+}
+/** O filtro guardado igual aos filtros de agora (as categorias por qualquer ordem, a pesquisa sem espaços nas pontas), ou
+ *  null: o que a app mostra como escolhido. Com dois iguais, o primeiro por nome. */
+function currentMovFilter(state) {
+  const key = x => JSON.stringify([x.account || '', [...x.catIn].sort(), [...x.catOut].sort(), String(x.search || '').trim()]);
+  if (movFilterEmpty(state)) return null;
+  const k = key(state);
+  return sortByName(D.mov_filters).find(f => key(movFilterState(f)) === k) || null;
+}
+/** O filtro guardado com este nome (sem ligar a maiúsculas nem acentos), para gravar por cima em vez de criar outro. */
+function movFilterNamed(name) {
+  return D.mov_filters.find(f => norm(f.name) === norm(name)) || null;
 }
 
 // ════════ COMPARAÇÃO NOS CARTÕES DOS MOVIMENTOS ════════
@@ -953,6 +985,27 @@ function loanTotals(rows, year = '') {
            yearInterest: sum('interest', inYear), yearPayments: sum('payment', inYear) };
 }
 
+/**
+ * Taxa de esforço: quanto das entradas vai para as prestações dos créditos. payments = a soma das prestações dos créditos ainda
+ * com dívida (como o cartão "Prestações mensais"); income = a média mensal das entradas dos últimos 12 meses completos (sem o mês
+ * atual e sem os reembolsos, que não são entradas), em months meses. O 1.º mês com movimentos não conta: quase sempre se começou
+ * a registar a meio dele (sem o ordenado, a média ficava baixa e dava um aviso falso); só com esse mês, não há taxa.
+ * ratio = payments / income (null sem prestações ou sem entradas). level: 'ok' até 35%, 'high' até 50% e 'over' acima de 50%,
+ * o limite que o Banco de Portugal usa para os créditos novos.
+ */
+function debtBurden() {
+  const payments = round2(D.loans.filter(l => loanCurrent(l) > 0).reduce((s, l) => s + (l.payment || 0), 0));
+  const first = firstTxMonth(), now = thisMonth(), to = addMonths(now, -1), start = first && addMonths(first, 1);
+  let income = 0, months = 0;
+  if (start && start <= to) {
+    const from = [addMonths(now, -12), start].sort().pop();
+    months = monthRange(from, to).length;
+    income = round2(flowTotals(filterTx({ from, to })).in / months);
+  }
+  const ratio = payments > 0 && income > 0 ? payments / income : null;
+  return { payments, income, months, ratio, level: ratio === null ? null : ratio > 0.5 ? 'over' : ratio > 0.35 ? 'high' : 'ok' };
+}
+
 // ════════ SIMULADOR DE AMORTIZAÇÃO ANTECIPADA ════════
 
 // Prestação (capital + juros) que paga `balance` em n meses à taxa mensal r (amortização francesa)
@@ -1301,6 +1354,7 @@ function unusualSpending(month = thisMonth()) {
  *   - orçamentos deste mês a 80% ou mais
  *   - categorias sem orçamento com gastos fora do normal este mês (unusualSpending)
  *   - investimentos ainda com valor e créditos ainda por pagar sem o valor / saldo do mês passado
+ *   - taxa de esforço acima de 50% (debtBurden)
  *   - reservas mensais das metas por fazer este mês; despesas fixas que subiram de preço (priceRises); tipos de investimento
  *     a mais de 5 pontos percentuais do alvo da alocação (allocation)
  * Cada aviso: { id, level ('bad' | 'warn' | 'info'), text (texto simples, sem HTML), action: { label, type, arg } }.
@@ -1362,6 +1416,12 @@ function homeAlerts() {
   if (loans.length) {
     add(`loan:${prev}:${loans.map(x => x.l.id).join('|')}`, 'warn', `Créditos sem o saldo de ${monthLabel(prev)}: ${loans.map(x =>
       `${x.l.name} (${x.last ? `último: ${monthLabel(x.last)}` : 'nenhum saldo'})`).join(', ')}.`, 'Atualizar mês', 'loan-month');
+  }
+  // taxa de esforço acima dos 50% (debtBurden); volta todos os meses enquanto lá estiver
+  const burden = debtBurden();
+  if (burden.level === 'over') {
+    add(`burden:${now}`, 'warn', `Taxa de esforço de ${Math.round(burden.ratio * 100)}%: as prestações dos créditos (${eur(burden.payments)}/mês) passam metade `
+      + `das tuas entradas (média de ${eur(burden.income)}/mês). O Banco de Portugal usa 50% como limite nos créditos novos.`, 'Ver créditos', 'loan');
   }
 
   const drift = allocation().filter(a => a.target !== null && Math.abs(a.share * 100 - a.target) > 5);

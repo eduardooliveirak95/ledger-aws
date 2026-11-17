@@ -1,4 +1,5 @@
-// Testes do simulador de amortização antecipada (annuityPayment, payoff e simulateEarlyRepayment), com dados inventados.
+// Testes do simulador de amortização antecipada (annuityPayment, payoff e simulateEarlyRepayment) e da taxa de esforço (debtBurden),
+// com dados inventados.
 // Correm no Node, sem browser: os ficheiros do site são carregados num contexto isolado (vm).
 // O "hoje" é fixo (13/10/2026), para o prazo que falta não depender do dia em que os testes correm.
 //
@@ -126,4 +127,44 @@ test('amortizar ou investir no simulador: compara com reduzir o prazo e não com
   assert.equal(run('investComparison(simulateEarlyRepayment(D.loans[0], 10000, 0), 10000, NaN, 300).invest'), null);
   // pagar tudo: as prestações deixam de sair logo no mês seguinte, e a conta de reduzir o prazo não serve
   assert.equal(run('investComparison(simulateEarlyRepayment(D.loans[0], 100000, 0), 100000, 5, 300)'), null);
+});
+
+test('taxa de esforço: as prestações dos créditos com dívida a dividir pela média das entradas dos 12 meses completos', () => {
+  const ACC = 'ACC_000000000001';
+  let seq = 0;
+  const tx = (date, direction, amount, category, extra = {}) => ({ id: `TX_${date}_${String(++seq).padStart(12, '0')}`, kind: 'transaction',
+    date, direction, amount, category, description: '', account_id: ACC, ...extra });
+  const credit = (n, payment) => ({ id: 'LOAN_' + String(n).padStart(12, '0'), kind: 'loan', name: `Crédito ${n}`, principal: 10000,
+    start_date: '2020-01-15', rate: 3, payment });
+  // 12 meses completos (outubro de 2025 a setembro de 2026): 1500 €/mês e o subsídio de 1500 € em julho; o ordenado de outubro
+  // de 2026 (o mês atual) não conta, nem a entrada que é o reembolso de um jantar
+  const months = ['2025-10', '2025-11', '2025-12', ...Array.from({ length: 9 }, (_, i) => `2026-0${i + 1}`)];
+  const jantar = tx('2026-05-10', 'out', 80, 'Restauração', { due: 60 });
+  const txs = [...months.map(m => tx(`${m}-25`, 'in', 1500, 'Salário')), tx('2026-07-15', 'in', 1500, 'Salário'),
+    tx('2026-10-01', 'in', 1500, 'Salário'), jantar, tx('2026-05-11', 'in', 60, 'Transferências in', { refund_of: jantar.id }),
+    tx('2024-01-02', 'out', 10, 'Casa')];   // um movimento antigo: os 12 meses estão todos dentro dos dados
+  const burden = (loans, bs = [], list = txs) => run('D = { ...emptyData(), transactions: t, loans: l, loan_balances: b }; debtBurden()',
+    { t: list, l: loans, b: bs });
+  // 500 + 150 de prestações sobre 19 500 / 12 = 1625 €/mês: 40%, acima do confortável; o crédito já pago não conta
+  const paid = { id: 'LBAL_000000000003_2026-09', kind: 'loan_balance', loan_id: 'LOAN_000000000003', month: '2026-09', balance: 0 };
+  const b = burden([credit(1, 500), credit(2, 150), credit(3, 300)], [paid]);
+  assert.deepEqual([b.payments, b.income, b.months, b.level], [650, 1625, 12, 'high']);
+  near(b.ratio, 0.4, 1e-9);
+  assert.equal(burden([credit(1, 500)]).level, 'ok');                       // 31%
+  // acima de 50%: o aviso no "A ver", com o botão para os Créditos
+  assert.equal(burden([credit(1, 900)]).level, 'over');                     // 55%
+  const alert = run('homeAlerts()').find(a => a.id.startsWith('burden:'));
+  assert.deepEqual([alert.id, alert.level, alert.action.type], ['burden:2026-10', 'warn', 'loan']);
+  assert.equal(alert.text.replace(/\s/g, ' '), 'Taxa de esforço de 55%: as prestações dos créditos (900,00 €/mês) passam metade das tuas '
+    + 'entradas (média de 1625,00 €/mês). O Banco de Portugal usa 50% como limite nos créditos novos.');
+  burden([credit(1, 500)]);
+  assert.equal(run('homeAlerts()').find(a => a.id.startsWith('burden:')), undefined);
+  // dados só desde julho: julho, o 1.º mês, não conta (quase sempre está a meio); a média é de agosto e setembro: 3000 / 2 = 1500
+  const recent = txs.filter(t => t.date >= '2026-07');
+  assert.deepEqual((({ income, months: n }) => [income, n])(burden([credit(1, 500)], [], recent)), [1500, 2]);
+  // só com o 1.º mês (setembro), não há taxa
+  assert.equal(burden([credit(1, 500)], [], txs.filter(t => t.date.startsWith('2026-09'))).ratio, null);
+  // sem créditos ou sem entradas, não há taxa
+  assert.equal(burden([]).ratio, null);
+  assert.equal(burden([credit(1, 500)], [], []).ratio, null);
 });
