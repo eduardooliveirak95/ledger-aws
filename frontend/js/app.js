@@ -1119,12 +1119,13 @@ function renderMovements() {
   renderBulk();
 }
 
-// ── mudar a categoria de vários movimentos de uma vez ──
+// ── mudar a categoria ou juntar uma etiqueta a vários movimentos de uma vez ──
 // ids dos movimentos que se podem selecionar na tabela visível (preenchido por renderMovements)
 let movSelectable = [];
 
-// Barra que aparece com movimentos selecionados: escolher a categoria (só uma), aplicar ou cancelar.
-// Entradas e saídas têm categorias diferentes, por isso só se podem mudar juntas se forem do mesmo tipo.
+// Barra que aparece com movimentos selecionados: escolher a categoria (só uma) e aplicar, juntar uma etiqueta ou cancelar.
+// Entradas e saídas têm categorias diferentes, por isso só se podem mudar juntas se forem do mesmo tipo; a etiqueta serve para
+// todos (é o que junta entradas e saídas de qualquer categoria num filtro, a pesquisa "#etiqueta").
 function renderBulk() {
   const bar = $('#mov-bulk');
   const sel = D.transactions.filter(t => S.movSel.has(t.id));
@@ -1135,9 +1136,9 @@ function renderBulk() {
   if (!sel.length) { S.movBulkCat = ''; return; }
   const dirs = new Set(sel.map(t => t.direction));
   const count = `<span>${sel.length} selecionado(s)</span>`;
-  const cancel = '<button class="btn" data-bulk-cancel>Cancelar</button>';
+  const actions = '<button class="btn" data-bulk-tag># Etiqueta…</button><button class="btn" data-bulk-cancel>Cancelar</button>';
   if (dirs.size > 1) {
-    bar.innerHTML = `${count}<span class="err">Escolhe só entradas ou só saídas: têm categorias diferentes</span>${cancel}`;
+    bar.innerHTML = `${count}<span class="note">Para mudar a categoria, escolhe só entradas ou só saídas (têm categorias diferentes)</span>${actions}`;
     return;
   }
   const cats = knownCategories([...dirs][0]);
@@ -1150,7 +1151,7 @@ function renderBulk() {
         <input class="inline" data-newcat placeholder="Outra categoria… (Enter)">
       </div>
     </details>
-    <button class="btn primary" data-bulk-apply ${S.movBulkCat ? '' : 'disabled'}>Mudar categoria</button>${cancel}`;
+    <button class="btn primary" data-bulk-apply ${S.movBulkCat ? '' : 'disabled'}>Mudar categoria</button>${actions}`;
 }
 
 // Marcar / desmarcar um movimento ou todos (sem redesenhar a página toda)
@@ -1178,6 +1179,7 @@ $('#mov-bulk').addEventListener('keydown', e => {
 });
 $('#mov-bulk').addEventListener('click', async e => {
   if (e.target.matches('[data-bulk-cancel]')) { S.movSel.clear(); renderMovements(); return; }
+  if (e.target.matches('[data-bulk-tag]')) { bulkTagForm(); return; }
   if (!e.target.matches('[data-bulk-apply]') || !S.movBulkCat) return;
   const cat = S.movBulkCat;
   const items = D.transactions.filter(t => S.movSel.has(t.id) && t.category !== cat).map(t => ({ ...t, category: cat }));
@@ -1193,6 +1195,39 @@ $('#mov-bulk').addEventListener('click', async e => {
     renderBulk();
   }
 });
+
+// Juntar uma etiqueta a todos os movimentos marcados (addTagTo no calc.js) e, por omissão, guardar o filtro "#etiqueta"
+// (tagFilter), que os mostra juntos e também os que se etiquetarem depois. No fim mostra-os: a pesquisa da etiqueta em "Sempre".
+function bulkTagForm() {
+  const sel = D.transactions.filter(t => S.movSel.has(t.id));
+  formModal({
+    title: 'Juntar etiqueta',
+    intro: `Junta uma etiqueta aos <b>${sel.length}</b> movimento(s) marcados, entradas e saídas de qualquer categoria. A pesquisa
+      "#etiqueta" mostra-os todos juntos.`,
+    values: { tag: '', save_filter: true },
+    fields: [
+      { name: 'tag', label: 'Etiqueta', type: 'suggest', required: true, placeholder: 'ex.: férias 2026',
+        init: (st, f) => f.setSuggestions('tag', knownTags()),
+        hint: `Uma de cada vez, até ${MAX_TAG} caracteres. Os movimentos que já têm ${MAX_TAGS} etiquetas ficam sem ela.` },
+      { name: 'save_filter', label: 'Guardar também o filtro desta etiqueta', type: 'check',
+        hint: 'Fica em "★ Filtros" com o nome "#etiqueta", para voltares a estes movimentos com um toque.' },
+    ],
+    submitLabel: 'Juntar',
+    onSubmit: async v => {
+      if (v.tag.includes(',')) throw new Error('Uma etiqueta de cada vez: sem vírgulas');
+      const tag = cleanTag(v.tag);
+      if (!tag) throw new Error('Preenche "Etiqueta"');
+      const { items, had, full } = addTagTo(sel, tag);
+      if (items.length) await saveItems(items);
+      const filter = v.save_filter ? tagFilter(tag) : null;
+      if (filter) await saveItems([filter]);
+      S.movSel.clear();
+      showMovementsMatching('#' + tag);
+      toast([`${items.length} movimento(s) com #${tag}`, had && `${had} já a tinha(m)`,
+        full && `${full} sem lugar (já com ${MAX_TAGS} etiquetas)`, filter && 'filtro guardado'].filter(Boolean).join(' · '));
+    },
+  });
+}
 
 // ── formulário de conta ──
 // acc = conta a editar (ou null para criar); after = função a chamar depois de criar
@@ -2107,9 +2142,12 @@ function renderLoanHistory() {
     : `<div class="empty">Ainda sem saldos registados para este crédito.<br><button class="btn primary" data-action="loan-month">Atualizar mês</button></div>`;
 }
 
+// Uma taxa (% por ano) como se escreve: com vírgula e sem o ruído das contas (3,1 + 0,5 dá 3,6 e não 3,6000000000000005)
+const rateText = x => String(Math.round(x * 1000) / 1000).replace('.', ',');
+
 // ── simulador de amortização antecipada (botão "Simular amortização" de cada crédito) ──
 // Quanto se poupa em juros se se amortizar hoje parte do crédito, a reduzir a prestação ou o prazo
-// (simulateEarlyRepayment no calc.js). É só uma simulação: não grava nada.
+// (simulateEarlyRepayment no calc.js), e o que muda se a taxa subir (rateChange). É só uma simulação: não grava nada.
 function earlyRepaymentModal(loan) {
   const title = `Simular amortização · ${loan.name}`;
   const base = simulateEarlyRepayment(loan, 0);
@@ -2136,7 +2174,15 @@ function earlyRepaymentModal(loan) {
     <div class="field"><label for="sim-ret">E se investires esse dinheiro? Rentabilidade (% por ano)</label>
       <input id="sim-ret" inputmode="decimal" placeholder="ex.: 5">
       <div class="hint">Para comparar: quanto rendia o mesmo valor investido durante o prazo que falta, já com o imposto de 28% sobre o ganho.</div></div>
-    <div id="sim-invest"></div>`;
+    <div id="sim-invest"></div>
+    <div class="field"><label for="sim-rate">E se a taxa subir? Taxa nova (TAN %)</label>
+      <input id="sim-rate" inputmode="decimal" placeholder="ex.: ${esc(rateText(loan.rate + 1))}">
+      <div class="rate-steps">${[0.5, 1, 2].map(d => `<button type="button" class="btn" data-rate-step="${d}"
+        title="${esc(`A taxa de hoje mais ${rateText(d)} ${d === 1 ? 'ponto' : 'pontos'}: ${rateText(loan.rate)}% → ${rateText(loan.rate + d)}%`)}">+${rateText(d)}%</button>`).join('')}</div>
+      <div class="hint">Com o que está em dívida hoje, sem amortizar. Com taxa variável, a TAN é a Euribor mais o spread e o banco revê-a
+        de 3, 6 ou 12 em 12 meses, mudando a prestação para manter o prazo. Os botões somam à taxa de hoje; também podes escrever uma
+        mais baixa.</div></div>
+    <div id="sim-rate-result"></div>`;
 
   // Tabela: hoje vs reduzir a prestação vs reduzir o prazo (sem valor escrito, as duas últimas colunas ficam com "—")
   const table = s => {
@@ -2193,7 +2239,38 @@ function earlyRepaymentModal(loan) {
           <b class="pos">${eur(s.saved)}</b> de juros${s.fee ? `; com a comissão de ${eur(s.fee)}, a poupança líquida é <b>${eurSigned(s.net)}</b>` : ''}.</div>`
       : table(s);
   };
-  body.addEventListener('input', update);
+  // E se a taxa subir (rateChange no calc.js): a prestação nova com o mesmo prazo, os juros a mais até ao fim e a taxa de esforço.
+  // A prestação é a de capital e juros, como na tabela de cima; com uma prestação registada diferente (com seguros, por exemplo),
+  // também essa com a diferença. Pagar mais é mau: a diferença a subir fica a vermelho e a descer a verde (ao contrário do signClass).
+  const worse = x => (x > 0.004 ? 'neg' : x < -0.004 ? 'pos' : '');
+  const rateUpdate = () => {
+    const txt = $('#sim-rate', body).value.trim(), out = $('#sim-rate-result', body);
+    if (!txt) return (out.innerHTML = '');
+    const c = rateChange(loan, parseNum(txt.replace('%', '')));
+    if (!c) return (out.innerHTML = '<div class="form-error">Taxa inválida (0 a 100%)</div>');
+    const pts = Math.round((c.newRate - c.rate) * 1000) / 1000;
+    if (!pts) return (out.innerHTML = '<div class="chart-note">É a taxa de hoje: escreve outra ou usa os botões.</div>');
+    const pct = x => `${Math.round(x * 100)}%`;
+    const b = c.burden, cls = b && { ok: '', high: 'warn', over: 'neg' }[b.level];
+    out.innerHTML = `<div class="preview-box">Com a TAN a <b>${esc(rateText(c.newRate))}%</b> (${pts > 0 ? '+' : '−'}${esc(rateText(Math.abs(pts)))}
+      ${Math.abs(pts) === 1 ? 'ponto' : 'pontos'}), a prestação passa de ${eur(c.now.payment)} para <b>${eur(c.next.payment)}</b>
+      (<b class="${worse(c.diff)}">${eurSigned(c.diff)}/mês</b>), com o mesmo prazo (${term(c.months)})${
+        loan.payment > 0 && Math.abs(loan.payment - c.now.payment) >= 1 ? `; na que registaste, de ${eur(loan.payment)} para
+        ${eur(loan.payment + c.diff)}` : ''}.
+      <br>Até ao fim pagas ${c.extraInterest < 0 ? 'menos' : 'mais'} <b class="${worse(c.extraInterest)}">${eurShort(Math.abs(c.extraInterest))}</b>
+      de juros: ${eurShort(c.next.interest)} em vez de ${eurShort(c.now.interest)}.
+      ${b ? `<br>A taxa de esforço passa de ${pct(b.now)} para <b class="${cls}">${pct(b.next)}</b> das tuas entradas${
+        b.level === 'over' ? ': mais de metade, acima do limite que o Banco de Portugal usa nos créditos novos' : b.level === 'high' ? ', acima dos 35% confortáveis' : ''}.` : ''}</div>
+      <div class="chart-note">Contas simplificadas: a taxa nova igual até ao fim, só capital e juros (sem seguros nem outras despesas
+        da prestação).</div>`;
+  };
+  body.addEventListener('click', e => {
+    const step = e.target.closest('[data-rate-step]');
+    if (!step) return;
+    $('#sim-rate', body).value = rateText(loan.rate + Number(step.dataset.rateStep));
+    rateUpdate();
+  });
+  body.addEventListener('input', () => { update(); rateUpdate(); });
   update();
   modal.open({ title, body, wide: true, footer: [{ label: 'Fechar', onClick: () => modal.close() }] });
 }

@@ -1,5 +1,5 @@
 // Testes dos Movimentos, com dados inventados: a pesquisa (filterTx com texto e os totais por mês), os reembolsos do "a receber",
-// a categoria sugerida pela descrição, o "Anular", as contas fechadas e os filtros guardados.
+// a categoria sugerida pela descrição, o "Anular", as contas fechadas, os filtros guardados e a etiqueta em lote.
 // Correm no Node, sem browser: os ficheiros do site são carregados num contexto isolado (vm).
 //
 //     node --test tests/movimentos.test.js
@@ -323,5 +323,48 @@ test('filtros guardados: os campos a gravar, aplicar (sem a conta apagada), qual
     assert.deepEqual([run('movFilterNamed("restauracao")?.id'), run('movFilterNamed("outro")')], ['MFL_000000000001', null]);
   } finally {
     run('D.mov_filters = []');
+  }
+});
+
+test('etiqueta em lote: limpa o que se escreve, junta-a a entradas e saídas, sem repetir nem passar das 5, e o filtro dela', () => {
+  // o "#" do início e os espaços nas pontas saem; até 30 caracteres (como no servidor)
+  assert.deepEqual(['  #Férias 2026 ', '##casa', '#', 'x'.repeat(40)].map(t => run('cleanTag(t)', { t })), ['Férias 2026', 'casa', '', 'x'.repeat(30)]);
+  const four = ['a', 'b', 'c', 'd'], five = [...four, 'e'];
+  const list = [{ ...tx(11, '2026-09-20', 'out', 80, 'Restauração', 'Jantar') },
+    { ...tx(12, '2026-09-21', 'in', 50, 'Transferências in', 'MB WAY'), tags: ['amigos'] },
+    { ...tx(13, '2026-09-22', 'out', 30, 'Transportes', 'Gasolina'), tags: ['FÉRIAS 2026'] },   // já a tem (outras maiúsculas)
+    { ...tx(14, '2026-09-23', 'out', 12, 'Restauração', 'Café'), tags: four },                   // ainda cabe uma
+    { ...tx(15, '2026-09-24', 'out', 9, 'Restauração', 'Bolo'), tags: five }];                   // já tem 5
+  const r = run('addTagTo(l, "Férias 2026")', { l: list });
+  assert.deepEqual(r.items.map(t => [t.id.slice(-2), t.tags]), [['11', ['Férias 2026']], ['12', ['amigos', 'Férias 2026']],
+    ['14', [...four, 'Férias 2026']]]);
+  assert.deepEqual([r.had, r.full], [1, 1]);
+  // os movimentos de D não mudam (só os que se gravam)
+  assert.equal(list[0].tags, undefined);
+  assert.equal(r.items[0].direction, 'out');
+  assert.equal(r.items[1].direction, 'in');
+
+  // as etiquetas já usadas, a do movimento mais recente primeiro, sem repetidas (sem maiúsculas nem acentos)
+  run('D.transactions = txs', { txs: [...TXS, ...list] });
+  try {
+    assert.deepEqual(run('knownTags()'), ['a', 'b', 'c', 'd', 'e', 'FÉRIAS 2026', 'amigos']);
+  } finally {
+    run('D.transactions = txs', { txs: TXS });
+  }
+
+  // o filtro da etiqueta: a pesquisa "#etiqueta" sem conta nem categorias, com o nome "#etiqueta"
+  const mfl = (n, name, extra = {}) => ({ id: 'MFL_' + String(n).padStart(12, '0'), kind: 'mov_filter', name, cat_in: [], cat_out: [], search: '', ...extra });
+  assert.deepEqual(run('tagFilter("Férias 2026")'), { kind: 'mov_filter', name: '#Férias 2026', cat_in: [], cat_out: [], search: '#Férias 2026' });
+  run('D.mov_filters = l', { l: [mfl(1, 'Viagem', { search: '#Férias 2026' }), mfl(2, '#casa', { cat_out: ['Casa'] })] });
+  try {
+    // já há um filtro igual (com outro nome): não se cria outro
+    assert.equal(run('tagFilter("Férias 2026")'), null);
+    // com o nome de um que já existe (e é diferente), fica no lugar dele
+    assert.deepEqual(run('tagFilter("casa")'), { kind: 'mov_filter', id: 'MFL_000000000002', name: '#casa', cat_in: [], cat_out: [], search: '#casa' });
+    // e a pesquisa do filtro encontra os movimentos com a etiqueta, entradas e saídas (sem o que já tinha 5)
+    run('D.transactions = txs', { txs: [...TXS, ...r.items, list[2], list[4]] });
+    assert.deepEqual(run('filterTx({ text: "#Férias 2026" }).map(t => t.id.slice(-2)).sort()'), ['11', '12', '13', '14']);
+  } finally {
+    run('D.mov_filters = []; D.transactions = txs', { txs: TXS });
   }
 });

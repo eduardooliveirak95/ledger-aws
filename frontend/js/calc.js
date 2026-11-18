@@ -212,6 +212,42 @@ function matchesSearch(t, words) {
   return words.every(w => text.includes(w));
 }
 
+// ════════ ETIQUETAS EM LOTE ════════
+// Quantas etiquetas cabem num movimento e quantos caracteres cada uma, como no servidor (MAX_TAGS e MAX_TAG no backend/app.py)
+const MAX_TAGS = 5, MAX_TAG = 30;
+
+/** Uma etiqueta escrita à mão, como o servidor a guarda: sem espaços nas pontas, sem o "#" do início (que a pesquisa já põe) e
+ *  com até MAX_TAG caracteres. As vírgulas não se tiram aqui: o servidor dividia-a em duas, por isso a janela recusa-as. */
+function cleanTag(text) {
+  return String(text ?? '').trim().replace(/^#+/, '').trim().slice(0, MAX_TAG).trim();
+}
+
+/** As etiquetas já usadas nos movimentos, a do mais recente primeiro, sem repetidas (sem ligar a maiúsculas nem acentos). */
+function knownTags() {
+  const seen = new Set(), out = [];
+  for (const t of [...D.transactions].sort((a, b) => b.date.localeCompare(a.date))) {
+    for (const x of t.tags || []) if (!seen.has(norm(x))) { seen.add(norm(x)); out.push(x); }
+  }
+  return out;
+}
+
+/**
+ * Juntar a etiqueta tag (já limpa, com cleanTag) a vários movimentos de uma vez, entradas e saídas juntas (a barra dos movimentos
+ * marcados). Devolve { items, had, full }: items = os movimentos a gravar, com a etiqueta no fim das que já tinham; had = quantos
+ * já a tinham (sem ligar a maiúsculas, como o servidor compara as repetidas); full = quantos ficam sem ela por já terem MAX_TAGS.
+ */
+function addTagTo(txs, tag) {
+  const key = tag.toLowerCase(), items = [];
+  let had = 0, full = 0;
+  for (const t of txs) {
+    const tags = t.tags || [];
+    if (tags.some(x => x.toLowerCase() === key)) had++;
+    else if (tags.length >= MAX_TAGS) full++;
+    else items.push({ ...t, tags: [...tags, tag] });
+  }
+  return { items, had, full };
+}
+
 /**
  * Reembolsos: uma entrada com refund_of (o id de um gasto com "a receber") é o dinheiro que te devolveram. Não conta como
  * entrada nem como nada no mês em que chega: abate ao gasto, na data e na categoria dele, até ao valor do gasto (flowTotals,
@@ -400,6 +436,16 @@ function currentMovFilter(state) {
 /** O filtro guardado com este nome (sem ligar a maiúsculas nem acentos), para gravar por cima em vez de criar outro. */
 function movFilterNamed(name) {
   return D.mov_filters.find(f => norm(f.name) === norm(name)) || null;
+}
+/** O filtro guardado de uma etiqueta (depois de a juntar a vários movimentos): a pesquisa "#etiqueta", sem conta nem categorias,
+ *  com o nome "#etiqueta" (o "#" não deixa que tome o lugar de um filtro com o nome de uma categoria). Com o mesmo nome de um
+ *  que já existe, fica no lugar dele, como no "Guardar o filtro atual…"; se já houver um filtro igual (com qualquer nome),
+ *  devolve null: não é preciso outro. */
+function tagFilter(tag) {
+  const state = { account: '', catIn: [], catOut: [], search: '#' + tag };
+  if (currentMovFilter(state)) return null;
+  const name = '#' + tag;
+  return { kind: 'mov_filter', id: movFilterNamed(name)?.id, name, ...movFilterFields(state) };
 }
 
 // ════════ COMPARAÇÃO NOS CARTÕES DOS MOVIMENTOS ════════
@@ -1003,8 +1049,10 @@ function debtBurden() {
     income = round2(flowTotals(filterTx({ from, to })).in / months);
   }
   const ratio = payments > 0 && income > 0 ? payments / income : null;
-  return { payments, income, months, ratio, level: ratio === null ? null : ratio > 0.5 ? 'over' : ratio > 0.35 ? 'high' : 'ok' };
+  return { payments, income, months, ratio, level: burdenLevel(ratio) };
 }
+// O nível de uma taxa de esforço (ver o debtBurden): 'ok' até 35%, 'high' até 50% e 'over' acima; null sem taxa
+function burdenLevel(ratio) { return ratio === null ? null : ratio > 0.5 ? 'over' : ratio > 0.35 ? 'high' : 'ok'; }
 
 // ════════ SIMULADOR DE AMORTIZAÇÃO ANTECIPADA ════════
 
@@ -1051,6 +1099,34 @@ function simulateEarlyRepayment(loan, amount, feePct = 0) {
   const byTerm = { payment: round2(P), ...payoff(left, r, P) };
   for (const c of [byPayment, byTerm]) { c.saved = round2(now.interest - c.interest); c.net = round2(c.saved - fee); }
   return { balance, now, fee, paidOff: false, byPayment, byTerm };
+}
+
+/**
+ * E se a taxa do crédito mudar (numa revisão da Euribor, por exemplo)? Com o que está em dívida hoje e o prazo que falta (os do
+ * simulateEarlyRepayment), a prestação à taxa newRate (% por ano) com o mesmo prazo, como o banco faz numa revisão da taxa, e
+ * os juros até ao fim com a taxa nova sempre igual; só capital e juros. Devolve null como o simulateEarlyRepayment (sem taxa,
+ * sem prazo ou já pago) e com uma taxa inválida. Senão { balance, months, rate, newRate, now, next, diff, extraInterest, burden }:
+ *   now / next     { payment, interest } com a taxa de hoje e com a nova
+ *   diff           quanto muda a prestação por mês · extraInterest = os juros a mais até ao fim (negativos se a taxa descer)
+ *   burden         a taxa de esforço hoje e com a prestação nova ({ now, next, level }, como no debtBurden), ou null sem
+ *                  entradas. Conta a prestação registada deste crédito (a calculada, se não tiver) e junta-lhe diff.
+ */
+function rateChange(loan, newRate) {
+  const s = simulateEarlyRepayment(loan, 0);
+  if (!s || !(newRate >= 0 && newRate <= 100)) return null;
+  const r = newRate / 1200, n = s.now.months, P = annuityPayment(s.balance, r, n);
+  const next = { payment: round2(P), interest: payoff(s.balance, r, P).interest };
+  const diff = round2(next.payment - s.now.payment);
+  const b = debtBurden();
+  let burden = null;
+  if (b.income > 0) {
+    // o debtBurden conta a prestação registada (ou 0 sem ela): sem prestação, conta aqui a calculada
+    const paying = round2(b.payments - (loan.payment || 0) + (loan.payment > 0 ? loan.payment : s.now.payment));
+    const now = paying / b.income, nextRatio = Math.max(0, paying + diff) / b.income;
+    burden = { now, next: nextRatio, level: burdenLevel(nextRatio) };
+  }
+  return { balance: s.balance, months: n, rate: loan.rate, newRate, now: { payment: s.now.payment, interest: s.now.interest }, next,
+    diff, extraInterest: round2(next.interest - s.now.interest), burden };
 }
 
 /**

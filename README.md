@@ -77,6 +77,8 @@ Num gasto que pagaste por inteiro (a conta do jantar, por exemplo), põe em "A r
 
 Para mudar a categoria de vários movimentos de uma vez, marca-os na tabela, escolhe a categoria na barra que aparece e carrega em "Mudar categoria". Só dá com entradas ou com saídas de cada vez, porque as categorias são diferentes.
 
+Para juntar vários movimentos no mesmo filtro (as despesas de umas férias ou de umas obras, por exemplo), marca-os na tabela e carrega em "# Etiqueta…" na barra que aparece: escreves uma etiqueta e ficam todos com ela, entradas e saídas de qualquer categoria. Por omissão, a app guarda também o filtro "#etiqueta" em "★ Filtros" e mostra logo esses movimentos. Os que já têm 5 etiquetas ficam sem ela.
+
 As saídas em "Investimentos" e "Amortizações" (ou noutra categoria começada por "Amortiza") não contam como gasto. Entram na taxa de poupança e aparecem à parte no gráfico.
 
 Por baixo dos cartões das entradas, dos gastos, do saldo e da taxa de poupança aparece a comparação com a média dos meses anteriores e com o mesmo mês do ano passado (num ano, com o mesmo período do ano anterior). No mês atual só se comparam os dias que já passaram. Passando o rato por cima vês com que meses está a comparar.
@@ -108,6 +110,8 @@ Os juros de cada mês saem do saldo e da prestação que registas. Para saber qu
 Em "Simular amortização" escreves quanto queres amortizar (e a comissão, se houver) e vês quanto poupas em juros a reduzir a prestação ou a reduzir o prazo. Precisa da taxa e da prestação ou do fim do contrato. É só uma simulação, não grava nada.
 
 No mesmo sítio dá para comparar com investir esse dinheiro: escreves a rentabilidade por ano e vês quanto rendia durante o prazo que falta, já com o imposto de 28% sobre o ganho, e o que compensa mais. A app diz também a partir de que rentabilidade investir passa a compensar. Amortizar é garantido; investir tem risco.
+
+Por baixo, "E se a taxa subir?": escreves a taxa nova (ou carregas em +0,5%, +1% ou +2%, que somam à taxa de hoje) e vês a prestação nova com o mesmo prazo, como o banco faz numa revisão da taxa, quanto pagas a mais por mês e de juros até ao fim, e a taxa de esforço com essa prestação. Também dá para uma taxa mais baixa.
 
 ### Património
 

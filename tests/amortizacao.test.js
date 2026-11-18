@@ -1,5 +1,5 @@
-// Testes do simulador de amortização antecipada (annuityPayment, payoff e simulateEarlyRepayment) e da taxa de esforço (debtBurden),
-// com dados inventados.
+// Testes do simulador de amortização antecipada (annuityPayment, payoff e simulateEarlyRepayment), da taxa nova (rateChange) e da
+// taxa de esforço (debtBurden), com dados inventados.
 // Correm no Node, sem browser: os ficheiros do site são carregados num contexto isolado (vm).
 // O "hoje" é fixo (13/10/2026), para o prazo que falta não depender do dia em que os testes correm.
 //
@@ -96,6 +96,54 @@ test('sem dados para simular: sem taxa, sem prazo conhecido ou já pago', () => 
   assert.equal(sim(1000), null);
   load(loan({ end_date: undefined, payment: 474.22 }));       // sem fim do contrato: prazo pela prestação
   assert.equal(sim(0).now.months, 300);
+});
+
+test('e se a taxa subir: a prestação nova com o mesmo prazo, os juros a mais até ao fim e a taxa de esforço', () => {
+  load(loan());
+  const rate = r => run('rateChange(D.loans[0], r)', { r });
+  // de 3% para 4%: com os mesmos 300 meses, 100 000 € dão 527,84 €/mês (a fórmula da amortização francesa)
+  const up = rate(4);
+  assert.deepEqual([up.balance, up.months, up.rate, up.newRate], [100000, 300, 3, 4]);
+  assert.deepEqual(up.now, { payment: 474.21, interest: 42263.39 });
+  assert.equal(up.next.payment, 527.84);
+  near(up.next.payment, run('annuityPayment(100000, 4 / 1200, 300)'), 0.005);
+  assert.equal(up.diff, 53.63);
+  assert.equal(up.next.interest, 58351.05);
+  assert.equal(up.extraInterest, 16087.66);
+  near(up.next.interest, up.next.payment * 300 - 100000, 1);
+  // a descer, as diferenças ficam negativas; a 0% não há juros
+  const down = rate(2);
+  assert.deepEqual([down.next.payment, down.diff, down.extraInterest], [423.85, -50.36, -15107.09]);
+  assert.deepEqual([rate(0).next.payment, rate(0).next.interest], [333.33, 0]);
+  // sem entradas registadas, não há taxa de esforço; uma taxa inválida (negativa, acima de 100% ou que não é número) dá null
+  assert.equal(up.burden, null);
+  for (const r of [-1, 101, NaN]) assert.equal(rate(r), null);
+  // sem dados para simular (sem taxa de hoje), também null
+  load(loan({ rate: undefined }));
+  assert.equal(rate(4), null);
+
+  // taxa de esforço: 1500 €/mês de entradas nos 12 meses completos; este crédito com 480 €/mês registados (a prestação do banco,
+  // com o seguro) e outro de 150 €/mês. Hoje 630 / 1500 = 42%; a 4%, mais 53,63 €: 683,63 / 1500 = 45,6%
+  const ACC = 'ACC_000000000001';
+  const months = ['2025-09', '2025-10', '2025-11', '2025-12', ...Array.from({ length: 9 }, (_, i) => `2026-0${i + 1}`)];
+  const txs = months.map((m, i) => ({ id: `TX_${m}-25_${String(i + 1).padStart(12, '0')}`, kind: 'transaction', date: `${m}-25`,
+    direction: 'in', amount: 1500, category: 'Salário', description: '', account_id: ACC }));
+  const other = { id: 'LOAN_000000000002', kind: 'loan', name: 'Carro', principal: 9000, start_date: '2024-01-15', rate: 6, payment: 150 };
+  const withIncome = l => run('D = { ...emptyData(), transactions: t, loans: [l, o], loan_balances: bs }; rateChange(D.loans[0], r)', {
+    t: txs, l, o: other, r: 4, bs: [{ id: 'LBAL_000000000001', kind: 'loan_balance', loan_id: LOAN, month: '2026-10', balance: 100000 }] });
+  const b = withIncome(loan({ payment: 480 })).burden;
+  near(b.now, 0.42, 1e-9);
+  near(b.now, run('debtBurden().ratio'), 1e-9);   // hoje, a mesma do cartão "Prestações mensais"
+  near(b.next, 683.63 / 1500, 1e-9);
+  assert.equal(b.level, 'high');
+  // sem a prestação registada, o cartão não conta este crédito: aqui conta a calculada (474,21 €)
+  const c = withIncome(loan()).burden;
+  near(c.now, (150 + 474.21) / 1500, 1e-9);
+  near(c.next, (150 + 527.84) / 1500, 1e-9);
+  // acima de 50%: 'over'
+  assert.equal(run('rateChange(D.loans[0], 9).burden.level'), 'over');
+  assert.equal(run('burdenLevel(null)'), null);
+  assert.deepEqual([0.35, 0.36, 0.5, 0.51].map(x => run('burdenLevel(x)', { x })), ['ok', 'high', 'high', 'over']);
 });
 
 test('amortizar ou investir: o ganho do investimento no prazo que falta, com 28% de imposto, e a partir de quanto compensa', () => {

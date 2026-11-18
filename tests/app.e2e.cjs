@@ -397,6 +397,18 @@ async function runMoney(browser, SITE) {
   await pause(page, 500);
   const burden = (await page.textContent('#loan-payments-sub')).replace(/\s+/g, ' ');
   check('créditos: a taxa de esforço no cartão das prestações', /29% das entradas/.test(burden), burden);
+  // e se a taxa subir: no simulador do crédito, o "+1%" põe a taxa de hoje mais um ponto (3,2% → 4,2%)
+  await page.click('[data-sim-loan]');
+  await pause(page, 300);
+  await page.click('#modal [data-rate-step="1"]');
+  await pause(page, 200);
+  const rateTxt = (await page.textContent('#sim-rate-result')).replace(/\s+/g, ' ');
+  check('créditos: e se a taxa subir 1 ponto, a prestação nova e a taxa de esforço com ela', await page.inputValue('#sim-rate') === '4,2' &&
+    /Com a TAN a 4,2% \(\+1 ponto\), a prestação passa de .* para .* \(\+\d+,\d\d €\/mês\), com o mesmo prazo \(\d+a \d+m\); na que registaste, de 520,00 € para 5\d\d,\d\d €\. Até ao fim pagas mais \d.* A taxa de esforço passa de 29% para 3\d% das tuas entradas/.test(rateTxt),
+    rateTxt.slice(0, 300));
+  await shot(page, 'credito-taxa');
+  await page.keyboard.press('Escape');
+  await pause(page);
 
   // filtros guardados: guardar a pesquisa de agora com um nome, limpar, aplicar outra vez e apagar
   await page.evaluate(() => { location.hash = '#mov'; });
@@ -426,6 +438,29 @@ async function runMoney(browser, SITE) {
   await pause(page, 500);
   check('filtros guardados: o ✕ apaga, com "Anular"', await page.evaluate(() => D.mov_filters.length) === 0 &&
     (await page.textContent('#toast')).startsWith('Filtro apagado'));
+
+  // etiqueta em lote: marcar entradas e saídas do mês, juntar-lhes uma etiqueta e guardar o filtro dela
+  await page.fill('#mov-search', '');
+  await pause(page, 400);
+  await page.check('#mov-sel-all');
+  await pause(page, 200);
+  const selCount = await page.evaluate(() => S.movSel.size);
+  check('etiqueta em lote: com entradas e saídas marcadas, o "# Etiqueta…" e a explicação da categoria', selCount >= 2 &&
+    await visible(page, '#mov-bulk [data-bulk-tag]') && /Para mudar a categoria, escolhe só entradas ou só saídas/.test(await page.textContent('#mov-bulk')));
+  await page.click('#mov-bulk [data-bulk-tag]');
+  await pause(page, 300);
+  await page.locator('#modal input[id$="-tag"]').fill('#Obras casa');
+  await shot(page, 'etiqueta-em-lote');
+  await page.click('#modal-footer button[type=submit]');
+  await pause(page, 600);
+  const tagged = posts.at(-2)?.items || [], tagFilter = posts.at(-1)?.items[0] || {};
+  check('etiqueta em lote: grava a etiqueta em todos os marcados e o filtro "#etiqueta"', tagged.length === selCount &&
+    tagged.every(t => t.tags.includes('Obras casa')) && new Set(tagged.map(t => t.direction)).size === 2 && tagFilter.kind === 'mov_filter' &&
+    tagFilter.name === '#Obras casa' && tagFilter.search === '#Obras casa', JSON.stringify(tagFilter));
+  check('etiqueta em lote: no fim mostra-os todos, com o filtro escolhido', await page.inputValue('#mov-search') === '#Obras casa' &&
+    await page.locator('#mov-table [data-sel]').count() === selCount && (await page.textContent('#mov-saved > summary')).trim() === '★ #Obras casa',
+    (await page.textContent('#mov-saved > summary')).trim());
+  await shot(page, 'etiqueta-em-lote-filtro');
   await page.close();
 }
 

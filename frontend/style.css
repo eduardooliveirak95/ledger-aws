@@ -383,7 +383,7 @@ table.data .sel { width: 1%; padding-right: 0; }
 table.data .sel input { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
 table.data tr.selected td { background: color-mix(in srgb, var(--accent) 7%, transparent); }
 .bulk { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--text); }
-.bulk .err { color: var(--neg); }
+.bulk .note { color: var(--muted); }   /* entradas e saídas marcadas juntas: só a etiqueta serve para todas */
 .bulk .multi-panel { left: auto; right: 0; }
 .bulk .multi-panel input.inline { width: 100%; }
 
@@ -668,6 +668,8 @@ table.grid-edit .num { font-family: var(--font-num); text-align: right; color: v
 .drop-zone input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .drop-zone strong { color: var(--accent); }
 .drop-filename { font-family: var(--font-num); font-size: 12px; color: var(--pos); margin-top: 8px; }
+/* Simulador do crédito: os botões +0,5% / +1% / +2% por baixo da taxa nova */
+.rate-steps { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 .preview-box { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 14px; font-size: 12px; line-height: 1.7; }
 .preview-box .err { color: var(--neg); font-size: 11px; }
 .templates { display: flex; gap: 8px; flex-wrap: wrap; }
