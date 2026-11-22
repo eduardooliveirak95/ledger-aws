@@ -70,9 +70,13 @@ jobs:
       - name: Show the last runs (48 h)
         run: |
           START=$(( ($(date +%s) - 172800) * 1000 ))
+          # Cada mensagem do log acaba com uma mudança de linha, por isso vem uma linha vazia a seguir a cada uma.
+          # O ciclo salta-as com um if: com [ -n "$ts" ] && …, a última (vazia) dava 1 ao ciclo e o bash -e parava o passo.
           aws logs filter-log-events --log-group-name "/aws/lambda/$FN" --start-time "$START" \
             --filter-pattern '"daily_backup"' --query 'events[*].[timestamp,message]' --output text |
           while IFS=$'\t' read -r ts msg; do
-            [ -n "$ts" ] && echo "$(TZ=Europe/Lisbon date -d "@$((ts / 1000))" '+%d/%m %H:%M') (Lisboa)  $msg"
+            if [ -n "$ts" ]; then
+              echo "$(TZ=Europe/Lisbon date -d "@$((ts / 1000))" '+%d/%m %H:%M') (Lisboa)  $msg"
+            fi
           done
           echo "(cada linha é uma execução: as da meia-noite e os testes manuais)"
