@@ -11,16 +11,7 @@ let ADMIN = null;
 // Quantos logins recentes a API devolve (igual a MAX_LOGINS_SHOWN no backend/app.py)
 const ADMIN_MAX_LOGINS = 200;
 
-// Data e hora em hora de Portugal: "2026-10-07T13:21:00+00:00" -> "07/10/2026 14:21"
-const ADMIN_TIME = new Intl.DateTimeFormat('pt-PT', {
-  timeZone: 'Europe/Lisbon', day: '2-digit', month: '2-digit', year: 'numeric',
-  hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-});
-function dateTimeLabel(iso) {
-  if (!iso) return '—';
-  const p = Object.fromEntries(ADMIN_TIME.formatToParts(new Date(iso)).map(x => [x.type, x.value]));
-  return `${p.day}/${p.month}/${p.year} ${p.hour}:${p.minute}`;
-}
+// As datas e horas dos logins (em hora de Portugal) são escritas pelo dateTimeLabel do util.js
 
 // Há quanto tempo: "agora mesmo", "há 5 min", "há 3 h", "há 1 dia", "há 12 dias", "há 2 meses".
 // now em milissegundos (por omissão, agora; os testes passam um valor fixo)

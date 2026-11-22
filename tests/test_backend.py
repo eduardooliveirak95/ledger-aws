@@ -276,16 +276,16 @@ def test_transfer_categories_are_renamed(table):
 def test_daily_backup_setting(table):
     """O backup diário começa desligado, liga-se e desliga-se por utilizador e não aparece nos dados."""
     boto3.client("sesv2").create_email_identity(EmailIdentity="eu@example.com")   # email já verificado no SES
-    assert call("GET /settings") == (200, {"daily_backup": False})
+    assert call("GET /settings") == (200, {"daily_backup": False, "previous_login": None})
     assert call("POST /settings", body={"daily_backup": True})[0] == 400              # conta sem email
     assert call("POST /settings", email="eu@example.com", body={"daily_backup": "sim"})[0] == 400
     assert call("POST /settings", email="eu@example.com", body={"daily_backup": True}) == (200, {"daily_backup": True})
-    assert call("GET /settings") == (200, {"daily_backup": True})
-    assert call("GET /settings", user="u2") == (200, {"daily_backup": False})
+    assert call("GET /settings") == (200, {"daily_backup": True, "previous_login": None})
+    assert call("GET /settings", user="u2") == (200, {"daily_backup": False, "previous_login": None})
     _, d = call("GET /data")
     assert all(not v for v in d.values())
     assert call("POST /settings", email="eu@example.com", body={"daily_backup": False}) == (200, {"daily_backup": False})
-    assert call("GET /settings") == (200, {"daily_backup": False})
+    assert call("GET /settings") == (200, {"daily_backup": False, "previous_login": None})
 
 
 def test_daily_backup_warns_if_the_email_cannot_receive(table, monkeypatch, capsys):
@@ -299,7 +299,7 @@ def test_daily_backup_warns_if_the_email_cannot_receive(table, monkeypatch, caps
     assert call("POST /settings", email="ana@empresa.example", body=on) == (200, {"daily_backup": True})
     status, body = call("POST /settings", email="novo@example.com", body=on)        # nunca carregou no link do SES
     assert status == 200 and body["daily_backup"] is True and "link" in body["warning"]
-    assert call("GET /settings") == (200, {"daily_backup": True})
+    assert call("GET /settings") == (200, {"daily_backup": True, "previous_login": None})
     _, body = call("POST /settings", email="eu@example.com", verified=False, body=on)   # por verificar no Cognito
     assert "não está verificado" in body["warning"]
     assert call("POST /settings", email="novo@example.com", body={"daily_backup": False}) == (200, {"daily_backup": False})
@@ -624,6 +624,47 @@ def test_mov_filters_are_saved_and_validated(table):
     assert [x["name"] for x in d["mov_filters"]] == ["x" * 60]
 
 
+def test_home_layout_is_saved_and_validated(table):
+    """A página inicial à medida (ordem dos blocos e dos cartões e os escondidos) é uma só por utilizador, sem repetidos,
+    só com ids simples, e não vai para o backup."""
+    lay = save([{"kind": "layout", "blocks": ["goals", "cards", "goals", "alerts"], "cards": ["year", "mov"],
+                 "hidden": ["chart", "prop"]}])["saved"][0]
+    assert lay["id"] == "LAYOUT_home"
+    assert (lay["blocks"], lay["cards"], lay["hidden"]) == (["goals", "cards", "alerts"], ["year", "mov"], ["chart", "prop"])
+    # gravar outra vez (com ou sem o id) substitui a mesma: nunca há duas
+    save([{"kind": "layout", "blocks": ["chart"]}])
+    save([{"kind": "layout", "id": "LAYOUT_home", "hidden": []}])
+    _, d = call("GET /data")
+    assert [(x["id"], x["blocks"], x["hidden"]) for x in d["layouts"]] == [("LAYOUT_home", [], [])]
+    for bad in ({"blocks": "goals"}, {"cards": ["Mov"]}, {"hidden": ["a b"]}, {"blocks": [1]}, {"cards": ["x" * 21]},
+                {"blocks": [f"b{i}" for i in range(21)]}, {"id": "LAYOUT_other"}):
+        status, body = call("POST /items", body={"items": [{"kind": "layout", **bad}]})
+        assert status == 400 and body["detail"], bad
+    assert call("GET /data", user="u2")[1]["layouts"] == []   # é só de quem a gravou
+    assert not any("LAYOUT" in content or "chart" in content for _, content in app.backup_files("u1", "2026-11-22"))
+    save([], delete=["LAYOUT_home"])
+    assert call("GET /data")[1]["layouts"] == []
+
+
+def test_month_close_is_saved_and_validated(table):
+    """O fecho de um mês guarda as contas conferidas (sem repetidas) e se ficou fechado; um por mês, fora do backup."""
+    acc = save([{"kind": "account", "name": "Ordem", "opening_balance": 0, "opening_date": "2026-01-01"}])["saved"][0]["id"]
+    c = save([{"kind": "month_close", "month": "2026-10", "accounts_ok": [acc, acc]}])["saved"][0]
+    assert (c["id"], c["month"], c["accounts_ok"], c["closed"]) == ("MCL_2026-10", "2026-10", [acc], False)
+    assert save([dict(c, closed=True)])["saved"][0]["closed"] is True
+    save([{"kind": "month_close", "month": "2026-11"}])
+    # mudar o mês muda a chave: o antigo é apagado (como num valor de um investimento)
+    moved = save([{"kind": "month_close", "id": "MCL_2026-11", "month": "2026-09"}])
+    assert moved["saved"][0]["id"] == "MCL_2026-09" and moved["deleted"] == ["MCL_2026-11"]
+    for bad in ({"month": "2026-13"}, {"month": ""}, {"accounts_ok": ["nope"]}, {"accounts_ok": acc},
+                {"accounts_ok": [acc] * 101}, {"closed": "sim"}, {"id": "MCL_10-2026"}):
+        status, body = call("POST /items", body={"items": [{"kind": "month_close", "month": "2026-10", **bad}]})
+        assert status == 400 and body["detail"], bad
+    _, d = call("GET /data")
+    assert sorted((x["month"], x["closed"]) for x in d["month_closes"]) == [("2026-09", False), ("2026-10", True)]
+    assert not any("MCL_" in content for _, content in app.backup_files("u1", "2026-11-22"))
+
+
 def test_request_size_limit(table):
     """Mais de 300 itens num pedido dá 400."""
     acc = save([{"kind": "account", "name": "A", "opening_balance": 0, "opening_date": "2026-01-01"}])["saved"][0]["id"]
@@ -653,6 +694,21 @@ def test_logins_are_recorded(table):
     assert last["logins"] == 2 and last["email"] == "ana@example.com" and last["at"] == "2099-01-01T00:00:00+00:00"
     # os logins não aparecem nos dados de ninguém
     assert call("GET /data", user="u1")[1]["transactions"] == []
+
+
+def test_previous_login_is_shown_to_the_user(table):
+    """O GET /settings traz o login antes do atual ("previous_login"): nenhum no primeiro login, e só o de quem pede."""
+    assert call("GET /settings")[1]["previous_login"] is None   # ainda sem logins
+    app.record_login("u1", "ana@example.com", datetime(2026, 11, 20, 21, 10, tzinfo=timezone.utc))
+    assert call("GET /settings")[1]["previous_login"] is None   # o primeiro login não tem anterior
+    app.record_login("u1", "ana@example.com", datetime(2026, 11, 22, 9, 30, tzinfo=timezone.utc))
+    app.record_login("u2", "rui@example.com", datetime(2026, 11, 21, 8, 0, tzinfo=timezone.utc))
+    assert call("GET /settings")[1]["previous_login"] == "2026-11-20T21:10:00+00:00"
+    app.record_login("u2", "rui@example.com", datetime(2026, 11, 22, 8, 0, tzinfo=timezone.utc))
+    assert call("GET /settings", user="u2")[1]["previous_login"] == "2026-11-21T08:00:00+00:00"
+    assert call("GET /settings")[1]["previous_login"] == "2026-11-20T21:10:00+00:00"   # o da Ana não mudou
+    last = table.get_item(Key={"user_id": app.LAST_LOGIN_PK, "sk": "u1"})["Item"]
+    assert last["at"] == "2026-11-22T09:30:00+00:00" and last["logins"] == 2
 
 
 def test_login_trigger_never_fails(table, monkeypatch, capsys):

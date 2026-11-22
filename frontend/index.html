@@ -122,6 +122,8 @@
           <span class="side-email" id="user-email"></span>
           <span class="badge admin hidden" id="admin-badge" title="Conta de administrador: vê o separador Utilizadores">Admin</span>
         </div>
+        <!-- o login antes deste (showPreviousLogin no app.js): se não fores tu, alguém tem a tua password -->
+        <div class="side-prev-login hidden" id="prev-login"></div>
         <button class="btn side-btn" id="password-btn" title="Mudar a tua password"><span class="side-btn-ico" aria-hidden="true">🔑</span><span class="side-btn-text">Password</span></button>
         <button class="btn side-btn danger" id="logout-btn"><span class="side-btn-ico" aria-hidden="true">⏻</span><span class="side-btn-text">Sair</span></button>
         <!-- sai também em todos os outros aparelhos (logoutEverywhere no app.js) -->
@@ -140,13 +142,22 @@
       <div class="nw-label">Património líquido</div>
       <div class="home-total-value" id="nw-total">—</div>
     </div>
+    <!-- Os blocos por baixo do património líquido (data-home-block) e os cartões (data-home-card) podem mudar de ordem ou
+         ficar escondidos: "Personalizar", no fim da página (homeLayout no calc.js, applyHomeLayout no app.js) -->
     <!-- avisos: o que precisa de atenção (homeAlerts no calc.js, renderAlerts no app.js); só aparece se houver algum -->
-    <div class="panel hidden" id="alerts-panel" style="margin-top:16px">
+    <div class="panel hidden" id="alerts-panel" data-home-block="alerts" style="margin-top:16px">
       <div class="panel-header"><div class="panel-title">A ver</div></div>
       <div id="alerts"></div>
     </div>
-    <div class="home-grid">
-      <button class="home-card" data-go="mov">
+    <!-- fecho do mês que acabou: o que falta e o resumo (monthClose no calc.js, renderClose no app.js); até se fechar o mês -->
+    <div class="panel hidden" id="close-panel" data-home-block="close" style="margin-top:16px">
+      <div class="panel-header">
+        <div><div class="panel-title" id="close-title">Fecho do mês</div><div class="li-sub" id="close-sub"></div></div>
+      </div>
+      <div id="close-body"></div>
+    </div>
+    <div class="home-grid" data-home-block="cards">
+      <button class="home-card" data-go="mov" data-home-card="mov">
         <span class="home-card-title">Movimentos</span>
         <span class="home-card-desc">Entradas, saídas e transferências entre contas</span>
         <span class="home-card-value" id="nw-accounts">—</span>
@@ -154,26 +165,26 @@
         <!-- saldo previsto no fim do mês e para quantos meses de gastos dá (monthForecast e emergencyMonths no calc.js) -->
         <span class="home-card-extra" id="nw-accounts-extra"></span>
       </button>
-      <button class="home-card" data-go="inv">
+      <button class="home-card" data-go="inv" data-home-card="inv">
         <span class="home-card-title">Investimentos</span>
         <span class="home-card-desc">Quanto investiste, quanto vale e o ganho ou perda</span>
         <span class="home-card-value" id="nw-investments">—</span>
         <span class="home-card-sub">valor atual</span>
       </button>
-      <button class="home-card" data-go="loan">
+      <button class="home-card" data-go="loan" data-home-card="loan">
         <span class="home-card-title">Créditos</span>
         <span class="home-card-desc">Quanto deves, quanto já pagaste e quanto foi juro</span>
         <span class="home-card-value" id="nw-debt">—</span>
         <span class="home-card-sub">em dívida</span>
       </button>
-      <button class="home-card" data-go="prop">
+      <button class="home-card" data-go="prop" data-home-card="prop">
         <span class="home-card-title">Património</span>
         <span class="home-card-desc">Casa, terreno, garagem… e quanto valem</span>
         <span class="home-card-value" id="nw-properties">—</span>
         <span class="home-card-sub">valor dos imóveis</span>
       </button>
       <!-- o que não se gastou este ano, até hoje (yearPeriod e periodTx no calc.js) -->
-      <button class="home-card home-card-wide" data-go="year">
+      <button class="home-card home-card-wide" data-go="year" data-home-card="year">
         <span class="home-card-title">Resumo do ano</span>
         <span class="home-card-desc">O ano num relance: entradas, gastos, poupança, investimentos e créditos. Dá para imprimir ou guardar em PDF.</span>
         <span class="home-card-value" id="nw-year">—</span>
@@ -186,7 +197,7 @@
       </button>
     </div>
     <!-- metas de poupança (goalStatus no calc.js, renderGoals e goalForm no app.js) -->
-    <div class="panel" style="margin-top:16px">
+    <div class="panel" data-home-block="goals" style="margin-top:16px">
       <div class="panel-header">
         <div class="panel-title">Metas de poupança</div>
         <button class="btn" data-action="goal-new">+ Meta</button>
@@ -194,7 +205,7 @@
       <div id="goals"></div>
     </div>
     <!-- evolução do património líquido mês a mês (netWorthSeries no calc.js, renderNetWorthChart no app.js) -->
-    <div class="panel" style="margin-top:16px">
+    <div class="panel" data-home-block="chart" style="margin-top:16px">
       <div class="panel-header">
         <div class="panel-title">Evolução do património líquido</div>
         <!-- quanto terás daqui a uns anos (futureProjection no calc.js, futureModal no app.js) -->
@@ -206,6 +217,8 @@
           são estimados (em linha reta desde o preço de compra, se o tiveres registado).</div>
       </div>
     </div>
+    <!-- fica sempre no fim: os blocos mudam de ordem por cima dele (applyHomeLayout) -->
+    <div class="home-edit" id="home-edit"><button class="btn" data-action="home-layout">✎ Personalizar a página inicial</button></div>
   </section>
 
   <!-- ════════ SEPARADOR: MOVIMENTOS (preenchido por renderMovements no app.js) ════════ -->
@@ -236,6 +249,8 @@
         <button class="btn" data-action="mov-recurring">↻ Despesas fixas</button>
         <button class="btn" data-action="mov-calendar">▦ Calendário</button>
         <button class="btn" data-action="mov-history">Histórico por mês</button>
+        <!-- o que falta para fechar o mês que acabou (ou o mês escolhido, se já tiver acabado); ver closeModal -->
+        <button class="btn" data-action="close-open">✓ Fecho do mês</button>
         <button class="btn" data-action="import" data-format="mov">⬆ Importar</button>
         <button class="btn" data-action="export" data-format="mov">⬇ Exportar</button>
         <button class="btn primary" data-action="tx-new">+ Movimento</button>
@@ -303,6 +318,14 @@
         <div class="panel-body"><div class="chart-box"><canvas id="chart-mov-balance"></canvas></div></div>
       </div>
     </div>
+
+    <!-- Registo rápido (parseQuickEntry no calc.js): "almoço 12,5 revolut #trabalho" + Enter abre o formulário do movimento já
+         preenchido (valor, data, conta, etiquetas e descrição; a categoria é a sugerida); confirma-se e grava-se lá -->
+    <form class="quick-entry" id="quick-entry" autocomplete="off" style="margin-top:16px">
+      <input type="text" class="inline" id="quick-text" maxlength="200" placeholder="Registo rápido: almoço 12,5 revolut #trabalho"
+        aria-label="Registo rápido de um movimento" title="Escreve o que gastaste, o valor e, se quiseres, a conta, o dia (ontem, 21/11) e etiquetas (#férias). Com + à frente do valor é uma entrada. Enter abre o formulário já preenchido.">
+      <button class="btn" type="submit">Preencher</button>
+    </form>
 
     <div class="panel" style="margin-top:16px">
       <div class="panel-header">

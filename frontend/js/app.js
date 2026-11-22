@@ -62,6 +62,7 @@ function logout() {
   updateAdminUi();   // já sem sessão: esconde o selo e o separador Utilizadores
   modal.close();
   hideToast();       // uma mensagem com "Anular" de quem saiu não fica por cima do login
+  showPreviousLogin(null);   // o acesso anterior era de quem saiu
   showLogin();
 }
 // Quando o auth.js não consegue renovar a sessão, faz logout
@@ -78,6 +79,7 @@ $('#login-form').addEventListener('submit', async e => {
     if (challenge) return showNewPassword(challenge);   // primeiro login: escolher a password
     goHomeNow();       // depois do login entra-se sempre na página inicial
     hideLogin();
+    freshLogin = true; // acabou de entrar com a password: o acesso anterior aparece numa mensagem (showPreviousLogin)
     await loadData();
   } catch (err) {
     $('#login-error').textContent = err.message;
@@ -186,14 +188,43 @@ $('#daily-backup').addEventListener('change', async e => {
   }
   box.disabled = false;
 });
-// Mostra no interruptor se o backup diário está ligado (fica bloqueado se não for possível saber)
+// Mostra no interruptor se o backup diário está ligado (fica bloqueado se não for possível saber) e o acesso anterior
 async function loadSettings() {
   try {
-    $('#daily-backup').checked = (await api.getSettings()).daily_backup;
+    const s = await api.getSettings();
+    $('#daily-backup').checked = s.daily_backup;
     $('#daily-backup').disabled = false;
+    showPreviousLogin(s.previous_login);
   } catch {
     $('#daily-backup').disabled = true;
+    freshLogin = false;
   }
+}
+
+// ── o teu acesso anterior (GET /settings: previous_login, o login antes deste, em UTC) ──
+// Fica por baixo do email na barra lateral e, logo a seguir a entrar com a password (não ao recarregar a página), numa
+// mensagem com "Não fui eu". Se a hora não te diz nada, alguém entrou com a tua password.
+let freshLogin = false;
+function showPreviousLogin(iso) {
+  const label = iso ? dateTimeLabel(iso, ' às ').replace('—', '') : '';
+  $('#prev-login').textContent = label ? `Acesso anterior: ${label}` : '';
+  $('#prev-login').classList.toggle('hidden', !label);
+  if (freshLogin && label) toast(`O teu acesso anterior foi a ${label}`, false, { label: 'Não fui eu', onClick: notMeModal });
+  freshLogin = false;
+}
+// "Não fui eu": o que fazer, com os dois botões que resolvem (a password nova e sair de todos os aparelhos)
+function notMeModal() {
+  modal.open({
+    title: 'Não foste tu?',
+    body: `<div class="modal-hint" style="font-size:14px;color:var(--text)">Se não reconheces o acesso anterior, alguém pode ter a tua
+      password. Muda-a já e depois carrega em "Sair em todos", para acabar com as sessões abertas noutros aparelhos.
+      Se não consegues mudar a password, fala com o administrador.</div>`,
+    footer: [
+      { label: 'Fechar', onClick: () => modal.close() },
+      { label: 'Sair em todos', cls: 'danger', onClick: () => { modal.close(); logoutEverywhere(); } },
+      { label: 'Mudar password', cls: 'primary', onClick: () => { modal.close(); passwordForm(); } },
+    ],
+  });
 }
 
 // Carrega tudo da API (GET /data) para D e desenha o ecrã (e, em paralelo, as definições)
@@ -360,7 +391,14 @@ function renderNetWorth() {
     : `poupado em ${yp.year}` + (yt.in > 0 ? ` · ${Math.round(yt.saved / yt.in * 100)}% do que entrou` : '');
   // os mesmos números na barra lateral do telemóvel (data-copy = o id do número na página inicial)
   $$('[data-copy]').forEach(el => { el.textContent = $('#' + el.dataset.copy).textContent; });
-  if (S.tab === 'home') { renderAlerts(); renderGoals(); renderNetWorthChart(); }
+  if (S.tab === 'home') {
+    // os blocos escondidos na página inicial à medida não se desenham (voltam a ser desenhados quando se mostrarem)
+    const off = new Set(applyHomeLayout().blocks.filter(b => b.hidden).map(b => b.id));
+    if (!off.has('alerts')) renderAlerts();
+    if (!off.has('goals')) renderGoals();
+    if (!off.has('chart')) renderNetWorthChart();
+  }
+  renderClose();   // o cartão do fecho do mês (na página inicial) e a janela dele, se estiver aberta
 }
 
 // Gráfico da página inicial: o património líquido no fim de cada mês; a tooltip mostra de que é feito
@@ -640,6 +678,182 @@ function alertAction(type, arg) {
   const goal = findById('goals', arg);
   if (goal && type === 'goal-edit') return goalForm(goal);
   if (goal && type === 'goal-monthly') return reserveMonthly(goal);
+}
+
+// ── página inicial à medida (homeLayout no calc.js; janela "Personalizar a página inicial") ──
+// Põe os blocos e os cartões pela ordem escolhida e esconde os escondidos (classe layout-off, à parte do hidden que cada bloco
+// tem quando não há nada para mostrar). Os blocos ficam antes do botão "Personalizar" e os cartões antes do Utilizadores, que
+// estão sempre no fim. Só mexe na ordem se ela mudou: mudar um gráfico de sítio sem precisar fazia-o piscar.
+function applyHomeLayout() {
+  const lay = homeLayout(), home = $('#tab-home'), grid = $('.home-grid', home);
+  const place = (items, attr, parent, before) => {
+    const els = items.map(x => $(`[${attr}="${x.id}"]`, parent));
+    items.forEach((x, i) => els[i].classList.toggle('layout-off', x.hidden));
+    const now = $$(`[${attr}]`, parent);
+    if (els.some((el, i) => now[i] !== el)) for (const el of els) parent.insertBefore(el, before);
+  };
+  place(lay.blocks, 'data-home-block', home, $('#home-edit'));
+  place(lay.cards, 'data-home-card', grid, $('.home-card-admin', grid));
+  return lay;
+}
+// A janela "Personalizar a página inicial": uma caixa para mostrar ou esconder cada bloco e cada cartão e ↑ ↓ para os mudar de
+// sítio. Grava o registo LAYOUT_home (igual em todos os aparelhos); "Repor" apaga-o e volta à ordem de origem.
+function homeLayoutModal() {
+  const lay = homeLayout(), lists = { blocks: lay.blocks, cards: lay.cards };
+  const body = document.createElement('div');
+  body.style.cssText = 'display:flex;flex-direction:column;gap:14px';
+  const group = (key, title) => `<div class="layout-group"><div class="layout-title">${title}</div>${lists[key].map((x, i) => `
+    <div class="layout-row">
+      <label class="layout-show"><input type="checkbox" data-lay-show="${key}" data-lay-i="${i}"${x.hidden ? '' : ' checked'}> ${esc(x.label)}</label>
+      <button class="icon-btn" type="button" data-lay-key="${key}" data-lay-i="${i}" data-lay-move="-1" aria-label="Subir: ${esc(x.label)}"${i === 0 ? ' disabled' : ''}>↑</button>
+      <button class="icon-btn" type="button" data-lay-key="${key}" data-lay-i="${i}" data-lay-move="1" aria-label="Descer: ${esc(x.label)}"${i === lists[key].length - 1 ? ' disabled' : ''}>↓</button>
+    </div>`).join('')}</div>`;
+  const draw = () => {
+    body.innerHTML = `<div class="modal-hint">Escolhe o que aparece na página inicial e por que ordem (↑ ↓). O património líquido fica sempre
+      no topo e o separador Utilizadores, se o tiveres, no fim. Fica guardado na tua conta, igual em todos os aparelhos.</div>
+      ${group('blocks', 'Blocos')}${group('cards', 'Cartões dos separadores')}`;
+  };
+  body.addEventListener('change', e => {
+    const box = e.target.closest('[data-lay-show]');
+    if (box) lists[box.dataset.layShow][Number(box.dataset.layI)].hidden = !box.checked;
+  });
+  body.addEventListener('click', e => {
+    const b = e.target.closest('[data-lay-move]');
+    if (!b) return;
+    const { layKey: key, layMove: move } = b.dataset, list = lists[key], i = Number(b.dataset.layI), j = i + Number(move);
+    if (j < 0 || j >= list.length) return;
+    [list[i], list[j]] = [list[j], list[i]];
+    draw();
+    // o foco segue o que se mudou de sítio, para se poder carregar outra vez (também só com o teclado)
+    $(`[data-lay-key="${key}"][data-lay-i="${j}"][data-lay-move="${move}"]:not(:disabled)`, body)?.focus();
+  });
+  draw();
+  const save = async (items, deletes, done) => {
+    try { await saveItems(items, deletes); modal.close(); toast(done); } catch (e) { toast(e.message, true); }
+  };
+  modal.open({ title: 'Personalizar a página inicial', body, footer: [
+    ...(D.layouts.length ? [{ label: 'Repor', style: 'margin-right:auto',
+      onClick: () => save([], D.layouts.map(x => x.id), 'A página inicial voltou à ordem de origem') }] : []),
+    { label: 'Cancelar', onClick: () => modal.close() },
+    { label: 'Guardar', cls: 'primary', onClick: () => save([homeLayoutItem(lists)], [], 'Página inicial guardada') },
+  ] });
+}
+
+// ── fecho do mês (cartão da página inicial e janela do botão "✓ Fecho do mês" dos Movimentos; monthClose no calc.js) ──
+// No início de cada mês, o que falta para dar por fechado o mês que acabou: marcar as contas com o extrato importado e o saldo
+// conferido, os valores dos investimentos e os saldos dos créditos, o "a receber" e os movimentos em "Outros"; e o resumo do mês.
+// O cartão aparece desde o dia 1 até se carregar em "Fechar <mês>" (o registo MCL_<mês> fica com closed); a janela abre qualquer
+// mês que já acabou (o escolhido nos Movimentos ou o anterior) e reabre um mês fechado.
+const CLOSE_STEP = {
+  accounts: 'Extratos importados e saldos conferidos', investments: 'Valor dos investimentos no fim do mês',
+  loans: 'Saldo dos créditos no fim do mês', receivables: 'A receber', others: 'Movimentos em "Outros"',
+};
+function closeHtml(c, summaryOpen = false) {
+  const name = MONTHS_PT[Number(c.month.slice(5)) - 1], s = c.summary;
+  const step = (key, text, actions = '') => {
+    const st = c.steps.find(x => x.key === key);
+    if (!st) return '';
+    return `<div class="close-step${st.done ? ' done' : ''}">
+      <span class="close-ico" aria-label="${st.done ? 'Feito' : 'Por fazer'}">${st.done ? '✓' : '•'}</span>
+      <div class="close-main"><div class="close-name">${CLOSE_STEP[key]}</div><div class="close-text">${text}</div></div>
+      ${actions && !st.done ? `<div class="close-actions">${actions}</div>` : ''}</div>`;
+  };
+  const lastOf = x => `${esc(x.name)} (${x.last ? `último: ${monthLabel(x.last)}` : 'nenhum'})`;
+  const accounts = `Marca cada conta depois de importares o extrato de ${name} e de o saldo no fim do mês bater com o do banco.
+    <div class="close-accounts">${c.accounts.map(a => `<div class="close-acc">
+      <label><input type="checkbox" data-close-acc="${esc(a.id)}" data-close-month="${c.month}"${a.ok ? ' checked' : ''}> ${esc(a.name)}</label>
+      <span class="li-sub">${a.last ? `último movimento a ${dateLabel(a.last)}` : 'sem movimentos'}</span>
+      <button class="btn" data-close-check="${esc(a.id)}" data-close-month="${c.month}">Conferir</button></div>`).join('')}</div>`;
+  const due = c.receivables.list;
+  const avg = s.avgOut > 0 ? Math.round((s.out - s.avgOut) / s.avgOut * 100) : null;
+  const lines = [
+    avg !== null && `Gastaste <b>${Math.abs(avg)}% ${avg >= 0 ? 'acima' : 'abaixo'}</b> da média dos meses anteriores (${eur(s.avgOut)}/mês).`,
+    s.top.length && `Onde gastaste mais: ${s.top.map(([cat, v]) => `${esc(cat)} <b>${eur(v)}</b>`).join(' · ')}.`,
+    s.unusual.length && `Fora do normal: ${s.unusual.map(x => `${esc(x.category)} <b>${eur(x.spent)}</b>`).join(' · ')}.`,
+    s.over.length && `Orçamentos passados: ${s.over.map(b => `${esc(b.category)} <b>${eur(-b.left)}</b> acima`).join(' · ')}.`,
+  ].filter(Boolean);
+  return `${step('accounts', accounts, '<button class="btn" data-action="import" data-format="mov">⬆ Importar</button>')}
+    ${step('investments', c.investments.length ? `Sem o valor de ${name}: ${c.investments.map(lastOf).join(', ')}.` : `Todos têm o valor de ${name}.`,
+      '<button class="btn" data-action="inv-month">Atualizar mês</button>')}
+    ${step('loans', c.loans.length ? `Sem o saldo de ${name}: ${c.loans.map(lastOf).join(', ')}.` : `Todos têm o saldo de ${name}.`,
+      '<button class="btn" data-action="loan-month">Atualizar mês</button>')}
+    ${step('receivables', due.length ? `${due.length} ${due.length === 1 ? 'gasto' : 'gastos'} com <b>${eur(c.receivables.total)}</b> por receber
+      (o mais antigo de ${dateLabel(due[0].t.date)}). Marca o que já recebeste.` : `Nada por receber de gastos até ao fim de ${name}.`,
+      '<button class="btn" data-action="close-due">Ver</button>')}
+    ${step('others', c.others ? `${c.others} ${c.others === 1 ? 'movimento' : 'movimentos'} de ${name} na categoria "Outros": dá-lhes a
+      categoria certa (a sugestão das categorias aprende com isso).` : `Todos os movimentos de ${name} têm uma categoria.`,
+      `<button class="btn" data-action="close-others" data-close-month="${c.month}">Ver</button>`)}
+    <details class="close-summary"${summaryOpen ? ' open' : ''}><summary>Resumo de ${monthLabel(c.month)}</summary>
+      ${s.in || s.out ? `<div class="close-nums">
+        <div><span class="li-sub">Entradas</span><b class="pos">${eur(s.in)}</b></div>
+        <div><span class="li-sub">Gastos</span><b class="neg">${eur(s.out)}</b></div>
+        <div><span class="li-sub">Poupança</span><b class="${signClass(s.saved)}">${eurSigned(s.saved)}</b></div>
+        <div><span class="li-sub">Taxa de poupança</span><b>${s.rate === null ? '—' : `${Math.round(s.rate * 100)}%`}</b></div></div>
+        ${lines.map(l => `<div class="close-line">${l}</div>`).join('')}` : `<div class="close-line">Sem entradas nem gastos em ${name}.</div>`}
+    </details>
+    <div class="close-foot">${c.closed ? `<span class="pos">Mês fechado ✓</span>
+      <button class="btn" data-action="close-reopen" data-close-month="${c.month}">Reabrir</button>`
+      : `<button class="btn primary" data-action="close-month" data-close-month="${c.month}">Fechar ${name}</button>`}</div>`;
+}
+// Redesenha o cartão da página inicial (só com ela à vista e o bloco por esconder) e a janela, se estiver aberta. O resumo
+// fica aberto ou fechado como estava.
+function renderClose() {
+  const panel = $('#close-panel');
+  if (S.tab === 'home' && !panel.classList.contains('layout-off')) {
+    const c = monthClose();
+    panel.classList.toggle('hidden', !c.show);
+    if (c.show) {
+      const open = !!$('#close-body details[open]');
+      $('#close-title').textContent = `Fecho de ${monthLabel(c.month)}`;
+      $('#close-sub').textContent = `${c.done} de ${c.steps.length} ${c.steps.length === 1 ? 'feito' : 'feitos'}`;
+      $('#close-body').innerHTML = `<div class="close-progress"><div class="progress goal-bar ${c.done === c.steps.length ? 'done' : 'behind'}"
+        role="progressbar" aria-label="Fecho de ${monthLabel(c.month)}" aria-valuenow="${c.done}" aria-valuemin="0" aria-valuemax="${c.steps.length}">
+        <div style="width:${c.steps.length ? c.done / c.steps.length * 100 : 0}%"></div></div></div>${closeHtml(c, open)}`;
+    }
+  }
+  const box = $('#modal.open [data-close-modal]');
+  if (box) box.innerHTML = closeHtml(monthClose(box.dataset.closeModal), !!$('details[open]', box));
+}
+// A janela "✓ Fecho do mês" (Movimentos): o mês escolhido, se for um mês que já acabou, ou o anterior ao atual
+function closeModal(month = S.movMode === 'month' && S.movAnchor < thisMonth() ? S.movAnchor : closeMonth()) {
+  const body = document.createElement('div');
+  body.dataset.closeModal = month;
+  body.innerHTML = closeHtml(monthClose(month), true);
+  modal.open({ title: `Fecho de ${monthLabel(month)}`, body, wide: true });
+}
+// Marcar / desmarcar uma conta como conferida: grava todas as caixas dessa lista (as do ecrã, que já têm os cliques que ainda
+// estão a ser gravados). Se falhar, a lista volta ao que está gravado.
+async function toggleCloseAccount(box) {
+  const ok = $$('[data-close-acc]', box.closest('.close-accounts')).filter(x => x.checked).map(x => x.dataset.closeAcc);
+  try { await saveItems([monthCloseItem(box.dataset.closeMonth, { accountsOk: ok })]); }
+  catch (e) { toast(e.message, true); renderClose(); }
+}
+// Fechar (ou reabrir) um mês. Com coisas por fazer, pergunta primeiro; a pergunta toma o lugar da janela do fecho, que depois
+// volta a abrir, já com o mês fechado.
+async function setMonthClosed(month, closed) {
+  const c = monthClose(month), left = c.steps.length - c.done, inModal = !!$('#modal.open [data-close-modal]');
+  if (closed && left && !await confirmDialog(`Ainda ${left === 1 ? 'falta 1 coisa' : `faltam ${left} coisas`} na lista de
+    ${monthLabel(month)}. Fechar o mês na mesma?`, 'Fechar o mês')) return;
+  try {
+    await saveItems([monthCloseItem(month, { closed })]);
+    toast(`Mês de ${monthLabel(month)} ${closed ? 'fechado' : 'reaberto'}`);
+    if (inModal && !$('#modal.open [data-close-modal]')) closeModal(month);
+  } catch (e) { toast(e.message, true); }
+}
+// "Ver" do "a receber": o painel dos Movimentos
+function showReceivables() {
+  modal.close();
+  go('mov');
+  $('#due-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+// "Ver" dos "Outros": os Movimentos desse mês só com a categoria "Outros" (entradas e saídas)
+function showOthers(month) {
+  Object.assign(S, { movMode: 'month', movAnchor: month, movAccount: '', movCatIn: ['Outros'], movCatOut: ['Outros'], movSearch: '' });
+  $$('#mov-period-mode button').forEach(x => x.classList.toggle('active', x.dataset.mode === 'month'));
+  $('#mov-search').value = '';
+  modal.close();
+  if (S.tab === 'mov') renderMovements(); else go('mov');
+  $('#mov-table').closest('.panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 // ── metas de poupança (painel da página inicial; goalStatus e reserveSources no calc.js) ──
@@ -1281,7 +1495,7 @@ function accountForm(acc = null, after) {
 // ── conferir o saldo de uma conta com o do banco (botão "Conferir saldo" nas Contas; balanceCheck no calc.js) ──
 // Escreves o saldo que o banco mostra num dia e a app diz se bate com o dela. Se não bater, dá para ir ver os movimentos da
 // conta nesse mês ou acertar o saldo inicial (como na importação dos extratos).
-function balanceCheckModal(accountId = S.movAccount) {
+function balanceCheckModal(accountId = S.movAccount, day = todayISO()) {
   if (!D.accounts.length) { toast('Primeiro cria uma conta'); return accountForm(); }
   const today = todayISO();
   const body = document.createElement('div');
@@ -1292,7 +1506,7 @@ function balanceCheckModal(accountId = S.movAccount) {
     <div class="field-row">
       <div class="field"><label for="chk-acc">Conta</label><select id="chk-acc">${accountOptions([], true).map(o =>
         `<option value="${esc(o.value)}"${o.value === accountId ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select></div>
-      <div class="field"><label for="chk-date">Dia</label><input id="chk-date" type="date" value="${today}" max="${today}"></div>
+      <div class="field"><label for="chk-date">Dia</label><input id="chk-date" type="date" value="${day > today ? today : day}" max="${today}"></div>
     </div>
     <div class="field"><label for="chk-bank">Saldo no banco nesse dia (€)</label><input id="chk-bank" inputmode="decimal" placeholder="ex.: 1234,56"></div>
     <div id="chk-result"></div>`;
@@ -1324,7 +1538,7 @@ function balanceCheckModal(accountId = S.movAccount) {
       $$('#mov-period-mode button').forEach(x => x.classList.toggle('active', x.dataset.mode === 'month'));
       $('#mov-search').value = '';
       modal.close();
-      renderMovements();
+      if (S.tab === 'mov') renderMovements(); else go('mov');   // também se abre na página inicial (o "Conferir" do fecho do mês)
       return $('#mov-table').closest('.panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
     const a = findById('accounts', res.id);
@@ -1430,6 +1644,22 @@ function txForm(tx = null, preset = {}) {
     danger: tx && { label: 'Apagar', onClick: () => deleteTx(tx.id) },
   });
 }
+// ── registo rápido (a caixa por cima da tabela dos Movimentos; parseQuickEntry no calc.js) ──
+// Abre o formulário do movimento já preenchido com o que se percebeu do texto (a categoria fica a sugerida pela descrição):
+// confirma-se, ou corrige-se, lá antes de gravar. A caixa fica vazia para o próximo.
+$('#quick-entry').addEventListener('submit', e => {
+  e.preventDefault();
+  const input = $('#quick-text'), text = input.value.trim();
+  if (!text) return input.focus();
+  const q = parseQuickEntry(text);
+  const preset = { direction: q.direction, description: q.description, tags: q.tags.join(', ') };
+  if (q.amount > 0) preset.amount = numInput(q.amount);
+  if (q.date) preset.date = q.date;
+  if (q.account_id) preset.account_id = q.account_id;
+  input.value = '';
+  txForm(null, preset);
+});
+
 // Apagar um movimento (depois de confirmar)
 async function deleteTx(id) {
   const t = findById('transactions', id);
@@ -2723,7 +2953,7 @@ $('#adm-filter').addEventListener('change', e => { S.adminUser = e.target.value;
 // Um único "listener" para a página toda (delegação de eventos): funciona também para botões
 // criados depois, dentro das tabelas. O atributo diz o que fazer (ex.: data-edit-tx="<id>").
 document.addEventListener('click', e => {
-  const el = e.target.closest('[data-action],[data-edit-acc],[data-edit-tx],[data-del-tx],[data-edit-inv],[data-sell-inv],[data-inv-focus],[data-tag],[data-due-paid],[data-edit-imv],[data-del-imv],[data-edit-loan],[data-sim-loan],[data-edit-prop],[data-edit-goal],[data-goal-reserve],[data-del-gres],[data-alert-act],[data-alert-dismiss]');
+  const el = e.target.closest('[data-action],[data-edit-acc],[data-edit-tx],[data-del-tx],[data-edit-inv],[data-sell-inv],[data-inv-focus],[data-tag],[data-due-paid],[data-edit-imv],[data-del-imv],[data-edit-loan],[data-sim-loan],[data-edit-prop],[data-edit-goal],[data-goal-reserve],[data-del-gres],[data-alert-act],[data-alert-dismiss],[data-close-acc],[data-close-check]');
   if (!el) return;
   const d = el.dataset;
   if (d.invFocus) { e.preventDefault(); S.invFilter = d.invFocus; renderInvestments(); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
@@ -2744,6 +2974,8 @@ document.addEventListener('click', e => {
   if (d.delGres) return deleteReservation(d.delGres);
   if (d.alertAct) return alertAction(d.alertAct, d.alertArg);
   if (d.alertDismiss) return dismissAlert(d.alertDismiss);
+  if (d.closeAcc) return toggleCloseAccount(el);
+  if (d.closeCheck) return balanceCheckModal(d.closeCheck, lastDayOf(d.closeMonth));
   switch (d.action) {
     case 'acc-new': return accountForm();
     case 'acc-check': return balanceCheckModal();
@@ -2760,6 +2992,12 @@ document.addEventListener('click', e => {
     case 'loan-month': return loanMonthGrid();
     case 'prop-new': return propertyForm();
     case 'goal-new': return goalForm();
+    case 'home-layout': return homeLayoutModal();
+    case 'close-open': return closeModal();
+    case 'close-month': return setMonthClosed(d.closeMonth, true);
+    case 'close-reopen': return setMonthClosed(d.closeMonth, false);
+    case 'close-due': return showReceivables();
+    case 'close-others': return showOthers(d.closeMonth);
     case 'alloc-targets': return allocTargetsModal();
     case 'year-print': return window.print();
     case 'import': return openImport(d.format);

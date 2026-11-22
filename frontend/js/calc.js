@@ -1,7 +1,7 @@
 // ── calc.js: todos os números que a app mostra são calculados aqui, a partir dos dados em bruto ──
 // O backend só guarda e devolve os registos; saldos, ganhos e dívidas são calculados no browser.
 // D = { accounts, transactions, investments, inv_moves, valuations, loans, loan_balances, properties, bank_formats, budgets, goals,
-//       reservations, alloc_targets, mov_filters }
+//       reservations, alloc_targets, mov_filters, layouts, month_closes }
 // é a cópia local de tudo o que veio de GET /data (uma lista por tipo de item).
 
 let D = emptyData();
@@ -12,13 +12,16 @@ function emptyData() {
     goals: [],          // goals: metas de poupança (ver goalStatus)
     reservations: [],   // reservations: dinheiro de contas e investimentos posto de lado para as metas (ver reservedTotal)
     alloc_targets: [],  // alloc_targets: percentagem alvo de cada tipo de investimento (ver allocation)
-    mov_filters: [] };  // mov_filters: filtros guardados dos Movimentos (ver movFilterState)
+    mov_filters: [],    // mov_filters: filtros guardados dos Movimentos (ver movFilterState)
+    layouts: [],        // layouts: a página inicial à medida (um só, LAYOUT_home; ver homeLayout)
+    month_closes: [] }; // month_closes: o fecho de cada mês (contas conferidas e se ficou fechado; ver monthClose)
 }
 // Tipo de item -> nome da lista em D (o mesmo mapa que existe no backend)
 const COLLECTION_OF = {
   account: 'accounts', transaction: 'transactions', investment: 'investments', inv_move: 'inv_moves',
   valuation: 'valuations', loan: 'loans', loan_balance: 'loan_balances', property: 'properties', bank_format: 'bank_formats',
   budget: 'budgets', goal: 'goals', reservation: 'reservations', alloc_target: 'alloc_targets', mov_filter: 'mov_filters',
+  layout: 'layouts', month_close: 'month_closes',
 };
 
 /**
@@ -1511,6 +1514,175 @@ function homeAlerts() {
   }
   const order = { bad: 0, warn: 1, info: 2 };
   return out.sort((a, b) => order[a.level] - order[b.level]);
+}
+
+// ════════ FECHO DO MÊS ════════
+
+/** O mês a fechar: o que acabou (o anterior ao atual). */
+function closeMonth() { return addMonths(thisMonth(), -1); }
+
+/**
+ * O fecho de um mês (por omissão o que acabou): o que falta para o dar por fechado e o resumo dele. É o cartão "Fecho do mês" da
+ * página inicial e a janela do botão "✓ Fecho do mês" dos Movimentos. Os passos (só os que se aplicam; done = já está):
+ *   - accounts: as contas abertas que já existiam no fim do mês, cada uma com a data do último movimento até lá (last, para se
+ *     ver se falta importar o extrato) e se já foi dada por conferida (ok: extrato importado e saldo batido com o banco; marca-se
+ *     à mão e fica no registo MCL_<mês>, igual em todos os aparelhos)
+ *   - investments: os investimentos com valor, já começados nesse mês, sem o valor dele (missing; como o aviso do "A ver")
+ *   - loans: os créditos por pagar, já começados nesse mês, sem o saldo dele (missing)
+ *   - receivables: o "a receber" de gastos até ao fim do mês ainda por receber (list, total); sempre, feito se não houver
+ *   - others: os movimentos do mês na categoria "Outros", a que a importação usa quando não sabe a categoria (count); sempre
+ * summary: os totais do mês (flowTotals: in, out, saved), a taxa de poupança (rate, null sem entradas), a média dos gastos por mês
+ * dos 12 meses antes (avgOut, null sem meses antes), as 3 categorias com mais gastos (top: [categoria, valor]), os gastos fora do
+ * normal (unusualSpending) e os orçamentos passados (over).
+ * show: se o cartão da página inicial aparece (já havia contas ou movimentos nesse mês e ainda não foi fechado).
+ */
+function monthClose(month = closeMonth()) {
+  const end = lastDayOf(month);
+  const record = D.month_closes.find(c => c.month === month) || null;
+  const okIds = new Set(record?.accounts_ok || []);
+  const lastMove = Object.create(null);   // conta -> data do último movimento até ao fim do mês
+  for (const t of D.transactions) {
+    if (t.date > end) continue;
+    for (const id of [t.account_id, t.to_account_id]) if (id && !(lastMove[id] >= t.date)) lastMove[id] = t.date;
+  }
+  const accounts = sortByName(D.accounts.filter(a => !a.archived && (!a.opening_date || a.opening_date <= end)))
+    .map(a => ({ id: a.id, name: a.name, last: lastMove[a.id] || null, ok: okIds.has(a.id) }));
+  const invs = D.investments.filter(i => !i.archived && (firstInvestmentMonth([i.id]) || '9999-12') <= month && investmentSummary(i.id).value > 0)
+    .map(i => ({ id: i.id, name: i.name, last: investmentSummary(i.id).lastValMonth || null }));
+  const loans = D.loans.filter(l => !l.archived && ymOf(l.start_date) <= month && loanCurrent(l) > 0).map(l => ({ id: l.id, name: l.name,
+    last: D.loan_balances.reduce((m, b) => (b.loan_id === l.id && b.month > m ? b.month : m), '') || null }));
+  const due = receivables().list.filter(x => x.t.date <= end);
+  const monthTx = filterTx({ from: month, to: month });
+  const others = monthTx.filter(t => t.direction !== 'transfer' && t.category === 'Outros').length;
+
+  const steps = [];
+  if (accounts.length) steps.push({ key: 'accounts', done: accounts.every(a => a.ok) });
+  const missingInv = invs.filter(i => !(i.last >= month)), missingLoans = loans.filter(l => !(l.last >= month));
+  if (invs.length) steps.push({ key: 'investments', done: !missingInv.length });
+  if (loans.length) steps.push({ key: 'loans', done: !missingLoans.length });
+  steps.push({ key: 'receivables', done: !due.length });
+  steps.push({ key: 'others', done: !others });
+
+  const totals = flowTotals(monthTx);
+  const avg = movComparison('month', month, {}).avg;
+  const first = firstTxMonth();
+  return {
+    month, record, closed: !!record?.closed,
+    show: !record?.closed && ((first && first <= month) || accounts.length > 0),
+    accounts, investments: missingInv, loans: missingLoans,
+    receivables: { list: due, total: round2(due.reduce((s, x) => s + x.left, 0)) }, others,
+    steps, done: steps.filter(x => x.done).length,
+    summary: { ...totals, rate: totals.in > 0 ? totals.saved / totals.in : null, avgOut: avg ? round2(avg.totals.out) : null,
+      top: categoryTotals(monthTx).slice(0, 3), unusual: unusualSpending(month), over: budgetStatus(month, month).filter(b => b.state === 'over') },
+  };
+}
+
+/** O registo do fecho de um mês a gravar, com as contas conferidas (accountsOk) e se ficou fechado (closed). */
+function monthCloseItem(month, { accountsOk, closed } = {}) {
+  const rec = D.month_closes.find(c => c.month === month);
+  return { kind: 'month_close', id: rec?.id, month, accounts_ok: accountsOk ?? rec?.accounts_ok ?? [], closed: closed ?? !!rec?.closed };
+}
+
+// ════════ PÁGINA INICIAL À MEDIDA ════════
+// Os blocos da página inicial (por baixo do património líquido, que fica sempre no topo) e os cartões dos separadores, pela
+// ordem de origem. O cartão Utilizadores (só para administradores) fica sempre no fim e não entra na lista.
+const HOME_BLOCKS = [
+  { id: 'alerts', label: 'A ver (avisos)' },
+  { id: 'close', label: 'Fecho do mês' },
+  { id: 'cards', label: 'Cartões dos separadores' },
+  { id: 'goals', label: 'Metas de poupança' },
+  { id: 'chart', label: 'Evolução do património líquido' },
+];
+const HOME_CARDS = [
+  { id: 'mov', label: 'Movimentos' },
+  { id: 'inv', label: 'Investimentos' },
+  { id: 'loan', label: 'Créditos' },
+  { id: 'prop', label: 'Património' },
+  { id: 'year', label: 'Resumo do ano' },
+];
+/**
+ * A página inicial à medida (o registo LAYOUT_home, gravado na janela "Personalizar"): os blocos e os cartões pela ordem
+ * escolhida, cada um com hidden (escondido). Os ids que a app já não conhece são ignorados e os que não estavam na lista (um
+ * bloco novo numa versão seguinte) ficam no fim, à vista. Sem registo: a ordem de origem, tudo à vista.
+ * { blocks: [{ id, label, hidden }], cards: [...] }
+ */
+function homeLayout(saved = D.layouts[0]) {
+  const hidden = new Set(saved?.hidden || []);
+  const order = (all, ids = []) => {
+    const out = [];
+    for (const id of ids) { const x = all.find(y => y.id === id); if (x && !out.includes(x)) out.push(x); }
+    for (const x of all) if (!out.includes(x)) out.push(x);
+    return out.map(x => ({ ...x, hidden: hidden.has(x.id) }));
+  };
+  return { blocks: order(HOME_BLOCKS, saved?.blocks), cards: order(HOME_CARDS, saved?.cards) };
+}
+/** O registo a gravar para uma página inicial ({ blocks, cards } como os de homeLayout). */
+function homeLayoutItem({ blocks, cards }) {
+  return { kind: 'layout', id: 'LAYOUT_home', blocks: blocks.map(x => x.id), cards: cards.map(x => x.id),
+    hidden: [...blocks, ...cards].filter(x => x.hidden).map(x => x.id) };
+}
+
+// ════════ REGISTO RÁPIDO ════════
+/**
+ * O registo rápido dos Movimentos: um texto como "almoço 12,5 revolut #trabalho" passa a valores para o formulário do movimento,
+ * que abre preenchido (a pessoa confirma e grava). Lê, por qualquer ordem:
+ *   - o valor: um número (12 | 12,5 | 12.50 | 1.234,56 | 12€). Com vários números, o que tiver sinal, € ou casas decimais (ou
+ *     então o último); os outros ficam na descrição ("2 cafés 1,60" = 1,60 €). Com "+" à frente é uma entrada ("+1800 salário"),
+ *     senão uma saída
+ *   - a data: "hoje", "ontem", "anteontem" ou um dia ("21/11", "21-11", "21/11/2026"); sem ano, o deste ano (ou do anterior, se
+ *     ficasse no futuro). Sem data, fica a de hoje (a do formulário)
+ *   - a conta: uma palavra com 3 letras ou mais que é o início do nome de uma conta aberta, ou de uma palavra dele (sem maiúsculas
+ *     nem acentos: "rev" = "Revolut", "ordem" = "Conta à ordem"). Se servir a mais do que uma, fica na descrição
+ *   - as etiquetas: as palavras com "#" (até MAX_TAGS, sem repetidas)
+ *   - a descrição: as outras palavras, pela ordem em que foram escritas
+ * A categoria fica a cargo do formulário (sugerida pela descrição, como sempre). Devolve só o que percebeu:
+ * { direction, amount?, date?, account_id?, tags: [], description }.
+ */
+function parseQuickEntry(text, today = todayISO()) {
+  const words = String(text ?? '').trim().split(/\s+/).filter(Boolean);
+  const NUM = /^([+-])?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)(€|eur|euros?)?$/i;
+  const nums = words.map((w, i) => ({ w, i, m: w.match(NUM) })).filter(x => x.m);
+  const strong = nums.filter(x => x.m[1] || x.m[3] || /[.,]\d{1,2}$/.test(x.m[2]));
+  const pick = (strong.length ? strong : nums).at(-1);
+  const out = { direction: pick?.m[1] === '+' ? 'in' : 'out', tags: [], description: '' };
+  if (pick) out.amount = parseMoney(pick.m[2]);
+  const used = new Set(pick ? [pick.i] : []);
+
+  const year = today.slice(0, 4);
+  const dateOf = w => {
+    const k = norm(w);
+    if (k === 'hoje') return today;
+    if (k === 'ontem') return addDays(today, -1);
+    if (k === 'anteontem') return addDays(today, -2);
+    const m = w.match(/^(\d{1,2})[/-](\d{1,2})(?:[/-](\d{4}|\d{2}))?$/);
+    if (!m) return null;
+    const y = m[3] ? (m[3].length === 2 ? '20' + m[3] : m[3]) : year;
+    const iso = parseDateFlexible(`${m[1]}/${m[2]}/${y}`);
+    return iso && !m[3] && iso > today ? parseDateFlexible(`${m[1]}/${m[2]}/${Number(y) - 1}`) : iso;
+  };
+  const accounts = D.accounts.filter(a => !a.archived);
+  const accountOf = w => {
+    const k = norm(w);
+    if (k.length < 3) return null;
+    const hits = accounts.filter(a => norm(a.name).startsWith(k) || norm(a.name).split(/\s+/).some(p => p.startsWith(k)));
+    return hits.length === 1 ? hits[0].id : null;
+  };
+  const rest = [];
+  words.forEach((w, i) => {
+    if (used.has(i)) return;
+    if (w.startsWith('#')) {
+      const tag = cleanTag(w);
+      if (tag && out.tags.length < MAX_TAGS && !out.tags.some(x => x.toLowerCase() === tag.toLowerCase())) out.tags.push(tag);
+      return;
+    }
+    const d = !out.date && dateOf(w);
+    if (d) { out.date = d; return; }
+    const acc = !out.account_id && accountOf(w);
+    if (acc) { out.account_id = acc; return; }
+    rest.push(w);
+  });
+  out.description = rest.join(' ');
+  return out;
 }
 
 // ════════ RESUMO DO ANO ════════

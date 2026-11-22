@@ -57,10 +57,11 @@ jobs:
       # Testes da importação dos extratos do banco, do separador Utilizadores, da renovação da sessão, da pesquisa nos Movimentos, do tema,
       # da evolução do património líquido, das despesas fixas, do simulador de amortização, da comparação nos cartões, dos orçamentos,
       # da rentabilidade anual dos investimentos, do backup (exportar e voltar a importar dá os mesmos dados), das metas de poupança,
-      # dos avisos da página inicial (com o modo privado), do saldo previsto, dos meses de gastos e da alocação e do resumo do ano
-      # (JavaScript do site, corrido no Node sem browser)
+      # dos avisos da página inicial (com o modo privado), do saldo previsto, dos meses de gastos e da alocação, do resumo do ano,
+      # do registo rápido, da página inicial à medida e do acesso anterior e do fecho do mês (JavaScript do site, corrido no Node sem
+      # browser)
       - name: JavaScript tests
-        run: node --test tests/bank.test.js tests/admin.test.js tests/auth.test.js tests/movimentos.test.js tests/tema.test.js tests/patrimonio.test.js tests/despesas-fixas.test.js tests/amortizacao.test.js tests/comparacao.test.js tests/orcamentos.test.js tests/rentabilidade.test.js tests/backup.test.js tests/metas.test.js tests/avisos.test.js tests/previsao.test.js tests/resumo.test.js
+        run: node --test tests/bank.test.js tests/admin.test.js tests/auth.test.js tests/movimentos.test.js tests/tema.test.js tests/patrimonio.test.js tests/despesas-fixas.test.js tests/amortizacao.test.js tests/comparacao.test.js tests/orcamentos.test.js tests/rentabilidade.test.js tests/backup.test.js tests/metas.test.js tests/avisos.test.js tests/previsao.test.js tests/resumo.test.js tests/registo-rapido.test.js tests/inicio.test.js tests/fecho-mes.test.js
 
       # A app no browser (Chromium), no PC e no telemóvel, com o login e a API simulados e dados inventados (tests/app.e2e.cjs):
       # separadores, barra lateral, voltar/F5, formulários e contas. O Playwright fica preso a uma versão (o Chromium vem com ela)

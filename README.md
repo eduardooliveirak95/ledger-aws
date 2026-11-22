@@ -12,7 +12,7 @@ No primeiro login escolhes a tua password, com pelo menos 10 caracteres, maiúsc
 
 A sessão só dura enquanto o separador estiver aberto. Num separador novo, ou depois de fechares o browser, tens de entrar outra vez. Recarregar a página não te tira da conta.
 
-Os logins (quem entrou e quando) ficam guardados 90 dias e só o administrador os vê.
+Os logins (quem entrou e quando) ficam guardados 90 dias e só o administrador os vê. Ao entrares, aparece a data e a hora do teu acesso anterior (fica também por baixo do teu email, na barra lateral). Se não fores tu, carrega em "Não fui eu": muda a password e usa "Sair em todos".
 
 No telemóvel dá para pôr o Ledger no ecrã principal, com ícone próprio e sem a barra do browser. No Android, no Chrome, é no menu ⋮ e "Adicionar ao ecrã principal" (ou "Instalar app"). No iPhone, no Safari, é em Partilhar e "Adicionar ao ecrã principal". Continua a pedir a password sempre que a voltas a abrir.
 
@@ -24,7 +24,7 @@ Se te esqueceres da password, fala com o administrador, que te dá uma temporár
 
 ## Separadores
 
-Depois de entrar aparece a página inicial com o património líquido (contas + investimentos + imóveis − créditos), os avisos, um cartão por separador e o do resumo do ano, as metas de poupança e um gráfico com a evolução mês a mês. Carrega num cartão para abrir o separador. A barra lateral, à esquerda, tem a página inicial, todos os separadores e, em baixo, o backup, o tema e a conta. No telemóvel abre no ☰ do topo e mostra também o património líquido e o número principal de cada separador; o backup, o tema e a conta ficam em "⚙ Definições". O botão de voltar do browser ou do telemóvel leva de um separador à página inicial.
+Depois de entrar aparece a página inicial com o património líquido (contas + investimentos + imóveis − créditos), os avisos, o fecho do mês (no início de cada mês), um cartão por separador e o do resumo do ano, as metas de poupança e um gráfico com a evolução mês a mês. Carrega num cartão para abrir o separador. Em "✎ Personalizar a página inicial", no fim da página, escolhes o que aparece e por que ordem (o património líquido fica sempre no topo); fica guardado na tua conta, igual em todos os aparelhos, e "Repor" volta ao de origem. A barra lateral, à esquerda, tem a página inicial, todos os separadores e, em baixo, o backup, o tema e a conta. No telemóvel abre no ☰ do topo e mostra também o património líquido e o número principal de cada separador; o backup, o tema e a conta ficam em "⚙ Definições". O botão de voltar do browser ou do telemóvel leva de um separador à página inicial.
 
 O que vai em cada um e o que fazer todos os meses:
 
@@ -36,6 +36,10 @@ O que vai em cada um e o que fazer todos os meses:
 ### Avisos
 
 Por baixo do património líquido aparece "A ver", com o que precisa de atenção: investimentos sem o valor do mês passado, créditos sem o saldo do mês passado, orçamentos deste mês (nos anuais, desde janeiro) a 80% ou mais, gastos fora do normal (uma categoria sem orçamento que este mês já vai no dobro da média dos 6 meses antes, e pelo menos 50 € acima dela), uma taxa de esforço acima de 50%, despesas fixas que subiram de preço, metas que já não chegam a tempo ou cujo prazo passou, dinheiro reservado a mais numa conta e a reserva mensal de uma meta por fazer. Cada aviso tem um botão para o resolver e um ✕ para o dispensar. Um aviso dispensado só volta se mudar, por exemplo no mês seguinte. Sem avisos, a secção não aparece.
+
+### Fecho do mês
+
+No início de cada mês aparece na página inicial o fecho do mês que acabou, com o que falta para o dar por fechado: marcar cada conta depois de importares o extrato e de o saldo no fim do mês bater com o do banco ("Conferir"), o valor dos investimentos e o saldo dos créditos desse mês, o "a receber" ainda por receber e os movimentos que ficaram na categoria "Outros". Cada coisa tem um botão para a resolver, e o que já está feito fica com ✓. Em "Resumo" vês as entradas, os gastos, a poupança e a taxa de poupança do mês, a comparação com a média dos meses anteriores, onde gastaste mais, o que fugiu do normal e os orçamentos que passaram. Quando acabares, "Fechar <mês>" tira-o da página inicial (se ainda faltar alguma coisa, pergunta primeiro). Nos Movimentos, "✓ Fecho do mês" abre o do mês que estás a ver (se já tiver acabado) ou o do mês passado, também para reabrir um mês fechado.
 
 ### Metas de poupança
 
@@ -51,7 +55,7 @@ Cada meta mostra quanto já tens, quanto falta e o ritmo, que é quanto reservas
 
 Ao criar uma meta, a app sugere quanto juntar para um fundo de emergência: 3 a 6 meses dos teus gastos.
 
-As metas e as reservas, tal como os orçamentos, os alvos da alocação e os filtros guardados dos Movimentos, não entram no backup.
+As metas e as reservas, tal como os orçamentos, os alvos da alocação, os filtros guardados dos Movimentos, a página inicial à tua medida e o fecho dos meses, não entram no backup.
 
 ### Simular o futuro
 
@@ -66,6 +70,8 @@ O cartão "Resumo do ano" (também na barra lateral) mostra o ano num relance: e
 ### Movimentos
 
 Quando fechas uma conta no banco, abre-a (✎ na lista das Contas) e marca "Conta fechada". Se ainda tiver dinheiro, a app propõe passá-lo para outra conta, com uma transferência de hoje, e a conta fica a 0 €. Deixa de aparecer ao registar movimentos e passa para "Contas fechadas", mas o histórico fica e continua a contar nos gráficos e no Resumo do ano. Para a reabrir, desmarca a opção. Uma conta com movimentos não se pode apagar, para não perderes o histórico por engano; só uma conta vazia (criada por engano, por exemplo) tem o botão "Apagar conta".
+
+Para registar depressa, escreve na caixa "Registo rápido", por cima da tabela, o que gastaste e o valor, por exemplo "almoço 12,5 revolut #trabalho", e carrega em Enter: abre o formulário já preenchido, confirmas e gravas. Além do valor, percebe a conta (o início do nome dela), o dia ("ontem", "anteontem" ou "21/11"; sem dia, é hoje) e as etiquetas (com #). Com "+" à frente do valor é uma entrada ("+1800 ordenado"). O resto fica a descrição, e a categoria é a sugerida por ela.
 
 Ao registar um movimento, a descrição sugere as que já usaste e a categoria fica logo escolhida com a que costumas dar a essa descrição (escreves "mercearia" e fica "Supermercado"); podes sempre escolher outra. As etiquetas, o "A receber" e o "Valor aproximado" estão em "Mais opções". Se apagares alguma coisa por engano, a mensagem "… apagado" traz um "Anular" durante uns segundos, que põe tudo como estava.
 

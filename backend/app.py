@@ -28,12 +28,14 @@ Todos os dados vivem numa ÚNICA tabela DynamoDB ("single-table design"):
     GRES_<AAAA-MM-DD>_<hex>      reserva para uma meta: parte do saldo de uma conta ou investimento posta de lado (ou tirada)
     ALT_<hex>                    alvo da alocação dos investimentos: a percentagem da carteira para um tipo (ETF, PPR...)
     MFL_<hex>                    filtro guardado dos Movimentos: um nome para uma conta, categorias e pesquisa
+    LAYOUT_home                  página inicial à medida: a ordem dos blocos e dos cartões e os que estão escondidos (um só)
+    MCL_<AAAA-MM>                fecho de um mês: as contas dadas por conferidas e se o mês ficou fechado (um por mês)
 
 Além das partições dos utilizadores há partições do sistema:
     user_id = "DAILY_BACKUP", sk = <sub>               um item por utilizador que ativou o backup diário por email
     user_id = "LOGIN",        sk = <data e hora>_<sub> um item por login (quem e quando), apagado ao fim de
                                                        90 dias pelo TTL da tabela (atributo "expires")
-    user_id = "LAST_LOGIN",   sk = <sub>               último login e número de logins de cada utilizador
+    user_id = "LAST_LOGIN",   sk = <sub>               último login, o login antes dele e número de logins de cada utilizador
 
 Como a data faz parte da sort key, uma Query com begins_with("TX_") devolve os
 movimentos já ordenados por data, sem ser preciso ordenar no código.
@@ -42,7 +44,7 @@ Rotas:
     GET    /data          tudo o que pertence ao utilizador autenticado (os cálculos são feitos no browser)
     POST   /items         criar / atualizar muitos itens de uma vez  {"items": [...], "delete": [...]}
     DELETE /items/{id}    apagar um item (+ os "filhos" no caso de investimentos / créditos / metas; uma conta só sem movimentos)
-    GET    /settings      definições do utilizador ({"daily_backup": true/false})
+    GET    /settings      definições do utilizador ({"daily_backup": true/false, "previous_login": data do login anterior})
     POST   /settings      mudar as definições  {"daily_backup": true/false} (ao ligar, pode trazer um "warning")
     GET    /admin/users   (função admin, só para o grupo "admin") utilizadores, último login e logins recentes
     POST   /admin/users/create | resend-invite | disable | enable | reset-password | delete  {"email": ...}
@@ -78,6 +80,8 @@ MAX_TEXT = 500                # comprimento máximo de descrições e notas
 MAX_TAGS, MAX_TAG = 5, 30     # etiquetas de um movimento: quantas e quantos caracteres cada uma
 MAX_FILTER_CATS = 100         # categorias de entradas (ou de saídas) num filtro guardado dos Movimentos
 MAX_SEARCH = 100              # comprimento máximo da pesquisa num filtro guardado
+MAX_LAYOUT_IDS = 20           # blocos ou cartões numa lista da página inicial à medida
+MAX_CLOSE_ACCOUNTS = 100      # contas dadas por conferidas no fecho de um mês
 MAX_BACKUP_BYTES = 6_000_000  # tamanho total dos CSV num email (o SES aceita até 10 MB com os anexos)
 
 # Partição do sistema com quem ativou o backup diário (sk = sub do utilizador; ver o início do ficheiro)
@@ -110,6 +114,8 @@ KIND_PREFIX = {
     "reservation": "GRES",
     "alloc_target": "ALT",
     "mov_filter": "MFL",
+    "layout": "LAYOUT",
+    "month_close": "MCL",
 }
 # O mesmo mapa ao contrário: prefixo -> tipo (para descobrir o tipo a partir da sk)
 PREFIX_KIND = {v: k for k, v in KIND_PREFIX.items()}
@@ -129,6 +135,8 @@ COLLECTION = {
     "reservation": "reservations",
     "alloc_target": "alloc_targets",
     "mov_filter": "mov_filters",
+    "layout": "layouts",
+    "month_close": "month_closes",
 }
 
 # Expressões regulares que validam o formato de cada id (= sort key).
@@ -149,7 +157,11 @@ ID_RE = {
     "reservation": re.compile(rf"^GRES_\d{{4}}-\d{{2}}-\d{{2}}_({HEX})$"),
     "alloc_target": re.compile(rf"^ALT_({HEX})$"),
     "mov_filter": re.compile(rf"^MFL_({HEX})$"),
+    "layout": re.compile(r"^LAYOUT_(home)$"),            # um só por utilizador
+    "month_close": re.compile(r"^MCL_(\d{4}-\d{2})$"),   # um por mês
 }
+# Os ids dos blocos e dos cartões da página inicial (os da app, ex.: "goals", "mov")
+LAYOUT_ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,19}$")
 # Formato das chaves da primeira versão da app ("AAAA-MM-DD_<16 hex>"), para as migrar
 LEGACY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_[0-9a-f]{16}$")
 
@@ -373,6 +385,23 @@ def v_categories(value, field):
             out.append(c)
     if len(out) > MAX_FILTER_CATS:
         raise ValueError(f"{field}: no máximo {MAX_FILTER_CATS} categorias")
+    return out
+
+
+def v_layout_ids(value, field):
+    """Uma lista de ids da página inicial à medida (blocos ou cartões, ex.: "goals"): até MAX_LAYOUT_IDS, cada um com letras
+    minúsculas, números e hífenes, sem repetidos. Vazio devolve []. O tamanho é visto antes de tirar os repetidos, para uma
+    lista enorme feita à mão não ocupar a Lambda."""
+    if value is None or value == "":
+        return []
+    if not isinstance(value, list) or len(value) > MAX_LAYOUT_IDS:
+        raise ValueError(f"{field}: tem de ser uma lista de até {MAX_LAYOUT_IDS} ids")
+    out = []
+    for x in value:
+        if not isinstance(x, str) or not LAYOUT_ID_RE.match(x):
+            raise ValueError(f"{field}: id inválido")
+        if x not in out:
+            out.append(x)
     return out
 
 
@@ -657,6 +686,34 @@ def build(user, raw):
         if raw.get("account_id"):
             item["account_id"] = v_ref(raw.get("account_id"), "account", "account_id")
 
+    elif kind == "layout":
+        # Página inicial à medida: a ordem dos blocos e a dos cartões e os que estão escondidos (de uma e de outra lista).
+        # Um só por utilizador. A app ignora os ids que não conhece e junta no fim os que ainda não estiverem na lista.
+        item.update(
+            sk="LAYOUT_home",
+            blocks=v_layout_ids(raw.get("blocks"), "blocks"),
+            cards=v_layout_ids(raw.get("cards"), "cards"),
+            hidden=v_layout_ids(raw.get("hidden"), "hidden"),
+        )
+
+    elif kind == "month_close":
+        # Fecho de um mês (o mês acabado, visto no início do seguinte): as contas que se deram por conferidas (extrato
+        # importado e saldo batido com o banco) e se o mês ficou fechado. O resto da lista (investimentos, créditos,
+        # "a receber", "Outros") a app calcula. Um por mês: a chave é o mês, como nos valores dos investimentos.
+        month = v_month(raw.get("month"))
+        accounts = raw.get("accounts_ok") or []
+        if not isinstance(accounts, list) or len(accounts) > MAX_CLOSE_ACCOUNTS:
+            raise ValueError(f"accounts_ok: tem de ser uma lista de até {MAX_CLOSE_ACCOUNTS} contas")
+        ok = []
+        for a in accounts:
+            ref = v_ref(a, "account", "accounts_ok")
+            if ref not in ok:
+                ok.append(ref)
+        closed = raw.get("closed", False)
+        if not isinstance(closed, bool):
+            raise ValueError("closed: tem de ser true ou false")
+        item.update(sk=f"MCL_{month}", month=month, accounts_ok=ok, closed=closed)
+
     # Se o id mudou (ex.: nova data), o antigo tem de ser apagado
     stale = old_id if old_id and old_id != item["sk"] else None
     return item, stale
@@ -897,9 +954,15 @@ def delete_item(user, item_id):
 
 
 def get_settings(user):
-    """GET /settings: definições do utilizador. Por agora só uma: se o backup diário por email está ativo."""
+    """GET /settings: definições e dados da conta do utilizador.
+
+    daily_backup: se o backup diário por email está ativo.
+    previous_login: data e hora (UTC, ISO) do login antes do atual, para a app mostrar ao entrar; None no primeiro login
+    ou se ainda não houver registo. Só o deste utilizador (a chave é o sub do token).
+    """
     r = table().get_item(Key={"user_id": DAILY_BACKUP_PK, "sk": user})
-    return {"daily_backup": "Item" in r}
+    last = table().get_item(Key={"user_id": LAST_LOGIN_PK, "sk": user}).get("Item") or {}
+    return {"daily_backup": "Item" in r, "previous_login": last.get("prev_at") or None}
 
 
 def backup_email_warning(claims):
@@ -1172,7 +1235,11 @@ def run_daily_backup(event):
 # ── LOGINS E ADMINISTRAÇÃO ───────────────────────────────────────────────────
 def record_login(sub, email, now=None):
     """Grava um login: um item na partição LOGIN (apagado pelo TTL ao fim de 90 dias) e, na LAST_LOGIN,
-    a data do último login e mais 1 no número de logins deste utilizador."""
+    a data do último login, a do login antes dele ("prev_at", vazio no primeiro) e mais 1 no número de logins.
+
+    O "prev_at" é o que a app mostra ao entrar ("o teu acesso anterior foi…"): quando o browser pede o GET /settings,
+    o "at" já é este login. Numa expressão de update, os valores lidos são os de antes da mudança, por isso o
+    "#prev = #at" copia o login anterior antes de o "#at" passar a ser o de agora."""
     now = now or datetime.now(timezone.utc)
     at = now.isoformat(timespec="seconds")
     expires = int((now + timedelta(days=LOGIN_KEEP_DAYS)).timestamp())
@@ -1181,9 +1248,9 @@ def record_login(sub, email, now=None):
     # "at" é palavra reservada do DynamoDB: nas expressões usa-se o nome alternativo #at
     login_table().update_item(
         Key={"user_id": LAST_LOGIN_PK, "sk": sub},
-        UpdateExpression="SET #at = :at, #email = :email ADD #logins :one",
-        ExpressionAttributeNames={"#at": "at", "#email": "email", "#logins": "logins"},
-        ExpressionAttributeValues={":at": at, ":email": email, ":one": 1},
+        UpdateExpression="SET #prev = if_not_exists(#at, :none), #at = :at, #email = :email ADD #logins :one",
+        ExpressionAttributeNames={"#prev": "prev_at", "#at": "at", "#email": "email", "#logins": "logins"},
+        ExpressionAttributeValues={":none": "", ":at": at, ":email": email, ":one": 1},
     )
 
 

@@ -216,6 +216,7 @@ body { padding-left: var(--side-w); }
 .status-dot.err { background: var(--neg); }
 .side-user .status-dot { position: absolute; left: 30px; top: 2px; width: 9px; height: 9px; border: 2px solid var(--side-bg); box-sizing: content-box; }
 .side-email { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-prev-login { padding: 0 10px 6px; font-size: 11px; color: var(--side-muted); }
 
 /* Só no telemóvel: o topo com o ☰, o fundo escuro, o património, os números e o botão das definições */
 .mobile-bar, .side-overlay, .side-total, .side-num, .side-settings-btn { display: none; }
@@ -531,6 +532,45 @@ table.budget-edit td.budget-cap { width: 240px; }
 .panel-actions, .chk-actions { display: flex; gap: 8px; flex-wrap: wrap; }   /* vários botões juntos (Contas, Conferir saldo) */
 .chk-actions { margin: 10px 0 4px; }
 .forecast-body { padding: 8px 18px 14px; }
+
+/* Página inicial à medida: um bloco ou cartão escondido (à parte do .hidden de cada bloco, que é posto quando não tem nada para
+   mostrar) e a janela "Personalizar a página inicial" */
+.layout-off { display: none !important; }
+.home-edit { display: flex; justify-content: center; margin-top: 20px; }
+.layout-group { display: flex; flex-direction: column; gap: 6px; }
+.layout-title { font-size: var(--label-size); font-weight: 600; letter-spacing: var(--caps-spacing); text-transform: var(--caps); color: var(--muted); }
+.layout-row { display: flex; align-items: center; gap: 6px; padding: 6px 8px 6px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; }
+.layout-show { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.layout-row .icon-btn:disabled { opacity: .35; cursor: default; }
+
+/* Fecho do mês (cartão da página inicial e janela): os passos, as contas a marcar e o resumo do mês */
+.close-progress { padding: 14px 18px 4px; }
+.close-step { display: flex; align-items: flex-start; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--border); font-size: 13px; line-height: 1.5; }
+.close-ico { flex: 0 0 18px; font-weight: 700; color: var(--warn); text-align: center; }
+.close-step.done .close-ico { color: var(--pos); }
+.close-main { flex: 1; min-width: 0; }
+.close-name { font-weight: 600; color: var(--text); }
+.close-step.done .close-name { color: var(--muted); }
+.close-text { color: var(--muted); font-size: 12px; }
+.close-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.close-accounts { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+/* cada conta: a caixa com o nome e, por baixo, o último movimento; o "Conferir" à direita das duas linhas */
+.close-acc { display: grid; grid-template-columns: 1fr auto; align-items: center; column-gap: 10px; padding: 2px 0; }
+.close-acc label { display: flex; align-items: center; gap: 8px; font-weight: 500; cursor: pointer; }
+.close-acc .li-sub { grid-column: 1; margin: 0 0 0 26px; }
+.close-acc .btn { grid-column: 2; grid-row: 1 / span 2; }
+.close-summary { padding: 12px 18px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.close-summary summary { cursor: pointer; font-weight: 600; }
+.close-nums { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 12px 0 8px; }
+.close-nums > div { display: flex; flex-direction: column; gap: 2px; }
+.close-nums b { font-family: var(--font-num); font-size: 15px; }
+.close-line { color: var(--muted); font-size: 12px; line-height: 1.6; margin-top: 4px; }
+.close-line b { color: var(--text); font-weight: 600; }
+.close-foot { display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding: 12px 18px; font-size: 13px; }
+
+/* Registo rápido dos Movimentos: a caixa ocupa a largura toda */
+.quick-entry { display: flex; gap: 8px; }
+.quick-entry input.inline { flex: 1; min-width: 0; max-width: none; font-size: 13px; }
 .forecast-row { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; padding: 6px 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
 .forecast-row b { font-family: var(--font-num); font-weight: 600; color: var(--text); white-space: nowrap; }
 .forecast-row span b { color: var(--text); }
@@ -720,6 +760,9 @@ table.grid-edit .num { font-family: var(--font-num); text-align: right; color: v
   .flow text { font-size: 14px; } .flow text.sub { font-size: 12px; }   /* o diagrama encolhe: letras maiores */
   .alert { flex-wrap: wrap; row-gap: 6px; }   /* avisos: os botões passam para baixo do texto */
   .alert-actions { width: 100%; padding-left: 20px; }
+  .close-step { flex-wrap: wrap; row-gap: 6px; }   /* fecho do mês: os botões passam para baixo do texto */
+  .close-actions { width: 100%; padding-left: 30px; justify-content: flex-start; }
+  .close-nums { grid-template-columns: 1fr 1fr; }
   .alloc-row { grid-template-columns: 1fr auto auto; row-gap: 4px; }   /* alocação: a barra passa para baixo do nome */
   .alloc-row .alloc-bar { grid-column: 1 / -1; grid-row: 2; }
   .alloc-row .alloc-value { display: none; }   /* sem a coluna do valor (fica o % e o que falta) */

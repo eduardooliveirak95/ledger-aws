@@ -1,7 +1,8 @@
 // Teste da app no browser (Chromium, com o Playwright). O login e a API são simulados e os dados são inventados: nunca liga ao
 // site real. Abre a app no PC (1280 px) e no telemóvel (390 px) e confere a página inicial, os separadores, a barra lateral, o
 // voltar e o F5, sair e entrar e uma conta sem admin; no PC, também os formulários dos movimentos e das contas (categoria
-// sugerida, "Mais opções", apagar e "Anular", contas fechadas). Um erro de JavaScript também conta como falha.
+// sugerida, "Mais opções", apagar e "Anular", contas fechadas), o acesso anterior, o fecho do mês, a página inicial à medida e o
+// registo rápido. Um erro de JavaScript também conta como falha.
 //
 // Uso:  node tests/app.e2e.cjs [--out <pasta das capturas>]
 // Sai com 0 se tudo passou e com 1 se alguma verificação falhou. Precisa do Node, do Python 3 (serve os ficheiros do site) e do
@@ -97,8 +98,9 @@ const errors = [];
 const check = (name, ok, extra = '') => results.push({ ok: !!ok, text: `${name}${extra ? ' — ' + extra : ''}` });
 
 // A API simulada guarda o que se grava (POST /items) e apaga (DELETE) numa cópia dos dados, como o backend: uma conta com
-// movimentos não se apaga (409). posts = os pedidos de gravação, para conferir o que a app enviou.
-async function setup(page, admin, label) {
+// movimentos não se apaga (409). posts = os pedidos de gravação, para conferir o que a app enviou. previousLogin = o login antes
+// deste, que o GET /settings devolve (sem ele, como no primeiro login: nada).
+async function setup(page, admin, label, previousLogin = null) {
   const data = makeData();
   const posts = [];
   page.on('pageerror', e => errors.push(`${label}: ${e.message}`));
@@ -107,19 +109,21 @@ async function setup(page, admin, label) {
     body: "window.LEDGER_CONFIG = { apiUrl: 'https://api.example.test', region: 'eu-west-1', clientId: 'cliente-falso' };" }));
   await page.route('https://cognito-idp.eu-west-1.amazonaws.com/', r =>
     r.fulfill({ contentType: 'application/json', body: JSON.stringify({ Username: 'x', AuthenticationResult: tokens(admin) }) }));
-  const cols = { account: 'accounts', transaction: 'transactions', investment: 'investments', inv_move: 'inv_moves', mov_filter: 'mov_filters' };
+  const cols = { account: 'accounts', transaction: 'transactions', investment: 'investments', inv_move: 'inv_moves', mov_filter: 'mov_filters',
+    layout: 'layouts', month_close: 'month_closes' };
+  data.layouts = []; data.month_closes = [];
   let next = 900;
   await page.route('https://api.example.test/**', r => {
     const req = r.request(), p = new URL(req.url()).pathname;
     const reply = (body, status = 200) => r.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
     if (p === '/data') return reply(data);
-    if (p === '/settings') return reply({ daily_backup: false });
+    if (p === '/settings') return reply({ daily_backup: false, previous_login: previousLogin });
     if (p === '/admin/users') return reply(ADMIN_USERS);
     if (p === '/items' && req.method() === 'POST') {
       const body = JSON.parse(req.postData());
       posts.push(body);
       const saved = body.items.map(it => ({ ...it, id: it.id || (it.kind === 'transaction' ? `TX_${it.date}_${hex(next++)}`
-        : `${it.kind === 'mov_filter' ? 'MFL' : 'ACC'}_${hex(next++)}`) }));
+        : it.kind === 'month_close' ? `MCL_${it.month}` : `${it.kind === 'mov_filter' ? 'MFL' : 'ACC'}_${hex(next++)}`) }));
       for (const it of saved) {
         const col = data[cols[it.kind]];
         if (col) { const i = col.findIndex(x => x.id === it.id); if (i >= 0) col[i] = it; else col.push(it); }
@@ -464,6 +468,158 @@ async function runMoney(browser, SITE) {
   await page.close();
 }
 
+// ── o acesso anterior, o fecho do mês, a página inicial à medida e o registo rápido (no PC; no telemóvel, só o aspeto) ──
+async function runNews(browser, SITE) {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
+  const { posts } = await setup(page, true, 'novidades', '2026-11-20T21:10:00+00:00');
+  await page.goto(SITE + '/#inicio');
+  await login(page);
+  const toastText = async () => (await page.textContent('#toast')).replace(/\s+/g, ' ');
+
+  // o acesso anterior: numa mensagem logo a seguir ao login, com "Não fui eu", e por baixo do email na barra lateral
+  check('acesso anterior: a mensagem ao entrar, com "Não fui eu"', /^O teu acesso anterior foi a \d\d\/\d\d\/2026 às \d\d:\d\d/.test(await toastText()) &&
+    (await page.textContent('#toast button')) === 'Não fui eu', await toastText());
+  check('acesso anterior: na barra lateral', /^Acesso anterior: \d\d\/\d\d\/2026 às \d\d:\d\d$/.test(await page.textContent('#prev-login')) &&
+    await visible(page, '#prev-login'));
+  await page.click('#toast button');
+  await pause(page, 300);
+  check('acesso anterior: "Não fui eu" diz o que fazer', (await page.textContent('#modal-title')) === 'Não foste tu?' &&
+    await page.locator('#modal-footer button', { hasText: 'Mudar password' }).count() === 1 &&
+    await page.locator('#modal-footer button', { hasText: 'Sair em todos' }).count() === 1);
+  await page.keyboard.press('Escape');
+  await page.reload();
+  await pause(page, 800);
+  check('acesso anterior: ao recarregar a página não volta a aparecer a mensagem', !/acesso anterior/.test(await toastText()) &&
+    await visible(page, '#prev-login'));
+
+  // o fecho do mês passado: as contas por marcar e o "a receber" da Rita por receber (os investimentos, os créditos e as
+  // categorias estão em dia nos dados inventados)
+  const prevMonth = monthsAgo(1);
+  check('fecho do mês: o cartão do mês passado na página inicial', await visible(page, '#close-panel') &&
+    (await page.textContent('#close-sub')) === '3 de 5 feitos' && /^Fecho de /.test(await page.textContent('#close-title')),
+    `${await page.textContent('#close-title')} · ${await page.textContent('#close-sub')}`);
+  await shot(page, 'fecho-do-mes');
+  // no modo privado e no tema escuro: o resumo sem valores
+  await sideClick(page, false, '#private-btn');
+  await sideClick(page, false, '#theme-btn');   // automático → claro → escuro
+  await sideClick(page, false, '#theme-btn');
+  await page.click('#close-body .close-summary > summary');
+  await pause(page, 300);
+  check('fecho do mês: no modo privado, o "a receber" e o resumo sem valores', /Gastos/.test(await page.textContent('#close-body')) &&
+    !/\d,\d\d/.test(await page.textContent('#close-body')));
+  await page.locator('#close-panel').screenshot({ path: path.join(OUT, 'fecho-do-mes-escuro-privado.png') });
+  await sideClick(page, false, '#theme-btn');   // escuro → automático
+  await sideClick(page, false, '#private-btn');
+  // o "Conferir" de uma conta: o saldo no último dia do mês e, se não bater, "Ver os movimentos" leva aos Movimentos desse mês
+  await page.click(`#close-body [data-close-check="${POUP}"]`);
+  await pause(page, 300);
+  const chkDate = await page.inputValue('#chk-date');
+  await page.fill('#chk-bank', '1');
+  await pause(page, 200);
+  await page.click('#modal [data-chk="show"]');
+  await pause(page, 500);
+  check('fecho do mês: o "Conferir" usa o fim do mês e "Ver os movimentos" abre os Movimentos dele', chkDate === await page.evaluate(m => lastDayOf(m), prevMonth) &&
+    await visible(page, '#tab-mov') && await page.evaluate(() => [S.movMode, S.movAnchor, S.movAccount].join()) === `month,${prevMonth},${POUP}`,
+    `${chkDate} · ${page.url()}`);
+  await page.evaluate(() => { Object.assign(S, { movAccount: '' }); });
+  await page.click('#sidebar .logo-btn');
+  await pause(page, 400);
+  await page.check(`#close-body [data-close-acc="${ORDEM}"]`);
+  await pause(page, 400);
+  const marked = posts.at(-1)?.items[0] || {};
+  check('fecho do mês: marcar uma conta grava-a como conferida', marked.kind === 'month_close' && marked.month === prevMonth &&
+    JSON.stringify(marked.accounts_ok) === JSON.stringify([ORDEM]) && marked.closed === false, JSON.stringify(marked));
+  await page.click('#close-body [data-action="close-month"]');
+  await pause(page, 300);
+  check('fecho do mês: com coisas por fazer, pergunta antes de fechar', /Ainda faltam 2 coisas/.test(await page.textContent('#modal-body')));
+  await page.click('#modal-footer button.primary');
+  await pause(page, 500);
+  const closed = posts.at(-1)?.items[0] || {};
+  check('fecho do mês: fechar grava o mês fechado e o cartão sai da página inicial', closed.closed === true &&
+    JSON.stringify(closed.accounts_ok) === JSON.stringify([ORDEM]) && !(await visible(page, '#close-panel')), JSON.stringify(closed));
+  await page.keyboard.press('Escape');
+  await page.click('.home-card[data-go="mov"]');
+  await pause(page, 500);
+  await page.click('#tab-mov [data-action="close-open"]');
+  await pause(page, 300);
+  check('fecho do mês: o "✓ Fecho do mês" dos Movimentos mostra o mês fechado, com o resumo', await page.locator('#modal [data-close-modal]').count() === 1 &&
+    /Mês fechado ✓/.test(await page.textContent('#modal-body')) && /Onde gastaste mais: Supermercado/.test(await page.textContent('#modal .close-summary')));
+  await shot(page, 'fecho-do-mes-janela');
+  await page.click('#modal [data-action="close-reopen"]');
+  await pause(page, 500);
+  check('fecho do mês: reabrir', posts.at(-1)?.items[0]?.closed === false && /Fechar /.test(await page.textContent('#modal .close-foot')));
+  await page.keyboard.press('Escape');
+
+  // o registo rápido: abre o formulário preenchido (a categoria é a sugerida pela descrição) e grava o que lá está
+  await page.fill('#quick-text', 'café 1,5 ordem #trabalho ontem');
+  await page.press('#quick-text', 'Enter');
+  await pause(page, 300);
+  const yesterday = await page.evaluate(() => addDays(todayISO(), -1));
+  const form = {
+    amount: await page.inputValue('#modal input[id$="-amount"]'), description: await page.inputValue('#modal input[id$="-description"]'),
+    date: await page.inputValue('#modal input[id$="-date"]'), account: await page.inputValue('#modal select[id$="-account_id"]'),
+    tags: await page.inputValue('#modal input[id$="-tags"]'), category: (await page.textContent('#modal details.pick > summary')).trim(),
+  };
+  check('registo rápido: abre o formulário preenchido', form.amount === '1,50' && form.description === 'café' && form.date === yesterday &&
+    form.account === ORDEM && form.tags === 'trabalho' && form.category === 'Restauração' && await page.inputValue('#quick-text') === '',
+    JSON.stringify(form));
+  await shot(page, 'registo-rapido');
+  await page.click('#modal-footer button[type=submit]');
+  await pause(page, 500);
+  const quick = posts.at(-1)?.items[0] || {};
+  check('registo rápido: grava o movimento', quick.kind === 'transaction' && quick.amount === 1.5 && quick.direction === 'out' &&
+    quick.category === 'Restauração' && JSON.stringify(quick.tags) === '["trabalho"]' && quick.date === yesterday, JSON.stringify(quick));
+
+  // a página inicial à medida: esconder as metas, subir a evolução e o resumo do ano, guardar; e repor
+  await page.click(mobileSafeHome);
+  await pause(page, 400);
+  await page.click('[data-action="home-layout"]');
+  await pause(page, 300);
+  await page.locator('#modal .layout-row', { hasText: 'Metas de poupança' }).locator('input').uncheck();
+  for (let i = 0; i < 3; i++) await page.locator('#modal .layout-row', { hasText: 'Evolução do património' }).locator('[data-lay-move="-1"]').click();
+  for (let i = 0; i < 4; i++) await page.locator('#modal .layout-row', { hasText: 'Resumo do ano' }).locator('[data-lay-move="-1"]').click();
+  await shot(page, 'pagina-inicial-personalizar');
+  await page.click('#modal-footer button.primary');
+  await pause(page, 500);
+  const lay = posts.at(-1)?.items[0] || {};
+  const order = await page.evaluate(() => ({ blocks: [...document.querySelectorAll('#tab-home > [data-home-block]')].map(e => e.dataset.homeBlock),
+    cards: [...document.querySelectorAll('.home-grid [data-home-card]')].map(e => e.dataset.homeCard),
+    goalsOff: document.querySelector('[data-home-block="goals"]').classList.contains('layout-off') }));
+  check('página inicial: grava a ordem e os escondidos', lay.kind === 'layout' && lay.id === 'LAYOUT_home' &&
+    JSON.stringify(lay.blocks) === '["alerts","chart","close","cards","goals"]' && JSON.stringify(lay.cards) === '["year","mov","inv","loan","prop"]' &&
+    JSON.stringify(lay.hidden) === '["goals"]', JSON.stringify(lay));
+  check('página inicial: mostra-a pela ordem nova, sem as metas', order.goalsOff && !(await visible(page, '#goals')) &&
+    order.blocks.join() === 'alerts,chart,close,cards,goals' && order.cards.join() === 'year,mov,inv,loan,prop', JSON.stringify(order));
+  await shot(page, 'pagina-inicial-a-medida');
+  await page.click('[data-action="home-layout"]');
+  await pause(page, 300);
+  await page.click('#modal-footer button', { hasText: 'Repor' });
+  await pause(page, 500);
+  check('página inicial: "Repor" apaga o registo e volta à ordem de origem', JSON.stringify(posts.at(-1)?.delete) === '["LAYOUT_home"]' &&
+    await visible(page, '#goals') && (await page.evaluate(() => [...document.querySelectorAll('#tab-home > [data-home-block]')].map(e => e.dataset.homeBlock).join())) ===
+    'alerts,close,cards,goals,chart');
+  await page.close();
+
+  // no telemóvel: o cartão do fecho do mês, a janela de personalizar e o registo rápido cabem no ecrã
+  const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  await setup(phone, true, 'novidades-telemóvel', '2026-11-20T21:10:00+00:00');
+  await phone.goto(SITE + '/#inicio');
+  await login(phone);
+  check('telemóvel: o fecho do mês sem scroll horizontal', await visible(phone, '#close-panel') && await noHorizontalScroll(phone));
+  await phone.locator('#close-panel').screenshot({ path: path.join(OUT, 'telemovel-fecho-do-mes.png') });
+  await phone.click('[data-action="home-layout"]');
+  await pause(phone, 300);
+  check('telemóvel: a janela "Personalizar" sem scroll horizontal', await noHorizontalScroll(phone));
+  await shot(phone, 'telemovel-personalizar');
+  await phone.keyboard.press('Escape');
+  await phone.click('.home-card[data-go="mov"]');
+  await pause(phone, 500);
+  check('telemóvel: o registo rápido nos Movimentos', await visible(phone, '#quick-text') && await noHorizontalScroll(phone));
+  await phone.locator('#quick-entry').screenshot({ path: path.join(OUT, 'telemovel-registo-rapido.png') });
+  await phone.close();
+}
+const mobileSafeHome = '#sidebar .logo-btn';
+
 async function runNonAdmin(browser, SITE) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
   await setup(page, false, 'sem-admin');
@@ -500,6 +656,7 @@ async function waitFor(url, ms = 10000) {
     await runViewport(browser, 'telemóvel', { width: 390, height: 844 }, SITE);
     await runForms(browser, SITE);
     await runMoney(browser, SITE);
+    await runNews(browser, SITE);
     await runNonAdmin(browser, SITE);
   } catch (e) {
     check('o teste chegou ao fim', false, e.message.split('\n')[0]);

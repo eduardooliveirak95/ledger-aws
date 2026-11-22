@@ -152,6 +152,19 @@ function addDays(iso, n) {
 }
 // "2026-09-30" -> "30/09/2026"
 function dateLabel(iso) { const [y, m, d] = iso.split('-'); return `${d}/${m}/${y}`; }
+// Data e hora em hora de Portugal, de um instante com fuso (os logins vêm em UTC; separador Utilizadores e acesso anterior):
+// "2026-10-07T13:21:00+00:00" -> "07/10/2026 14:21". sep = o que fica entre a data e a hora (ex.: " às "). Sem data, ou com uma
+// data que não se percebe, "—".
+const PT_TIME = new Intl.DateTimeFormat('pt-PT', {
+  timeZone: 'Europe/Lisbon', day: '2-digit', month: '2-digit', year: 'numeric',
+  hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+});
+function dateTimeLabel(iso, sep = ' ') {
+  const d = new Date(iso || NaN);
+  if (Number.isNaN(d.getTime())) return '—';
+  const p = Object.fromEntries(PT_TIME.formatToParts(d).map(x => [x.type, x.value]));
+  return `${p.day}/${p.month}/${p.year}${sep}${p.hour}:${p.minute}`;
+}
 
 /**
  * Lê uma data escrita de várias formas: 2026-09-30, 30/09/2026, 30-09-2026, 30.09.2026.
