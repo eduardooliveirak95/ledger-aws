@@ -35,7 +35,7 @@ O que vai em cada um e o que fazer todos os meses:
 
 ### Avisos
 
-Por baixo do património líquido aparece "A ver", com o que precisa de atenção: investimentos sem o valor do mês passado, créditos sem o saldo do mês passado, orçamentos deste mês (nos anuais, desde janeiro) a 80% ou mais, gastos fora do normal (uma categoria sem orçamento que este mês já vai no dobro da média dos 6 meses antes, e pelo menos 50 € acima dela), uma taxa de esforço acima de 50%, despesas fixas que subiram de preço, metas que já não chegam a tempo ou cujo prazo passou, dinheiro reservado a mais numa conta e a reserva mensal de uma meta por fazer. Cada aviso tem um botão para o resolver e um ✕ para o dispensar. Um aviso dispensado só volta se mudar, por exemplo no mês seguinte. Sem avisos, a secção não aparece.
+Por baixo do património líquido aparece "A ver", com o que precisa de atenção: investimentos sem o valor do mês passado, créditos sem o saldo do mês passado, orçamentos deste mês (nos anuais, desde janeiro) a 80% ou mais, gastos fora do normal (uma categoria sem orçamento que este mês já vai no dobro da média dos 6 meses antes, e pelo menos 50 € acima dela), uma taxa de esforço acima de 50%, despesas fixas que subiram de preço, metas que já não chegam a tempo ou cujo prazo passou, dinheiro reservado a mais numa conta, a reserva mensal de uma meta por fazer e a alocação dos investimentos a mais de 5 pontos do alvo. Cada aviso tem um botão para o resolver e um ✕ para o dispensar. Um aviso dispensado só volta se mudar, por exemplo no mês seguinte. Sem avisos, a secção não aparece.
 
 ### Fecho do mês
 
@@ -129,7 +129,7 @@ As contas de administrador têm o selo Admin ao lado do email e um separador a m
 
 Também é aí que se criam contas novas (a pessoa recebe o convite por email), se reenvia o convite enquanto a pessoa ainda não escolheu a password, se desativa ou reativa uma conta e se repõe a password, que aparece só uma vez para a dares à pessoa. Uma conta desativada deixa de conseguir entrar, mas os dados ficam guardados. Depois de desativada pode ser apagada de vez, com todos os dados, e isso não se desfaz.
 
-Estas ações não existem para contas de administrador, e pela app ninguém passa a administrador nem deixa de o ser. O administrador também não vê os dados financeiros de ninguém. Renovar a sessão sem pôr a password não conta como login.
+Estas ações não existem para contas de administrador, e pela app ninguém passa a administrador nem deixa de o ser. Pela app, o administrador também não vê os dados financeiros de ninguém. Renovar a sessão sem pôr a password não conta como login.
 
 ## Backup e importar
 
