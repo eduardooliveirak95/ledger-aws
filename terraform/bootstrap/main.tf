@@ -2,7 +2,7 @@
 # Aplica-se à mão, no CloudShell da conta certa; o resto do Terraform guarda lá o state dele.
 
 provider "aws" {
-  region = var.region
+  region = "eu-west-1" # a região do Ledger (a mesma do backend.tf)
   # Proteção contra a conta errada: com outras credenciais, o Terraform recusa-se a correr.
   allowed_account_ids = [var.account_id]
 }
@@ -14,7 +14,12 @@ locals {
 
 resource "aws_s3_bucket" "state" {
   bucket = local.state_bucket
-  # Sem force_destroy: com o state lá dentro, o bucket nunca está vazio e o Terraform não o consegue apagar.
+  # Sem force_destroy: com o state lá dentro, o bucket nunca está vazio. O prevent_destroy faz um destroy por engano falhar
+  # logo no plan, antes de tirar as proteções abaixo (a encriptação, o só HTTPS, o versionamento…). No fim do ensaio nos
+  # labs, este bucket apaga-se pela CLI.
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_s3_bucket_ownership_controls" "state" {

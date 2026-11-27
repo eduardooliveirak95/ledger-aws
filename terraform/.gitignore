@@ -12,9 +12,10 @@ override.tf
 override.tf.json
 *_override.tf
 *_override.tf.json
-tfplan
-*.tfplan
+*tfplan*
+*.plan
 plan.out
+plan.json
 *.plan.json
 crash.log
 crash.*.log
