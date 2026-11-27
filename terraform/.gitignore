@@ -1,0 +1,22 @@
+# O state, os valores de cada conta (nomes, ids, número da conta) e os planos nunca vão para o git:
+# este repositório é público. O .terraform.lock.hcl vai (fixa as versões dos providers).
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+*.tfvars
+*.tfvars.json
+backend.hcl
+*.tfbackend
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+tfplan
+*.tfplan
+plan.out
+*.plan.json
+crash.log
+crash.*.log
+.terraformrc
+terraform.rc
